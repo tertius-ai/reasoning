@@ -1,3 +1,4 @@
+import { schedulePoll } from "./polling";
 import React, { useEffect, useRef, useState } from "react";
 import { availableEfforts } from "./ReasoningEffort";
 import { createPortal } from "react-dom";
@@ -138,7 +139,7 @@ export function ResearchControls({ organizationId, topicId, userId, selectedMode
           else setPollError("Unable to refresh research status; reconnecting. " + errorMessage(cause));
         }
       }
-      if (!controller.signal.aborted) timer = setTimeout(poll, 2500);
+      if (!controller.signal.aborted) timer = schedulePoll(poll, 2500, controller.signal);
     };
     void poll();
     void request<{ tools: ResearchTool[]; reviewer_model?: string; compute_allowance_cpu_seconds?: number;

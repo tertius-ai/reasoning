@@ -288,7 +288,7 @@ jobs:
       - run: npm --prefix web run test:dev
       - run: npm --prefix web run test:topic-agents
       - name: Exercise ledger, blog, and responsive navigation
-        run: node --test --test-concurrency=1 web/tests/public-ledger.browser.mjs web/tests/public-blog.browser.mjs web/tests/navigation.browser.mjs web/tests/topic-media.browser.mjs web/tests/bot-controls.browser.mjs web/tests/bot-approvals.browser.mjs web/tests/model-selection.browser.mjs web/tests/chat-polish.browser.mjs web/tests/invitations.browser.mjs
+        run: node --test --test-concurrency=1 web/tests/public-ledger.browser.mjs web/tests/public-blog.browser.mjs web/tests/navigation.browser.mjs web/tests/topic-media.browser.mjs web/tests/bot-controls.browser.mjs web/tests/bot-approvals.browser.mjs web/tests/model-selection.browser.mjs web/tests/chat-polish.browser.mjs web/tests/invitations.browser.mjs web/tests/organization-responsiveness.browser.mjs
 
   desktop:
     needs: selection

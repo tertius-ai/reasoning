@@ -1,3 +1,4 @@
+import { schedulePoll } from "./polling";
 // Copyright Benjamin Antieau and Deven Manam. SPDX-License-Identifier: Apache-2.0
 import React, { useEffect, useState } from "react";
 import { ActivityCard, TopicActivity } from "./TopicActivity";
@@ -45,7 +46,7 @@ export function BotConversation({ organizationId, topicId, names, userId, canWri
         else if (!aborted(cause)) onActivity([{ id: "bot:connection", created_at: 0,
           body: <p className="org-help" role="status">Bot activity unavailable: {errorMessage(cause)}</p> }]);
       }
-      if (!controller.signal.aborted) timer = setTimeout(poll, 2000);
+      if (!controller.signal.aborted) timer = schedulePoll(poll, 2000, controller.signal);
     };
     void poll(); return () => { controller.abort(); clearTimeout(timer); };
   }, [organizationId, topicId, names, onActivity, onAuthLost]);

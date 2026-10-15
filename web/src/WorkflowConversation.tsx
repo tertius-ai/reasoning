@@ -188,14 +188,16 @@ export function WorkflowConversation({ organizationId, topicId, userId, canWrite
   useEffect(() => {
     const controller = new AbortController();
     const root = organizationPath(organizationId);
-    void Promise.all([
-      request<InferenceConfiguration>(root + "/inference-configuration", { signal: controller.signal }),
-      request<BotModel[]>(topicPath(organizationId, topicId) + "/bot-models", { signal: controller.signal }),
-      request<OrganizationPrices>(root + "/model-prices", { signal: controller.signal }).catch(() => null),
-    ]).then(([configuration, bots, prices]) => {
-      if (!controller.signal.aborted) { setModels([...configuration.allowed_models, ...bots.map(bot => bot.id)]);
-        setCatalog(withBotModels(prices, bots)); }
-    }).catch(cause => { if (!aborted(cause)) failure(cause); });
+    let allowed: string[] = [], bots: BotModel[] = [], prices: OrganizationPrices | null = null;
+    const updateModels = () => {
+      if (!controller.signal.aborted) { setModels([...allowed, ...bots.map(bot => bot.id)]); setCatalog(withBotModels(prices, bots)); }
+    };
+    void request<InferenceConfiguration>(root + "/inference-configuration", { signal: controller.signal })
+      .then(value => { allowed = value.allowed_models; updateModels(); }).catch(cause => { if (!aborted(cause)) failure(cause); });
+    void request<BotModel[]>(topicPath(organizationId, topicId) + "/bot-models", { signal: controller.signal })
+      .then(value => { bots = value; updateModels(); }).catch(cause => { if (!aborted(cause)) failure(cause); });
+    void request<OrganizationPrices>(root + "/model-prices", { signal: controller.signal })
+      .then(value => { prices = value; updateModels(); }).catch(() => {});
     void request<ComputeConfiguration>(root + "/compute-configuration", { signal: controller.signal })
       .then(value => { if (!controller.signal.aborted) setCompute(value); }).catch(cause => { if (!aborted(cause)) failure(cause); });
     return () => controller.abort();

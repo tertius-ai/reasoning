@@ -562,8 +562,17 @@ message. Private uploaded pictures and PDFs render through authenticated attachm
 references; `/attach` opens the file chooser. Raw HTML and external images are not rendered;
 member names inserted by mentions are escaped as Markdown text.
 
-Message polling uses an exclusive sequence cursor every two seconds and retries
-after a network failure. Hierarchy/member/role updates poll every four seconds.
+Visible-tab message polling uses an exclusive sequence cursor every two seconds
+and retries after a network failure. Hierarchy/member/role updates poll every four
+seconds. Message, model-configuration, topic bot metadata/activity, research-control,
+compute-activity, navigation, and presence refreshes slow to at most once per
+thirty seconds in hidden tabs. Returning to a visible tab wakes a scheduled refresh
+immediately. Bot metadata refreshes wait for the previous request to finish before
+scheduling another.
+Startup loads health and session state concurrently; an authenticated session can
+open the workspace before health finishes. The topic tree, initial conversation
+page, and bot list render independently of member, edit-history, and permission-tree
+requests. Slow secondary requests do not hold up already available content.
 Messages are reconciled by ID; a committed send whose response was lost reuses
 its client ID on retry. Drafts are held only in memory, separately by account,
 organization, and topic, and cleared on sign-out/session loss. Session tokens

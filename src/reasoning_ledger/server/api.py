@@ -13,6 +13,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import AnyHttpUrl, Field, SecretStr, ValidationError, field_validator, model_validator
+from starlette.concurrency import run_in_threadpool
 from starlette.types import ASGIApp, Receive, Scope, Send
 
 from .bot_api import install_routes as install_bot_routes
@@ -720,11 +721,16 @@ def create_app(config: Config, *, provider: OpenRouter | None = None, mail_provi
     def read_topic(organization_id: str, topic_id: str, body: ReadCursor, user: User):
         store.topic_preference(user, organization_id, topic_id, sequence=body.sequence)
 
+    def catalog_access(user: str, organization_id: str):
+        with store.transaction() as db:
+            store._require(db, user, organization_id)
+
     @app.get("/api/organizations/{organization_id}/inference-configuration")
     async def inference_configuration(organization_id: str, user: User):
-        inference.configuration(user, organization_id)  # Authorize before querying the provider catalogue.
+        await run_in_threadpool(catalog_access, user, organization_id)
         models = await provider.prices()
-        return {**inference.configuration(user, organization_id, models=[model["id"] for model in models]),
+        configuration = await run_in_threadpool(inference.configuration, user, organization_id, models=[model["id"] for model in models])
+        return {**configuration,
                 "enabled": config.inference_enabled, "worker_running": worker.running}
 
     install_blog_routes(app, store, authenticated, frontend=config.frontend_dir)
@@ -732,21 +738,23 @@ def create_app(config: Config, *, provider: OpenRouter | None = None, mail_provi
     @app.get("/api/organizations/{organization_id}/model-prices")
     async def model_prices(organization_id: str, user: User):
         # Membership is checked before any external request. The public catalog needs no key.
-        policy = inference.configuration(user, organization_id)
+        await run_in_threadpool(catalog_access, user, organization_id)
         models = await provider.prices(include_routing=True)
-        inference.configuration(user, organization_id, models=[model["id"] for model in models])
+        policy = await run_in_threadpool(inference.configuration, user, organization_id, models=[model["id"] for model in models])
+        pinned = await run_in_threadpool(usage.recommendation_preferences, user, organization_id)
         return {
             "models": models,
             "allowed_models": [model["id"] for model in models],
-            "recommendations": recommendations(models, pinned=usage.recommendation_preferences(user, organization_id)),
-            "fetched_at": int(time.time()),
+            "recommendations": recommendations(models, pinned=pinned),
+            "fetched_at": getattr(provider, "prices_fetched_at", None) or int(time.time()),
             "routing": policy["routing"]["strategy"],
             "source": "OpenRouter public model catalog",
         }
 
     @app.get("/api/organizations/{organization_id}/model-benchmarks")
     async def model_benchmarks(organization_id: str, user: User):
-        return await benchmarks.fetch(organization_id, metadata_key(store, user, organization_id))
+        credential = await run_in_threadpool(metadata_key, store, user, organization_id)
+        return await benchmarks.fetch(organization_id, credential)
 
     @app.put("/api/organizations/{organization_id}/routing")
     def routing(organization_id: str, body: RoutingWrite, user: User):
@@ -799,15 +807,15 @@ def create_app(config: Config, *, provider: OpenRouter | None = None, mail_provi
     async def request_models(organization_id: str, topic_id: str, body: InferenceRequest, user: User):
         parameters = inference.parameters(body.models, body.max_completion_tokens, body.context_message_limit,
                                            body.through_sequence, effort=body.effort)
-        existing = inference.replay(user, organization_id, topic_id, body.client_id, parameters)
+        existing = await run_in_threadpool(inference.replay, user, organization_id, topic_id, body.client_id, parameters)
         if existing is not None:
             return existing
-        inference.preflight(user, organization_id, topic_id, body.models)
+        await run_in_threadpool(inference.preflight, user, organization_id, topic_id, body.models)
         if not config.inference_enabled:
             raise StoreError(503, "inference is disabled on this installation")
         quotes = await provider.quotes(body.models)
-        inference.configuration(user, organization_id, models=provider.catalog_models)
-        return inference.enqueue(user, organization_id, topic_id, body.client_id, parameters, quotes)
+        await run_in_threadpool(inference.configuration, user, organization_id, models=provider.catalog_models)
+        return await run_in_threadpool(inference.enqueue, user, organization_id, topic_id, body.client_id, parameters, quotes)
 
     @app.get("/api/organizations/{organization_id}/topics/{topic_id}/inference-runs")
     def model_runs(organization_id: str, topic_id: str, user: User, limit: Annotated[int, Query(ge=1, le=50)] = 20):
@@ -909,7 +917,7 @@ def create_app(config: Config, *, provider: OpenRouter | None = None, mail_provi
         return store.keys(user, organization_id)
 
     @app.post("/api/organizations/{organization_id}/provider-keys", status_code=201)
-    async def add_key(organization_id: str, body: ProviderKey, user: User):
+    def add_key(organization_id: str, body: ProviderKey, user: User):
         return store.add_key(
             user,
             organization_id,

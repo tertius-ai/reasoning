@@ -44,7 +44,7 @@ def test_public_routing_availability_is_optional_cached_and_not_inference():
     assert models[0]["routing_availability"]["zdr"] is True
     assert models[0]["routing_availability"]["regions"] == ["US"]
     asyncio.run(provider.prices(include_routing=True))
-    assert len(requests) == 5
+    assert len(requests) == 4
 
 
 def test_unavailable_routing_metadata_does_not_invent_privacy_or_region_flags():
