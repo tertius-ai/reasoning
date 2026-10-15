@@ -156,7 +156,7 @@ prices, hard limits and exhaustion, planned-but-unverified data/subprocessor
 paths, required telemetry purpose, and three separate optional-use choices
 that default off. Hosted AWS, Modal, model, consent, billing, and spend paths
 remain unavailable because canonical Cloud-client and Platform records do not
-carry activation approvals, commercial caps, processor paths, telemetry policy,
+carry activation approvals, spending limits, processor paths, telemetry policy,
 or optional consent state. Those are reported as a private policy gap rather
 than inferred from a descriptor.
 
