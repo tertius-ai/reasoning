@@ -6,6 +6,8 @@ Projects contain `#channels` and alpha (human), beta (agent), and gamma
 (workflow/compute) topics. Shared knowledge lives in the ledger, bibliography,
 and research blog.
 
+This is an academic open-source project by Benjamin Antieau and Deven Manam.
+
 You own the installation, data, provider accounts, and cloud resources. There is
 no hosted Reasoning account or control plane. Users build the server and optional
 desktop client from this checkout; no published Reasoning package or prebuilt

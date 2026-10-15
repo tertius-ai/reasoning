@@ -100,6 +100,11 @@ fixture or mock-provider success as real-host verification.
 
 ## Pull requests
 
+All changes to the default branch use pull requests. The public maintainer team
+can merge its own pull requests after required checks pass; a separate approval
+is not mandatory. Other contributors submit pull requests for a maintainer to
+consider and merge.
+
 A pull request should state:
 
 - the problem and resulting behavior;
