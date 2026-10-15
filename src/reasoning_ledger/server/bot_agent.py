@@ -63,8 +63,13 @@ def agent_arguments(engine, workspace, local_tools=False, session=None, *, model
             args[1:1] = ["-c", "model_reasoning_effort=" + json.dumps(effort)]
         if gateway is not None:
             index = args.index("mcp_servers={}")
-            args[index] = "mcp_servers={reasoning={command=" + json.dumps(sys.executable) + ",args=" + json.dumps(
-                ["-I", "-m", "reasoning_ledger.server.bot_gateway", str(gateway)]) + ",tool_timeout_sec=1800}}"
+            # The gateway must be in the initial tool catalog, rather than
+            # arriving after Codex's grace period for optional MCP servers.
+            args[index] = (
+                "mcp_servers={reasoning={command=" + json.dumps(sys.executable) + ",args=" + json.dumps(
+                    ["-I", "-m", "reasoning_ledger.server.bot_gateway", str(gateway)])
+                + ",required=true,startup_timeout_sec=30,tool_timeout_sec=1800}}"
+            )
             if session is None:
                 args += ["--ephemeral"]
         if session:

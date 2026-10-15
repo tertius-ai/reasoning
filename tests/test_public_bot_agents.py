@@ -8,6 +8,7 @@ import json
 import shutil
 import subprocess
 import time
+import tomllib
 from pathlib import Path
 
 import httpx
@@ -91,6 +92,19 @@ def test_cli_permissions_and_explicit_sessions(engine):
         assert minimal[minimal.index("--tools") + 1] == ""
     with pytest.raises(BotClientError):
         agent_arguments(engine, Path("/workspace"), session="--last")
+
+
+def test_codex_waits_for_required_gateway_instead_of_starting_without_tools():
+    gateway = Path("/private/invocation/gateway.json")
+    args = agent_arguments("codex", Path("/workspace"), gateway=gateway)
+    configuration = next(tomllib.loads(arg) for arg in args if arg.startswith("mcp_servers="))
+
+    assert set(configuration["mcp_servers"]) == {"reasoning"}
+    reasoning = configuration["mcp_servers"]["reasoning"]
+    assert reasoning["required"] is True
+    assert reasoning["startup_timeout_sec"] == 30
+    assert reasoning["args"] == ["-I", "-m", "reasoning_ledger.server.bot_gateway", str(gateway)]
+    assert "--ignore-user-config" in args and "--ephemeral" in args
 
 
 def test_completed_cli_protocols_and_failures():
