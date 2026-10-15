@@ -118,13 +118,25 @@ It makes no paid calls.
 
 ## CI and release checks
 
-GitHub Actions runs independent backend, frontend, and desktop jobs on PRs and
-main. Three deterministic deployment-test shards collectively run the complete
-fixture gate; `--deployment --deployment-shard INDEX/3` selects each partition
-locally. The Backend deployment gate requires all three, then runs documentation
-checks, lint, licensing checks, and actual source-archive installation. Four release-safety shards
+GitHub Actions runs lint, documentation, licensing, source-archive installation,
+publication contracts, and the public-history secret scan on every PR. Integration
+suites are selected conservatively from changed paths. Documentation-only PRs
+skip integration suites; desktop changes select desktop contracts; frontend
+changes select backend, browser, and developer-bot checks. Bot-client changes in
+`bot_agent.py`, `bot_gateway_probe.py`, or `bot_runner.py` and their focused tests
+select backend and developer-bot checks. Shared server/library code, dependency
+changes, CI/test infrastructure, and unknown paths select every suite. Main and
+manual workflow runs always select every suite.
+
+Three deterministic deployment-test shards run with two isolated pytest workers
+each; `--deployment --deployment-shard INDEX/3` selects each partition locally.
+Source-installation, publication, and developer-bot tests run in their dedicated
+jobs instead of repeating in deployment shards. The Backend deployment gate
+requires source-quality checks and every selected deployment shard. Required
+aggregate gates reject failed selection, failed tests, and unexpected skips;
+deliberately unselected suites do not block merging. Four release-safety shards
 cover migration/preparation, operator workflows, activation/rollback, and recovery;
-Release upgrade and recovery requires all four. No test is omitted by partitioning.
+Release upgrade and recovery requires all four when selected. No test is omitted by partitioning.
 The frontend job runs
 Node tests and its production build; the desktop job runs contract tests.
 The frontend job also checks the local development workflow in Chromium:

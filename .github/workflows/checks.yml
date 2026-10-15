@@ -4,6 +4,7 @@ on:
   pull_request:
   push:
     branches: [main]
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -13,6 +14,44 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  selection:
+    name: Select affected suites
+    runs-on: ubuntu-24.04
+    timeout-minutes: 2
+    outputs:
+      backend: ${{ steps.suites.outputs.backend }}
+      upgrade: ${{ steps.suites.outputs.upgrade }}
+      postgres: ${{ steps.suites.outputs.postgres }}
+      frontend: ${{ steps.suites.outputs.frontend }}
+      desktop: ${{ steps.suites.outputs.desktop }}
+      developer: ${{ steps.suites.outputs.developer }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - id: suites
+        env:
+          CHECK_EVENT: ${{ github.event_name }}
+          CHECK_BASE: ${{ github.event.pull_request.base.sha }}
+          CHECK_HEAD: ${{ github.event.pull_request.head.sha }}
+        run: python .github/ci/select-checks.py
+
+  source-quality:
+    name: Lint, documentation, and source installation
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        with:
+          enable-cache: true
+          version: "0.11.16"
+          cache-suffix: backend
+      - run: uv sync --locked --extra test --extra dev
+      - run: uv run --no-sync ruff check src tests .github/ci
+      - run: uv run --no-sync pytest -q tests/test_documentation.py tests/test_source_release.py tests/test_ci_selection.py
+      - run: uvx reuse lint
+
   source-publication:
     name: Spaces source publication / offline SDK contracts
     runs-on: ubuntu-24.04
@@ -26,6 +65,8 @@ jobs:
       - run: uv run --no-sync pytest -q tests/test_public_compute_spaces.py
 
   backend-shards:
+    needs: selection
+    if: needs.selection.outputs.backend == 'true'
     name: Deployment fixtures / ${{ matrix.shard }}
     runs-on: ubuntu-24.04
     timeout-minutes: 12
@@ -50,9 +91,14 @@ jobs:
           sudo apt-get update -qq
           sudo apt-get install -y bubblewrap apparmor
           sudo apparmor_parser -r tests/fixtures/developer-bwrap.apparmor
-      - run: uv run --no-sync pytest --deployment --deployment-shard ${{ matrix.shard }}/3 -q --durations=20
+      - run: >-
+          uv run --no-sync pytest --deployment --deployment-shard ${{ matrix.shard }}/3 -n 2 -q --durations=20
+          --ignore=tests/test_public_bot_developer.py --ignore=tests/test_public_developer_testing.py
+          --ignore=tests/test_public_compute_spaces.py --ignore=tests/test_source_release.py
 
   developer-bot:
+    needs: selection
+    if: needs.selection.outputs.developer == 'true'
     name: Development-box bot test profiles
     runs-on: ubuntu-24.04
     timeout-minutes: 8
@@ -82,25 +128,24 @@ jobs:
 
   backend:
     name: Backend deployment gate
-    needs: backend-shards
+    needs: [selection, source-quality, backend-shards]
     if: always()
     runs-on: ubuntu-24.04
-    timeout-minutes: 5
+    timeout-minutes: 1
     steps:
-      - run: test "${{ needs.backend-shards.result }}" = success
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
-        with:
-          enable-cache: true
-          version: "0.11.16"
-          cache-suffix: backend
-      - run: uv sync --locked --extra test --extra dev
-      - run: uv run --no-sync ruff check src tests
-      - run: uv run --no-sync pytest -q tests/test_documentation.py
-      - run: uvx reuse lint
-      - run: uv run --no-sync pytest -q tests/test_source_release.py
+      - env:
+          SELECTION: ${{ needs.selection.result }}
+          QUALITY: ${{ needs.source-quality.result }}
+          REQUIRED: ${{ needs.selection.outputs.backend }}
+          RESULT: ${{ needs.backend-shards.result }}
+        run: |
+          test "$SELECTION" = success
+          test "$QUALITY" = success
+          if [ "$REQUIRED" = true ]; then test "$RESULT" = success; else test "$REQUIRED" = false && test "$RESULT" = skipped; fi
 
   upgrade-recovery-shards:
+    needs: selection
+    if: needs.selection.outputs.upgrade == 'true'
     name: Release safety / ${{ matrix.suite }}
     runs-on: ubuntu-24.04
     timeout-minutes: 12
@@ -132,14 +177,22 @@ jobs:
 
   upgrade-recovery:
     name: Release upgrade and recovery
-    needs: upgrade-recovery-shards
+    needs: [selection, upgrade-recovery-shards]
     if: always()
     runs-on: ubuntu-24.04
     timeout-minutes: 1
     steps:
-      - run: test "${{ needs.upgrade-recovery-shards.result }}" = success
+      - env:
+          SELECTION: ${{ needs.selection.result }}
+          REQUIRED: ${{ needs.selection.outputs.upgrade }}
+          RESULT: ${{ needs.upgrade-recovery-shards.result }}
+        run: |
+          test "$SELECTION" = success
+          if [ "$REQUIRED" = true ]; then test "$RESULT" = success; else test "$REQUIRED" = false && test "$RESULT" = skipped; fi
 
   postgres-shards:
+    needs: selection
+    if: needs.selection.outputs.postgres == 'true'
     name: PostgreSQL / ${{ matrix.suite }}
     runs-on: ubuntu-24.04
     timeout-minutes: 10
@@ -194,14 +247,22 @@ jobs:
 
   postgres:
     name: PostgreSQL organization parity
-    needs: postgres-shards
+    needs: [selection, postgres-shards]
     if: always()
     runs-on: ubuntu-24.04
     timeout-minutes: 1
     steps:
-      - run: test "${{ needs.postgres-shards.result }}" = success
+      - env:
+          SELECTION: ${{ needs.selection.result }}
+          REQUIRED: ${{ needs.selection.outputs.postgres }}
+          RESULT: ${{ needs.postgres-shards.result }}
+        run: |
+          test "$SELECTION" = success
+          if [ "$REQUIRED" = true ]; then test "$RESULT" = success; else test "$REQUIRED" = false && test "$RESULT" = skipped; fi
 
   frontend:
+    needs: selection
+    if: needs.selection.outputs.frontend == 'true'
     name: Frontend tests and build
     runs-on: ubuntu-24.04
     timeout-minutes: 10
@@ -230,6 +291,8 @@ jobs:
         run: node --test --test-concurrency=1 web/tests/public-ledger.browser.mjs web/tests/public-blog.browser.mjs web/tests/navigation.browser.mjs web/tests/topic-media.browser.mjs web/tests/bot-controls.browser.mjs web/tests/bot-approvals.browser.mjs web/tests/model-selection.browser.mjs web/tests/chat-polish.browser.mjs web/tests/invitations.browser.mjs
 
   desktop:
+    needs: selection
+    if: needs.selection.outputs.desktop == 'true'
     name: Desktop contracts
     runs-on: ubuntu-24.04
     timeout-minutes: 10
