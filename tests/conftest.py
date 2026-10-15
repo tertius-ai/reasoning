@@ -63,6 +63,7 @@ DEPLOYMENT_TESTS = {
     "test_public_inference.py",
     "test_public_model_benchmarks.py",
     "test_public_model_preferences.py",
+    "test_public_responsiveness.py",
     "test_public_inference_blog.py",
     "test_public_inference_ledger.py",
     "test_public_knowledge.py",

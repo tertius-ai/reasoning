@@ -1,3 +1,4 @@
+import { schedulePoll } from "./polling";
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import ReactMarkdown, { Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -319,7 +320,10 @@ function CreationDialog({ kind, hierarchy, organizationId, parentId, members, us
     if (kind !== "topic") return;
     const controller = new AbortController();
     void Promise.allSettled([
-      request<InferenceConfiguration>(organizationPath(organizationId) + "/inference-configuration", { signal: controller.signal }),
+      request<InferenceConfiguration>(organizationPath(organizationId) + "/inference-configuration", { signal: controller.signal }).then(value => {
+        if (!controller.signal.aborted) setAllowedModels(value.allowed_models);
+        return value;
+      }),
       request<OrganizationPrices>(organizationPath(organizationId) + "/model-prices", { signal: controller.signal }),
     ]).then(([configuration, prices]) => {
       if (controller.signal.aborted) return;
@@ -597,7 +601,7 @@ function PresenceSidebar({ organizationId, open, onClose, onAuthLost }: {
     const poll = async () => {
       try { setPresence(await request<Presence>(organizationPath(organizationId) + "/presence", { signal: controller.signal })); }
       catch (cause) { if (!aborted(cause) && cause instanceof ApiError && cause.status === 401) onAuthLost(); }
-      if (!controller.signal.aborted) timer = setTimeout(poll, 3000);
+      if (!controller.signal.aborted) timer = schedulePoll(poll, 3000, controller.signal);
     };
     void poll(); return () => { controller.abort(); clearTimeout(timer); };
   }, [organizationId, open, onAuthLost]);
@@ -692,12 +696,16 @@ function Conversation({ organizationId, topic, members, user, canWrite, canManag
   currentDraft.current = draft;
   const root = topicPath(organizationId, topic.id);
   useEffect(() => {
-    let active = true;
-    const refreshBots = () => { void request<Pick<Member, "id" | "name">[]>(root + "/bots").then((value) => {
-      if (active) setTopicBots(value);
-    }).catch(() => { if (active) setTopicBots([]); }); };
-    refreshBots(); const interval = window.setInterval(refreshBots, 10000);
-    return () => { active = false; window.clearInterval(interval); };
+    const controller = new AbortController(); let timer: ReturnType<typeof setTimeout>;
+    const refreshBots = async () => {
+      try {
+        const value = await request<Pick<Member, "id" | "name">[]>(root + "/bots", { signal: controller.signal });
+        if (!controller.signal.aborted) setTopicBots(value);
+      } catch { if (!controller.signal.aborted) setTopicBots([]); }
+      if (!controller.signal.aborted) timer = schedulePoll(refreshBots, 10000, controller.signal);
+    };
+    void refreshBots();
+    return () => { controller.abort(); clearTimeout(timer); };
   }, [root]);
   useEffect(() => {
     if (!viewport.current) return;
@@ -777,7 +785,7 @@ function Conversation({ organizationId, topic, members, user, canWrite, canManag
         if (aborted(cause)) return;
         if (cause instanceof ApiError && cause.status === 401) onAuthLost(); else setModelError(errorMessage(cause));
       }
-      if (!controller.signal.aborted) timer = setTimeout(refreshConfiguration, 3000);
+      if (!controller.signal.aborted) timer = schedulePoll(refreshConfiguration, 3000, controller.signal);
     };
     void refreshConfiguration();
     void request<OrganizationPrices>(organizationPath(organizationId) + "/model-prices", { signal: controller.signal })
@@ -789,11 +797,16 @@ function Conversation({ organizationId, topic, members, user, canWrite, canManag
     return () => { controller.abort(); clearTimeout(timer); };
   }, [organizationId, topic.kind, topic.default_model, onAuthLost]);
   useEffect(() => {
-    const controller = new AbortController();
-    const refresh = () => void request<BotModel[]>(root + "/bot-models", { signal: controller.signal })
-      .then(value => { if (!controller.signal.aborted) setBotModels(value); }).catch(() => {});
-    refresh(); const timer = window.setInterval(refresh, topic.kind === "beta" ? 3000 : 10000);
-    return () => { controller.abort(); window.clearInterval(timer); };
+    const controller = new AbortController(); let timer: ReturnType<typeof setTimeout>;
+    const refresh = async () => {
+      try {
+        const value = await request<BotModel[]>(root + "/bot-models", { signal: controller.signal });
+        if (!controller.signal.aborted) setBotModels(value);
+      } catch { /* Keep the last known model choices during a transient refresh failure. */ }
+      if (!controller.signal.aborted) timer = schedulePoll(refresh, topic.kind === "beta" ? 3000 : 10000, controller.signal);
+    };
+    void refresh();
+    return () => { controller.abort(); clearTimeout(timer); };
   }, [root, topic.kind]);
 
   useEffect(() => {
@@ -802,7 +815,12 @@ function Conversation({ organizationId, topic, members, user, canWrite, canManag
       try {
         const query = cursor.current ? `after=${cursor.current}&limit=200` : `before=${anchor === null ? Number.MAX_SAFE_INTEGER : anchor + 1}&limit=100`;
         const [incoming, updates] = await Promise.all([
-          request<Message[]>(root + "/messages?" + query, { signal: controller.signal }),
+          request<Message[]>(root + "/messages?" + query, { signal: controller.signal }).then(incoming => {
+            if (!controller.signal.aborted && !cursor.current) {
+              setMessages(existing => mergeMessages(existing, incoming)); setLoading(false);
+            }
+            return incoming;
+          }),
           request<{ after: number; messages: Message[] }>(root + "/message-updates?after=" + editCursor.current, { signal: controller.signal }),
         ]);
         if (controller.signal.aborted) return;
@@ -822,7 +840,7 @@ function Conversation({ organizationId, topic, members, user, canWrite, canManag
         if (cause instanceof ApiError && cause.status === 401) { onAuthLost(); return; }
         setOnline(false); setError(errorMessage(cause)); setLoading(false);
       }
-      if (!controller.signal.aborted) timer = setTimeout(poll, 2000);
+      if (!controller.signal.aborted) timer = schedulePoll(poll, 2000, controller.signal);
     };
     void poll();
     return () => { controller.abort(); clearTimeout(timer); };
@@ -1273,12 +1291,15 @@ export function OrganizationApp() {
   useEffect(() => {
     if (invitation || verificationToken) window.history.replaceState(null, "", window.location.pathname + window.location.search);
     const controller = new AbortController();
-    void request<{ initialized: boolean }>("/health", { signal: controller.signal }).then((health) => {
-      setInitialized(health.initialized);
-      return request<Account>("/auth/me", { signal: controller.signal });
-    }).then(setUser).catch((cause) => {
-      if (!aborted(cause) && !(cause instanceof ApiError && cause.status === 401)) setError(errorMessage(cause));
-    }).finally(() => { if (!controller.signal.aborted) setLoading(false); });
+    const failure = (cause: unknown) => {
+      if (!controller.signal.aborted && !aborted(cause) && !(cause instanceof ApiError && cause.status === 401)) setError(errorMessage(cause));
+    };
+    void Promise.all([
+      request<{ initialized: boolean }>("/health", { signal: controller.signal })
+        .then(health => { if (!controller.signal.aborted) setInitialized(health.initialized); }).catch(failure),
+      request<Account>("/auth/me", { signal: controller.signal })
+        .then(account => { if (!controller.signal.aborted) { setUser(account); setLoading(false); } }).catch(failure),
+    ]).finally(() => { if (!controller.signal.aborted) setLoading(false); });
     return () => controller.abort();
   }, []);
 
@@ -1296,19 +1317,23 @@ export function OrganizationApp() {
     const controller = new AbortController(); let timer: ReturnType<typeof setTimeout>;
     const poll = async () => {
       try {
-        const [tree, people, orgs] = await Promise.all([
-          request<Hierarchy>(organizationPath(organizationId) + "/hierarchy", { signal: controller.signal }),
+        const [, people, orgs] = await Promise.all([
+          request<Hierarchy>(organizationPath(organizationId) + "/hierarchy", { signal: controller.signal }).then(tree => {
+            if (controller.signal.aborted) return tree;
+            setHierarchy(tree);
+            setSelection((current) => {
+              if (current && tree.topics.some(item => item.id === current.topic)) return current;
+              const saved = workspace.topic ?? readNavigation(user.id, organizationId).topic;
+              const initial = tree.topics.find(item => item.id === saved) ?? tree.topics[0];
+              return initial ? { topic: initial.id, anchor: null } : null;
+            });
+            return tree;
+          }),
           request<Member[]>(organizationPath(organizationId) + "/members", { signal: controller.signal }),
           request<Organization[]>("/organizations", { signal: controller.signal }),
         ]);
         if (controller.signal.aborted) return;
-        setHierarchy(tree); setMembers(people); setOrganizations(orgs); setOnline(true);
-        setSelection((current) => {
-          if (current && tree.topics.some(item => item.id === current.topic)) return current;
-          const saved = workspace.topic ?? readNavigation(user.id, organizationId).topic;
-          const initial = tree.topics.find(item => item.id === saved) ?? tree.topics[0];
-          return initial ? { topic: initial.id, anchor: null } : null;
-        });
+        setMembers(people); setOrganizations(orgs); setOnline(true);
       } catch (cause) {
         if (aborted(cause)) return;
         if (cause instanceof ApiError && cause.status === 401) { authLost(); return; }
@@ -1317,7 +1342,7 @@ export function OrganizationApp() {
         }
         setOnline(false); setError(errorMessage(cause));
       }
-      if (!controller.signal.aborted) timer = setTimeout(poll, 4000);
+      if (!controller.signal.aborted) timer = schedulePoll(poll, 4000, controller.signal);
     };
     void poll();
     return () => { controller.abort(); clearTimeout(timer); };
@@ -1335,7 +1360,7 @@ export function OrganizationApp() {
         if (cause instanceof ApiError && cause.status === 401) { authLost(); return; }
         setError(errorMessage(cause));
       }
-      if (!controller.signal.aborted) timer = setTimeout(poll, 15000);
+      if (!controller.signal.aborted) timer = schedulePoll(poll, 15000, controller.signal);
     };
     void poll(); return () => { controller.abort(); clearTimeout(timer); };
   }, [user?.id, organizationId, refresh, authLost]);

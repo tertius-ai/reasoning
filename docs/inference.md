@@ -472,6 +472,11 @@ catalog, without organization API credentials or inference calls. Members can
 search text-to-text models, filter by provider, tool use,
 reasoning, or image input, and inspect modalities, parameters, limits, and all
 reported price dimensions. Displayed catalog rates are not an invoice guarantee.
+Public model choices and displayed prices share a one-minute server cache;
+concurrent readers share one refresh, and failed refreshes retry after five
+seconds. Membership and organization settings are checked on every request.
+Inference admission fetches current availability and prices independently of
+this display cache.
 
 The browser and model pickers share compact expandable rows. Topic selection
 pickers are alphabetized within **Best for math**, **Best open-weights**, and

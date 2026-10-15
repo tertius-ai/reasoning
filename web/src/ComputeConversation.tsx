@@ -1,3 +1,4 @@
+import { schedulePoll } from "./polling";
 import React, { useEffect, useRef, useState } from "react";
 import { publishComputeActivity, useTopicCommand } from "./TopicCommands";
 import { ActivityCard, ActivityDialog, TopicActivity } from "./TopicActivity";
@@ -85,7 +86,7 @@ export function ComputeJobDetail({ organizationId, jobId, userId, canWrite, canM
         if (cause instanceof ApiError && cause.status === 401) { onAuthLost(); return; }
         setError(errorMessage(cause));
       }
-      if (!controller.signal.aborted) timer = setTimeout(poll, backlog ? 0 : 2000);
+      if (!controller.signal.aborted) timer = schedulePoll(poll, backlog ? 0 : 2000, controller.signal);
     };
     void poll(); return () => { controller.abort(); clearTimeout(timer); };
   }, [root, refresh, onAuthLost]);
@@ -165,7 +166,7 @@ export function ComputeConversation({ organizationId, topicId, userId, canWrite,
         if (cause instanceof ApiError && cause.status === 401) { onAuthLost(); return; }
         setError(errorMessage(cause));
       }
-      if (!controller.signal.aborted) timer = setTimeout(poll, 2000);
+      if (!controller.signal.aborted) timer = schedulePoll(poll, 2000, controller.signal);
     };
     void poll(); return () => { controller.abort(); clearTimeout(timer); };
   }, [root, path, refresh, visibleLimit, organizationId, topicId, userId, onAuthLost]);

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import codecs
+import copy
 import json
 import re
 import time
@@ -18,6 +19,8 @@ from .reasoning_effort import openrouter_efforts as reasoning_efforts
 
 OPENROUTER_URL = "https://openrouter.ai/api/v1"
 OUTPUT_RESERVATION_TOKENS = 8192
+CATALOG_TTL = 60
+CATALOG_RETRY = 5
 
 
 class ProviderError(Exception):
@@ -360,9 +363,15 @@ class Chunk:
 
 
 class OpenRouter:
-    def __init__(self, base_url: str = OPENROUTER_URL, *, transport: httpx.AsyncBaseTransport | None = None):
+    def __init__(self, base_url: str = OPENROUTER_URL, *, transport: httpx.AsyncBaseTransport | None = None, clock=time.monotonic):
         self.base_url, self.transport = provider_origin(base_url), transport
+        self._clock = clock
         self._routing_cache = None
+        self._routing_lock = asyncio.Lock()
+        self._prices_cache = None
+        self._prices_lock = asyncio.Lock()
+        self._prices_retry_at = 0
+        self.prices_fetched_at = None
         self.catalog_models: list[str] = []
 
     def client(self) -> httpx.AsyncClient:
@@ -453,8 +462,12 @@ class OpenRouter:
             raise ProviderError("catalog_unavailable", no_charge=True) from exc
 
     async def routing_availability(self):
+        async with self._routing_lock:
+            return await self._routing_availability()
+
+    async def _routing_availability(self):
         """Public, optional availability metadata; never a promise about a chosen request route."""
-        if self._routing_cache and self._routing_cache[0] > time.monotonic():
+        if self._routing_cache and self._routing_cache[0] > self._clock():
             return self._routing_cache[1]
 
         async def ids(parameters):
@@ -473,11 +486,39 @@ class OpenRouter:
         result = dict(zip(("zdr", "us", "eu"), await asyncio.gather(
             ids({"zdr": "true"}), ids({"region": "us"}), ids({"region": "eu"})
         ), strict=True))
-        self._routing_cache = (time.monotonic() + 300, result)
+        self._routing_cache = (self._clock() + 300, result)
         return result
 
     async def prices(self, *, include_routing=False) -> list[dict]:
-        """Public catalog metadata only; no organization credential or inference call."""
+        """Share bounded public metadata across tabs; admission quotes stay fresh."""
+        async with self._prices_lock:
+            now = self._clock()
+            if self._prices_cache is not None and self._prices_cache[0] > now:
+                result = self._prices_cache[1]
+            else:
+                if self._prices_retry_at > now:
+                    raise ProviderError("catalog_unavailable", no_charge=True)
+                try:
+                    result = await self._prices()
+                except ProviderError:
+                    self._prices_retry_at = self._clock() + CATALOG_RETRY
+                    raise
+                self._prices_cache = (self._clock() + CATALOG_TTL, result)
+                self.prices_fetched_at = int(time.time())
+            result = copy.deepcopy(result)
+        if include_routing:
+            availability = await self.routing_availability()
+            for model in result:
+                model["routing_availability"] = {
+                    "zdr": model["id"] in availability["zdr"] if availability["zdr"] is not None else None,
+                    "regions": [region.upper() for region in ("us", "eu")
+                                if availability[region] is not None and model["id"] in availability[region]],
+                    "source": "OpenRouter filtered public catalog; availability only, not enforced request routing",
+                }
+        return result
+
+    async def _prices(self) -> list[dict]:
+        """Fetch and validate public metadata without credentials or inference."""
         try:
             async with self.client() as client, client.stream("GET", self.base_url + "/models") as response:
                 if response.status_code != 200:
@@ -540,15 +581,6 @@ class OpenRouter:
                         ),
                     }
                 )
-            if include_routing:
-                availability = await self.routing_availability()
-                for model in result:
-                    model["routing_availability"] = {
-                        "zdr": model["id"] in availability["zdr"] if availability["zdr"] is not None else None,
-                        "regions": [region.upper() for region in ("us", "eu")
-                                    if availability[region] is not None and model["id"] in availability[region]],
-                        "source": "OpenRouter filtered public catalog; availability only, not enforced request routing",
-                    }
             return result
         except (httpx.HTTPError, ValueError, KeyError, TypeError, AttributeError, RecursionError) as exc:
             raise ProviderError("catalog_unavailable", no_charge=True) from exc

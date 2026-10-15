@@ -55,8 +55,10 @@ export function BotAdministration({ organizationId, personal = false, readOnly =
   const root = organizationPath(organizationId);
   const botsPath = root + (personal ? "/my-bots" : "/bots");
   const reload = useCallback(async () => {
-    const [records, tree] = await Promise.all([request<BotMetadata[]>(botsPath), request<Hierarchy>(root + "/hierarchy")]);
-    setBots(records); setHierarchy(tree);
+    await Promise.all([
+      request<BotMetadata[]>(botsPath).then(setBots),
+      request<Hierarchy>(root + "/hierarchy").then(setHierarchy),
+    ]);
   }, [root, botsPath]);
   useEffect(() => { void reload().catch((cause) => setError(errorMessage(cause))); }, [reload]);
   useEffect(() => {

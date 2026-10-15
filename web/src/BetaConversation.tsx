@@ -1,3 +1,4 @@
+import { schedulePoll } from "./polling";
 import React, { useEffect, useRef, useState } from "react";
 import { MessageUsageDetails } from "./OrganizationUsage";
 import { TopicActivity } from "./TopicActivity";
@@ -98,7 +99,7 @@ export function BetaConversation({ organizationId, topicId, userId, canWrite, ca
         if (cause instanceof ApiError && cause.status === 401) { onAuthLost(); return; }
         setPollError("Unable to refresh agent activity; reconnecting. " + errorMessage(cause));
       }
-      if (!controller.signal.aborted) timer = setTimeout(poll, 1000);
+      if (!controller.signal.aborted) timer = schedulePoll(poll, 1000, controller.signal);
     };
     void poll();
     return () => { controller.abort(); clearTimeout(timer); };
