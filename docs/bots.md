@@ -209,7 +209,9 @@ Private reasoning, tool arguments, and CLI stderr are not included in activity.
 Codex uses a read-only sandbox with native shell execution disabled; Claude Code
 has no built-in tools. The only configured MCP server is Reasoning's scoped
 gateway. Before invoking either paid CLI, the runner initializes that gateway
-over real MCP transport and checks its tool list. A successful bot reply also
+over real MCP transport and checks its tool list. Codex additionally treats the
+gateway as a required MCP server and waits up to 30 seconds for it to initialize
+before starting the model turn. A successful bot reply also
 requires a gateway connection from the CLI invocation; missing tools are a
 specific failure, not a successful tool-less response. Read-only preflight is
 not charged as inference. Workspace read/write tools reject traversal, symlinks, hardlinks and
