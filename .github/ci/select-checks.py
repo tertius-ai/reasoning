@@ -14,14 +14,13 @@ BOT_CLIENTS = {
     "tests/test_public_bot_agents.py",
     "tests/test_public_bot_gateway_probe.py",
     "tests/test_public_bot_runner.py",
-    "tests/test_public_bot_integration.py",
 }
 
 
 def select(paths: list[str], *, full: bool = False) -> dict[str, bool]:
     selected = set(SUITES) if full else set()
     for path in paths:
-        if path.endswith(".md") or path.startswith("docs/"):
+        if path.startswith("docs/") or (path.endswith(".md") and "/" not in path):
             continue
         if path in BOT_CLIENTS:
             # The deployment shards retain all bot tests. The developer job

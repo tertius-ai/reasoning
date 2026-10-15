@@ -26,6 +26,7 @@ def test_bot_client_change_keeps_backend_and_sandbox_coverage():
     "src/reasoning_ledger/server/store.py", "src/reasoning_ledger/server/api.py",
     "src/reasoning_ledger/deployment/host.py", "uv.lock", "pyproject.toml",
     "tests/conftest.py", ".github/workflows/checks.yml", ".github/ci/select-checks.py",
+    "src/reasoning_ledger/prompts/research.md", "tests/test_public_bot_integration.py",
     "unknown-new-component/config.json",
 ])
 def test_shared_code_and_unknown_paths_require_full_coverage(path):
