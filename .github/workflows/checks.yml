@@ -166,7 +166,7 @@ jobs:
               tests/test_public_work_worker.py tests/test_public_work_controllers.py
     services:
       postgres:
-        # Docker Official Images on ECR Public, pinned to the verified index.
+        # Docker Official Image, pinned to the verified multi-platform index.
         image: docker.io/library/postgres:16.15-alpine@sha256:721873c34ceb9f8d8fc265984940dc982404c105f19ad51be9fdc5970a6080ea
         env:
           POSTGRES_USER: reasoning_test
