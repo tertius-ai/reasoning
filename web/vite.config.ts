@@ -36,6 +36,12 @@ export default defineConfig({
         workbench: fileURLToPath(new URL("index.html", import.meta.url)),
         organization: fileURLToPath(new URL("organization.html", import.meta.url)),
       },
+      // The public server caches assets/ files as immutable only because every name carries a content hash.
+      output: {
+        entryFileNames: "assets/[name]-[hash].js",
+        chunkFileNames: "assets/[name]-[hash].js",
+        assetFileNames: "assets/[name]-[hash][extname]",
+      },
     },
   },
   server: {

@@ -62,6 +62,6 @@ def install_routes(app, store, authenticated):
                 "Cache-Control": "no-store",
                 "X-Content-Type-Options": "nosniff",
                 "Content-Disposition": "inline; filename*=UTF-8''" + quote(metadata["name"], safe=""),
-                "Content-Security-Policy": "default-src 'none'; sandbox",
+                "Content-Security-Policy": "default-src 'none'; sandbox; frame-ancestors 'none'",
             },
         )

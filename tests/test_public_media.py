@@ -59,6 +59,7 @@ def test_upload_and_embedding_routes_all_topic_kinds_with_exact_hashes(installat
         blob = client.get(result["url"])
         assert blob.status_code == 200 and blob.content == PNG
         assert blob.headers["content-type"] == "image/png" and blob.headers["cache-control"] == "no-store"
+        assert blob.headers["content-security-policy"] == "default-src 'none'; sandbox; frame-ancestors 'none'"
         assert "filename*=UTF-8''plot.png" in blob.headers["content-disposition"]
         assert client.get(result["url"].replace(sha, "0" * 64)).status_code == 404
         assert client.get(root).json() == [result]

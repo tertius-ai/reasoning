@@ -129,6 +129,18 @@ point, and mounts only the build's assets, license material, and icon. It never
 exposes the installation state directory or local-workbench API. The frontend
 bundle includes Apache-2.0/NOTICE and the bundled font/KaTeX notices.
 
+Every build file under `/assets/` is named `<name>-<content hash>.<extension>`.
+Successful responses for such names (200, or 304 on revalidation) carry
+`Cache-Control: public, max-age=31536000, immutable`; every other response,
+including the HTML entry point, API responses, unhashed names and missing
+files, carries `Cache-Control: no-store`. All responses keep `nosniff`, the
+referrer policy and HSTS; a route's own `Content-Security-Policy` (such as the
+sandboxed media content route) is kept, and other responses receive the
+application policy. When `--frontend-dir` is a managed release directory
+(`<releases>/<release-id>/web`), a hashed name missing from the current release
+is served from the `web/assets` directories of the other installed releases, so
+a page loaded before an upgrade can still import its chunks.
+
 `serve` binds to `127.0.0.1:8766` by default. For a public installation, set
 `--public-url https://chat.example.org` and place a same-origin HTTPS reverse
 proxy in front of this loopback listener. Public URLs must be origins without

@@ -51,6 +51,48 @@ from .workflow_worker import WorkflowWorker
 
 SESSION_COOKIE = "reasoning_session"
 CSRF_COOKIE = "reasoning_csrf"
+APPLICATION_CSP = (
+    "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; "
+    "img-src 'self' data:; font-src 'self' data:; connect-src 'self'; "
+    "object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'"
+)
+# The frontend build names every file under assets/ `<name>-<8-character content hash>.<extension>`.
+HASHED_ASSET = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*-[A-Za-z0-9_-]{8}\.[A-Za-z0-9]+")
+IMMUTABLE_ASSET_CACHE = "public, max-age=31536000, immutable"
+RELEASE_ID = re.compile(r"[a-f0-9]{64}")
+
+
+def retained_asset_directories(frontend: Path) -> tuple[Path, ...]:
+    """Asset directories of the other installed releases in the managed `<releases>/<release-id>/web` layout."""
+    release = frontend.parent
+    if frontend.name != "web" or not RELEASE_ID.fullmatch(release.name):
+        return ()
+    retained = []
+    for sibling in sorted(release.parent.iterdir()):
+        assets = sibling / "web" / "assets"
+        if sibling != release and RELEASE_ID.fullmatch(sibling.name) and not sibling.is_symlink() and assets.is_dir():
+            retained.append(assets)
+    return tuple(retained)
+
+
+class FrontendAssets(StaticFiles):
+    """Serve this release's assets; a missing hashed file falls back to retained releases.
+
+    A page loaded before an upgrade can still import the content-hashed chunks it references.
+    """
+
+    def __init__(self, directory: Path, retained: tuple[Path, ...] = ()):
+        super().__init__(directory=directory)
+        self.retained = [StaticFiles(directory=path) for path in retained]
+
+    def lookup_path(self, path: str):
+        found = super().lookup_path(path)
+        if found[1] is None and HASHED_ASSET.fullmatch(path):
+            for release in self.retained:
+                found = release.lookup_path(path)
+                if found[1] is not None:
+                    break
+        return found
 
 
 @dataclass(frozen=True)
@@ -456,14 +498,19 @@ def create_app(config: Config, *, provider: OpenRouter | None = None, mail_provi
             response = JSONResponse({"detail": "application/json required"}, status_code=415)
         else:
             response = await call_next(request)
-        response.headers["Cache-Control"] = "no-store"
+        # Only successful content-hashed public build files may be cached; everything else stays private.
+        versioned = (
+            config.frontend_dir is not None
+            and request.method in {"GET", "HEAD"}
+            and response.status_code in {200, 304}
+            and request.url.path.startswith("/assets/")
+            and HASHED_ASSET.fullmatch(request.url.path.removeprefix("/assets/")) is not None
+        )
+        response.headers["Cache-Control"] = IMMUTABLE_ASSET_CACHE if versioned else "no-store"
         response.headers["X-Content-Type-Options"] = "nosniff"
         response.headers["Referrer-Policy"] = "no-referrer"
-        response.headers["Content-Security-Policy"] = (
-            "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; "
-            "img-src 'self' data:; font-src 'self' data:; connect-src 'self'; "
-            "object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'"
-        )
+        # A route's own policy (such as sandboxed media content) is stricter than the application policy.
+        response.headers.setdefault("Content-Security-Policy", APPLICATION_CSP)
         if config.secure:
             response.headers["Strict-Transport-Security"] = "max-age=31536000"
         return response
@@ -943,7 +990,11 @@ def create_app(config: Config, *, provider: OpenRouter | None = None, mail_provi
         return store.audit(user, organization_id, after)
 
     if config.frontend_dir is not None:
-        app.mount("/assets", StaticFiles(directory=config.frontend_dir / "assets"), name="frontend-assets")
+        app.mount(
+            "/assets",
+            FrontendAssets(config.frontend_dir / "assets", retained_asset_directories(config.frontend_dir)),
+            name="frontend-assets",
+        )
         if (config.frontend_dir / "licenses").is_dir():
             app.mount("/licenses", StaticFiles(directory=config.frontend_dir / "licenses"), name="frontend-licenses")
 
