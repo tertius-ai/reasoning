@@ -234,12 +234,22 @@ export function authorLabel(message: Message, members: Member[]): string {
 }
 export const aborted = (error: unknown) => error instanceof Error && error.name === "AbortError";
 
+/**
+ * Reconcile messages by ID. A newer revision replaces a message; an equal revision replaces it only when its
+ * content changed. Unchanged messages keep their object identity, and an empty or unchanged delta returns
+ * `existing` itself, so memoized rendering skips them.
+ */
 export function mergeMessages(existing: Message[], incoming: Message[]): Message[] {
   const byId = new Map(existing.map((message) => [message.id, message]));
+  let changed = false;
   for (const message of incoming) {
-    if ((message.revision ?? 0) >= (byId.get(message.id)?.revision ?? 0)) byId.set(message.id, message);
+    const current = byId.get(message.id);
+    const revision = message.revision ?? 0, currentRevision = current?.revision ?? 0;
+    if (!current || revision > currentRevision || revision === currentRevision && JSON.stringify(current) !== JSON.stringify(message)) {
+      byId.set(message.id, message); changed = true;
+    }
   }
-  return [...byId.values()].sort((a, b) => a.sequence - b.sequence);
+  return changed ? [...byId.values()].sort((a, b) => a.sequence - b.sequence) : existing;
 }
 
 export function mentionText(content: string, members: Pick<Member, "id" | "name">[]): string {

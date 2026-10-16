@@ -47,13 +47,19 @@ type Creation = "organization" | "project" | "channel" | "topic";
 const newDraft = (): Draft => ({ text: "", clientId: crypto.randomUUID(), attempted: false });
 /** Keep the current value when a refresh returns equal data, so dependent views and effects do not restart. */
 export const unchanged = <T,>(current: T, next: T): T => JSON.stringify(current) === JSON.stringify(next) ? current : next;
-// Stable renderer types preserve DOM selection across activity and message polling.
+// Stable renderer types and plugin lists preserve DOM selection across activity and message polling.
+const messageRemarkPlugins = [remarkGfm, remarkMath], messageRehypePlugins = [rehypeKatex];
 const messageMarkdownComponents: Components = {
   a: ({ children, href }) => <a href={href} target="_blank" rel="noopener noreferrer">{children}</a>,
   p: ({ children, node }) => node?.children.some(child => child.type === "element" && child.tagName === "img")
     ? <div className="topic-media-paragraph">{children}</div> : <p>{children}</p>,
   img: ({ src, alt }) => <MarkdownMedia src={src} alt={alt} />,
 };
+/** Markdown and KaTeX are the expensive part of a message; render them again only when the source text changes. */
+export const MessageMarkdown = React.memo(function MessageMarkdown({ markdown }: { markdown: string }) {
+  return <ReactMarkdown remarkPlugins={messageRemarkPlugins} rehypePlugins={messageRehypePlugins} skipHtml
+    components={messageMarkdownComponents}>{markdown}</ReactMarkdown>;
+});
 export const prepareMessageAttempt = (draft: Draft): Draft => ({
   ...draft, clientId: draft.clientId || crypto.randomUUID(), attempted: true,
 });
@@ -737,7 +743,9 @@ function Conversation({ organizationId, topic, members, user, canWrite, canManag
     setMention(mentionQuery(input.value, input.selectionStart, topicBots.map(bot => bot.name)));
     setMentionIndex(0);
   }, [botMentionNamesKey]);
-  const mentionPeople = [...members, ...topicBots];
+  const mentionPeopleKey = [...members, ...topicBots].map(person => person.id + ":" + person.name).join("\0");
+  // Recomputed only when a name changes, so transcript rendering does not depend on routine member refreshes.
+  const mentionPeople = useMemo(() => [...members, ...topicBots], [mentionPeopleKey]);
   const boundMention = mention && draft.mentions?.find(binding => binding.start === mention.start);
   const modelMentionBots = mention ? topicBots.filter(bot => mention.query.toLocaleLowerCase().startsWith(bot.name.toLocaleLowerCase() + "-")
     && (!boundMention || boundMention.id === bot.id)).sort((a, b) => b.name.length - a.name.length) : [];
@@ -931,10 +939,18 @@ function Conversation({ organizationId, topic, members, user, canWrite, canManag
     finally { if (alive.current) setLoadingOlder(false); }
   };
 
+  // The transcript is rebuilt only when messages, names, or permissions change; typing in the composer, polling
+  // that returns no change, and model-menu updates reuse the same elements. Callbacks read current values from refs.
+  const replyAgain = useRef({ selectedModel, selectedEffort, modelCatalog, onModelAttempt, onForked });
+  replyAgain.current = { selectedModel, selectedEffort, modelCatalog, onModelAttempt, onForked };
+  const canReplyAgain = topic.kind === "beta" && Boolean(selectedModel) && canWrite && online && !modelAttempt;
+  const workflowRunKey = topic.kind === "gamma" ? workflowActivity.map(entry => entry.id).join(",") : "";
+  const messageActivity: TopicActivity[] = useMemo(() => {
+  const workflowRuns = new Set(workflowRunKey.split(","));
   const visibleMessages = messages.filter(message => topic.kind !== "gamma" || !message.workflow_run_id
-    || !workflowActivity.some(entry => entry.id === "workflow:" + message.workflow_run_id));
+    || !workflowRuns.has("workflow:" + message.workflow_run_id));
   const groups = topic.kind === "alpha" ? alphaMessageGroups(visibleMessages) : visibleMessages.map(message => [message]);
-  const messageActivity: TopicActivity[] = groups.map((group, groupIndex) => ({
+  return groups.map((group, groupIndex) => ({
       id: "message:" + group[0].id, created_at: group[0].created_at, sequence: group[0].sequence, body: <>
       {topic.kind === "alpha" && (groupIndex === 0 || new Date(groups[groupIndex - 1][0].created_at * 1000).toDateString() !== new Date(group[0].created_at * 1000).toDateString())
         && <div className="org-message-day"><time dateTime={new Date(group[0].created_at * 1000).toISOString().slice(0, 10)}>{new Date(group[0].created_at * 1000).toLocaleDateString(undefined, { weekday: "long", month: "short", day: "numeric", year: "numeric" })}</time></div>}
@@ -942,14 +958,14 @@ function Conversation({ organizationId, topic, members, user, canWrite, canManag
         key={message.id} id={"message-" + message.sequence} data-sequence={message.sequence}>
         <header>{!index && <strong>{authorLabel(message, members)}</strong>}
           <time dateTime={new Date(message.created_at * 1000).toISOString()} title={new Date(message.created_at * 1000).toLocaleString()}>{topic.kind === "alpha" ? new Date(message.created_at * 1000).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" }) : new Date(message.created_at * 1000).toLocaleString()}</time></header>
-        <ReactMarkdown remarkPlugins={[remarkGfm, remarkMath]} rehypePlugins={[rehypeKatex]} skipHtml
-          components={messageMarkdownComponents}>{normalizeMathDelimiters(mentionMarkdown(message.content, mentionPeople))}</ReactMarkdown>
+        <MessageMarkdown markdown={normalizeMathDelimiters(mentionMarkdown(message.content, mentionPeople))} />
         {message.author_kind === "assistant" && <MessageUsageDetails usage={message.usage} />}
         <MessageActions organizationId={organizationId} topicId={topic.id} messageId={message.id}
           people={mentionPeople}
           message={message} canEdit={canWrite && message.author_kind !== "assistant" && message.author_kind !== "bot" && message.author_id === user.id}
           onEdited={updated => setMessages(existing => mergeMessages(existing, [updated]))}
-          onReplyAgain={topic.kind === "beta" && selectedModel && canWrite && online && !modelAttempt ? async () => {
+          onReplyAgain={canReplyAgain ? async () => {
+            const { selectedModel, selectedEffort, modelCatalog, onModelAttempt } = replyAgain.current;
             const metadata = modelCatalog?.models.find(model => model.id === selectedModel);
             const attempt = automaticModelAttempt(selectedModel, message.sequence, metadata?.max_completion_tokens ?? 8192);
             if (selectedEffort) attempt.effort = selectedEffort;
@@ -957,11 +973,13 @@ function Conversation({ organizationId, topic, members, user, canWrite, canManag
             await requestModelReply(organizationId, topic.id, attempt, onModelAttempt);
           } : undefined}
           kind={topic.kind} canWrite={canWrite} onForked={(id) => {
+            const { selectedModel, onForked } = replyAgain.current;
             try { if (selectedModel) localStorage.setItem(`reasoning-model:${user.id}:${organizationId}:${id}`, selectedModel); }
             catch { /* Storage is optional. */ }
             onForked(id);
           }} onAuthLost={onAuthLost} />
       </article>)}</div></> }));
+  }, [messages, workflowRunKey, topic.kind, topic.id, mentionPeople, members, user.id, organizationId, canWrite, canReplyAgain, onAuthLost]);
   return <MediaScope.Provider value={{ organizationId, topicId: topic.id }}><section className="org-conversation" aria-label="Topic conversation">
     {texOpen && <TexRequestDialog bots={botModels} names={botNames} onClose={() => setTexOpen(false)} onPrepare={(source, bot) => {
       const label = `@${botNames[bot.bot_id] ?? bot.name}`;
@@ -1325,7 +1343,7 @@ export function OrganizationApp() {
         const [, people, orgs] = await Promise.all([
           sharedRequest<Hierarchy>(organizationPath(organizationId) + "/hierarchy", { maxAge: 1000, signal: controller.signal }).then(tree => {
             if (controller.signal.aborted) return tree;
-            setHierarchy(tree);
+            setHierarchy(current => unchanged(current, tree));
             setSelection((current) => {
               if (current && tree.topics.some(item => item.id === current.topic)) return current;
               const saved = workspace.topic ?? readNavigation(user.id, organizationId).topic;
@@ -1338,8 +1356,8 @@ export function OrganizationApp() {
           lists ? sharedRequest<Organization[]>("/organizations", { maxAge: 2000, signal: controller.signal }) : null,
         ]);
         if (controller.signal.aborted) return;
-        if (people) setMembers(people);
-        if (orgs) setOrganizations(orgs);
+        if (people) setMembers(current => unchanged(current, people));
+        if (orgs) setOrganizations(current => unchanged(current, orgs));
         setOnline(true);
       } catch (cause) {
         if (aborted(cause)) return;
