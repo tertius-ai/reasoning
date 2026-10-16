@@ -125,6 +125,35 @@ def connection_server(server: str | None, directory: Path) -> str:
     return server if "://" in server else "https://" + server
 
 
+def server_reason(response, *, maximum=8 * 1024):
+    """The server's short refusal explanation as one bounded printable line, or nothing.
+
+    Reasoning error bodies are {"detail": message} or, for request validation,
+    {"detail": [{"loc": [...], "type": ...}]} without submitted values.
+    Nothing else from the body is used.
+    """
+    try:
+        if response.headers.get("content-type", "").split(";", 1)[0].lower() != "application/json" or \
+                response.headers.get("content-encoding", "identity").lower() != "identity":
+            return ""
+        data = bytearray()
+        for chunk in response.iter_bytes(4096):
+            data.extend(chunk)
+            if len(data) > maximum:
+                return ""
+        detail = json.loads(data).get("detail")
+    except (httpx.HTTPError, ValueError, AttributeError):
+        return ""
+    if isinstance(detail, list):
+        detail = "; ".join(
+            "invalid " + ".".join(str(part) for part in item.get("loc", []))[:120] + " (" + str(item.get("type", ""))[:60] + ")"
+            for item in detail[:5] if isinstance(item, dict))
+    if not isinstance(detail, str):
+        return ""
+    detail = " ".join("".join(char if char.isprintable() else " " for char in detail).split())[:1000]
+    return ": " + detail if detail else ""
+
+
 class BotClient:
     def __init__(self, config: dict, *, transport=None):
         config = configuration(config["server"], config["token"])
@@ -165,16 +194,17 @@ class BotClient:
                 if response.status_code in {408, 425, 500, 502, 503, 504}:
                     raise BotUnavailable("bot server temporarily unavailable; retained receipts will be resumed")
                 if response.status_code in {401, 403}:
+                    # An authentication refusal has no useful explanation; a policy refusal (403) does.
+                    reason = server_reason(response) if response.status_code == 403 else ""
                     raise BotClientError(
-                        f"bot access rejected (HTTP {response.status_code}); check My bots for expired/revoked credentials "
-                        "or changed owner permissions. Rotate the credential and use configure --output with a new protected "
-                        "config path, or pair a new bot with connect --state-dir pointing to a new private directory. "
-                        "Do not delete retained invocation receipts."
+                        f"bot access rejected (HTTP {response.status_code}){reason}. If this is a credential "
+                        "problem, check My bots for expired/revoked credentials or changed owner permissions. Rotate the "
+                        "credential and use configure --output with a new protected config path, or pair a new bot with "
+                        "connect --state-dir pointing to a new private directory. Do not delete retained invocation receipts."
                     )
                 if response.status_code not in {200, 201}:
-                    raise BotClientError(
-                        f"bot API rejected request (HTTP {response.status_code}); credentials and response bodies are not logged"
-                    )
+                    reason = server_reason(response) if 400 <= response.status_code < 500 else ""
+                    raise BotClientError(f"bot API rejected request (HTTP {response.status_code}){reason}")
                 if response.headers.get("content-type", "").split(";", 1)[0].lower() != "application/json":
                     raise BotClientError("bot API did not return JSON")
                 if response.headers.get("content-encoding", "identity").lower() != "identity":
