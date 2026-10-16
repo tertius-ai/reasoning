@@ -155,8 +155,11 @@ class BotStore:
     @staticmethod
     def _developer(db, identity):
         row = db.execute("SELECT * FROM bot_developer_permissions WHERE bot_id=?", (identity,)).fetchone()
+        if not row:
+            return {"enabled": False, "repositories": [], "requesters": [], "issue_self_approvers": [], "issue_daily_limit": 3}
         return {"enabled": bool(row["enabled"]), "repositories": json.loads(row["repositories_json"]),
-                "requesters": json.loads(row["requesters_json"])} if row else {"enabled": False, "repositories": [], "requesters": []}
+                "requesters": json.loads(row["requesters_json"]),
+                "issue_self_approvers": json.loads(row["issue_self_approvers_json"]), "issue_daily_limit": row["issue_daily_limit"]}
 
     def list(self, user: str, org: str, *, personal=False) -> list[dict]:
         with self.store.transaction() as db:
