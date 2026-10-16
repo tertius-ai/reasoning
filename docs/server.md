@@ -655,7 +655,10 @@ Inference area combining OpenRouter keys with budget and routing policy. Existin
 are listed separately from a closed Add key form, whose fields always represent
 a new credential. Every key can use the current text-to-text catalog without
 an application model whitelist. Destructive
-membership/invitation/key changes require confirmation.
+membership/invitation/key changes require confirmation. Each Administration tab
+loads only its own data when opened (members; invitations and email settings;
+keys and budget; bots; compute). The research blog editor requests its published
+and draft lists at once and shows each as it arrives.
 Creating a beta topic selects its initial model, advertised effort and knowledge
 collections. The channel's `/bot-models` endpoint lists following-access bot
 routes eligible for a new topic; creation rechecks those grants atomically.

@@ -491,7 +491,9 @@ Public model choices and displayed prices share a one-minute server cache;
 concurrent readers share one refresh, and failed refreshes retry after five
 seconds. Membership and organization settings are checked on every request.
 Inference admission fetches current availability and prices independently of
-this display cache.
+this display cache. The browser shares one copy of the catalog across topics and
+dialogs for five minutes ("Refresh catalog" fetches it again), and a model's
+detailed capabilities are built only when its row is first expanded.
 
 The browser and model pickers share compact expandable rows. Topic selection
 pickers are alphabetized within **Best for math**, **Best open-weights**, and

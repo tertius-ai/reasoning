@@ -1102,15 +1102,17 @@ function Administration({ organization, onClose, onRefresh, onAuthLost }: { orga
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   const root = organizationPath(organization.id);
+  // Each tab loads only what it shows; the bot and compute tabs load their own data.
   const reload = useCallback(async () => {
-    const [people, invites, credentials, policy, mailConfiguration] = await Promise.all([
-      request<Member[]>(root + "/members"), request<Invitation[]>(root + "/invitations"), request<KeyMetadata[]>(root + "/provider-keys"), request<Policy>(root + "/policy"),
-      request<InvitationMail>(root + "/invitation-mail"),
+    if (tab === "members") setMembers(await sharedRequest<Member[]>(root + "/members", { maxAge: 2000 }));
+    else if (tab === "invitations") await Promise.all([
+      request<Invitation[]>(root + "/invitations").then(setInvitations), request<InvitationMail>(root + "/invitation-mail").then(setMail),
     ]);
-    setMembers(people); setInvitations(invites); setKeys(credentials);
-    setMail(mailConfiguration);
-    setBudget((policy.monthly_budget_microusd / 1_000_000).toFixed(6).replace(/\.?0+$/, ""));
-  }, [root]);
+    else if (tab === "ai") await Promise.all([
+      request<KeyMetadata[]>(root + "/provider-keys").then(setKeys),
+      request<Policy>(root + "/policy").then(policy => setBudget((policy.monthly_budget_microusd / 1_000_000).toFixed(6).replace(/\.?0+$/, ""))),
+    ]);
+  }, [root, tab]);
   useEffect(() => { void reload().catch((cause) => setError(errorMessage(cause))); }, [reload]);
   useEffect(() => {
     if (tab !== "invitations") return;

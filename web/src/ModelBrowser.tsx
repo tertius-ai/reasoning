@@ -112,7 +112,7 @@ export function ModelRows({ ids, catalog, allowedModels, selected, onSelect, nam
   const groups = grouped ? modelSections(ids, catalog, query, favorites) : [{ title: "Models", ids: [...new Set(ids)].filter(id => chatModel(id)
     && (id + " " + (models.get(id)?.name ?? "")).toLowerCase().includes(query.trim().toLowerCase())).sort() }];
   return <div className="org-model-rows">{groups.map(group => <section key={group.title}>
-    <h5>{group.title}</h5>{group.ids.map(id => <details key={id} className="org-model-card">
+    <h5>{group.title}</h5>{group.ids.map(id => <ModelCard key={id} details={<ModelDetails id={id} model={models.get(id)} catalog={catalog} />}>
       <summary>{onSelect && <button type="button" className="org-model-favorite" aria-label={`Favorite ${id}`} aria-pressed={favorites.includes(id)}
         disabled={savingFavorite} onClick={event => { event.preventDefault(); event.stopPropagation(); void favorite(id); }}>{favorites.includes(id) ? "★" : "☆"}</button>}{onSelect ? <label onClick={event => event.stopPropagation()}><input type="radio" name={name} aria-label={id} checked={selected === id}
         disabled={disabled || !allowedModels.includes(id)} onChange={() => { /* Selection also opens effort for the current model. */ }}
@@ -120,8 +120,19 @@ export function ModelRows({ ids, catalog, allowedModels, selected, onSelect, nam
         <ModelLine id={id} model={models.get(id)} allowed={allowedModels.includes(id)} math={math.has(id)} scores={catalog?.benchmarks} /></label>
         : <ModelLine id={id} model={models.get(id)} allowed={allowedModels.includes(id)} math={math.has(id)} scores={catalog?.benchmarks} />}
         <span className="org-model-chevron" aria-hidden="true">⌄</span></summary>
-      <ModelDetails id={id} model={models.get(id)} catalog={catalog} />
-    </details>)}</section>)}{favoriteError && <p role="alert" className="org-error">{favoriteError}</p>}</div>;
+    </ModelCard>)}</section>)}{favoriteError && <p role="alert" className="org-error">{favoriteError}</p>}</div>;
+}
+
+/**
+ * A model row whose capability details (thousands of elements across a catalog) mount when the row is first
+ * expanded. A click on the row's summary mounts them before the browser opens it; toggle covers other openings.
+ */
+function ModelCard({ children, details }: { children: React.ReactNode; details: React.ReactNode }) {
+  const [shown, setShown] = useState(false);
+  return <details className="org-model-card" onClick={() => setShown(true)}
+    onToggle={event => { if (event.target === event.currentTarget && event.currentTarget.open) setShown(true); }}>
+    {children}{shown && details}
+  </details>;
 }
 
 export function EffortMenu({ model, catalog, effort, disabled, onBack, onSelect }: {
