@@ -1,4 +1,4 @@
-import { schedulePoll } from "./polling";
+import { PollBackoff, schedulePoll } from "./polling";
 import React, { useEffect, useRef, useState } from "react";
 import { MessageUsageDetails } from "./OrganizationUsage";
 import { TopicActivity } from "./TopicActivity";
@@ -9,7 +9,7 @@ import { TransportControls, dispatchTopicCommand, useComputeActivity, useTopicCo
 import { useBotActivity } from "./BotPlayback";
 import {
   ApiError, ModelAttempt, ModelRun, PendingModelAttempt, UNDESCRIBED_ERROR,
-  aborted, decimalBudget, errorMessage, organizationPath, request, topicPath, usd,
+  aborted, decimalBudget, errorMessage, organizationPath, request, sharedRequest, topicPath, usd,
 } from "./organization-api";
 
 /** A 4xx answer other than 408 means the server did not accept the request. */
@@ -116,12 +116,14 @@ function ReconcileCost({ root, run, onUpdated, onAuthLost }: {
   </details>;
 }
 
-export function BetaConversation({ organizationId, topicId, userId, canWrite, canManage, online, attempt, onAttempt, onAuthLost, onActivity, toolbarTarget, hidePlay }: {
+export function BetaConversation({ organizationId, topicId, userId, canWrite, canManage, online, attempt, onAttempt, onAuthLost, onActivity, toolbarTarget, hidePlay, wake }: {
   organizationId: string; topicId: string; userId: string; canWrite: boolean; canManage: boolean;
   online: boolean; attempt?: PendingModelAttempt; onAttempt: (attempt?: PendingModelAttempt) => void; onAuthLost: () => void;
   onActivity: (entries: TopicActivity[]) => void;
   toolbarTarget?: HTMLElement | null;
   hidePlay?: boolean;
+  /** Changes when the transcript gains a message, so a new request is observed at the active cadence. */
+  wake?: number;
 }) {
   const [runs, setRuns] = useState<ModelRun[]>([]);
   const [threads, setThreads] = useState<{ root_run: string; status: string; reason?: string | null; requested_by: string; tasks: number }[]>([]);
@@ -140,27 +142,31 @@ export function BetaConversation({ organizationId, topicId, userId, canWrite, ca
 
   useEffect(() => { alive.current = true; return () => { alive.current = false; }; }, []);
   useEffect(() => {
-    const controller = new AbortController(); let timer: ReturnType<typeof setTimeout>;
+    const controller = new AbortController(), backoff = new PollBackoff(1000, 5000); let timer: ReturnType<typeof setTimeout>;
     const poll = async () => {
+      let active = true;
       try {
         const [records, agents, currentGoal] = await Promise.all([
           request<ModelRun[]>(path, { signal: controller.signal }),
           request<typeof threads>(topicPath(organizationId, topicId) + "/agents", { signal: controller.signal }),
-          request<typeof goal>(topicPath(organizationId, topicId) + "/goal", { signal: controller.signal }),
+          // Research controls read the same goal; one request serves both views.
+          sharedRequest<typeof goal>(topicPath(organizationId, topicId) + "/goal", { maxAge: 500, signal: controller.signal }),
         ]);
         if (controller.signal.aborted) return;
         setRuns(records); setThreads(agents); setGoal(currentGoal); setConnected(true); setPollError("");
+        active = records.some(run => ["queued", "running"].includes(run.status)) || agents.some(thread => thread.status === "active")
+          || currentGoal?.status === "active";
       } catch (cause) {
         if (aborted(cause)) return;
         setConnected(false);
         if (cause instanceof ApiError && cause.status === 401) { onAuthLost(); return; }
         setPollError("Unable to refresh agent activity; reconnecting. " + errorMessage(cause));
       }
-      if (!controller.signal.aborted) timer = schedulePoll(poll, 1000, controller.signal);
+      if (!controller.signal.aborted) timer = schedulePoll(poll, backoff.next(active), controller.signal);
     };
     void poll();
     return () => { controller.abort(); clearTimeout(timer); };
-  }, [path, refresh, onAuthLost]);
+  }, [path, refresh, onAuthLost, attempt, wake]);
 
   const failed = (cause: unknown) => {
     if (cause instanceof ApiError && cause.status === 401) onAuthLost();

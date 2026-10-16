@@ -8,7 +8,7 @@ import { useTopicCommand } from "./TopicCommands";
 import { ResearchFiles } from "./ResearchFiles";
 import { MathematicsBrowser } from "./MathematicsBrowser";
 import {
-  ApiError, BotModel, InferenceConfiguration, OrganizationPrices, aborted, errorMessage, organizationPath, request, topicPath,
+  ApiError, BotModel, InferenceConfiguration, OrganizationPrices, aborted, errorMessage, organizationPath, request, sharedRequest, topicPath,
 } from "./organization-api";
 import { WorkflowRuns } from "./WorkflowRuns";
 import { WorkflowExecutionAttempt } from "./workflow-run-api";
@@ -192,13 +192,13 @@ export function WorkflowConversation({ organizationId, topicId, userId, canWrite
     const updateModels = () => {
       if (!controller.signal.aborted) { setModels([...allowed, ...bots.map(bot => bot.id)]); setCatalog(withBotModels(prices, bots)); }
     };
-    void request<InferenceConfiguration>(root + "/inference-configuration", { signal: controller.signal })
+    void sharedRequest<InferenceConfiguration>(root + "/inference-configuration", { maxAge: 2000, signal: controller.signal })
       .then(value => { allowed = value.allowed_models; updateModels(); }).catch(cause => { if (!aborted(cause)) failure(cause); });
-    void request<BotModel[]>(topicPath(organizationId, topicId) + "/bot-models", { signal: controller.signal })
+    void sharedRequest<BotModel[]>(topicPath(organizationId, topicId) + "/bot-models", { maxAge: 2000, signal: controller.signal })
       .then(value => { bots = value; updateModels(); }).catch(cause => { if (!aborted(cause)) failure(cause); });
     void request<OrganizationPrices>(root + "/model-prices", { signal: controller.signal })
       .then(value => { prices = value; updateModels(); }).catch(() => {});
-    void request<ComputeConfiguration>(root + "/compute-configuration", { signal: controller.signal })
+    void sharedRequest<ComputeConfiguration>(root + "/compute-configuration", { maxAge: 2000, signal: controller.signal })
       .then(value => { if (!controller.signal.aborted) setCompute(value); }).catch(cause => { if (!aborted(cause)) failure(cause); });
     return () => controller.abort();
   }, [organizationId, topicId, onAuthLost]);

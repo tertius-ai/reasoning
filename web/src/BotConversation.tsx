@@ -1,4 +1,4 @@
-import { schedulePoll } from "./polling";
+import { PollBackoff, schedulePoll } from "./polling";
 // Copyright Benjamin Antieau and Deven Manam. SPDX-License-Identifier: Apache-2.0
 import React, { useEffect, useState } from "react";
 import { ActivityCard, TopicActivity } from "./TopicActivity";
@@ -29,30 +29,34 @@ export function BotRunStatus({ run }: { run: BotRun }) {
   </p>;
 }
 
-export function BotConversation({ organizationId, topicId, names, userId, canWrite, canManage, onActivity, onAuthLost }: {
+export function BotConversation({ organizationId, topicId, names, userId, canWrite, canManage, onActivity, onAuthLost, wake }: {
   organizationId: string; topicId: string; names: Record<string, string>;
   userId: string; canWrite: boolean; canManage: boolean;
   onActivity: (entries: TopicActivity[]) => void; onAuthLost: () => void;
+  /** Changes when the transcript gains a message, so a new invocation is observed at the active cadence. */
+  wake?: number;
 }) {
   const [runs, setRuns] = useState<BotRun[]>([]), [connected, setConnected] = useState(false);
   const [busy, setBusy] = useState(false), [error, setError] = useState("");
   useEffect(() => {
-    const controller = new AbortController(); let timer: ReturnType<typeof setTimeout>;
+    const controller = new AbortController(), backoff = new PollBackoff(2000, 8000); let timer: ReturnType<typeof setTimeout>;
     const poll = async () => {
+      let active = true;
       try {
         const runs = await request<BotRun[]>(topicPath(organizationId, topicId) + "/bot-runs", { signal: controller.signal });
         if (controller.signal.aborted) return;
         setRuns(runs); setConnected(true);
+        active = runs.some(run => ["queued", "running", "waiting_approval"].includes(run.status));
       } catch (cause) {
         if (!aborted(cause)) setConnected(false);
         if (!aborted(cause) && cause instanceof ApiError && cause.status === 401) onAuthLost();
         else if (!aborted(cause)) onActivity([{ id: "bot:connection", created_at: 0,
           body: <p className="org-help" role="status">Bot activity unavailable: {errorMessage(cause)}</p> }]);
       }
-      if (!controller.signal.aborted) timer = schedulePoll(poll, 2000, controller.signal);
+      if (!controller.signal.aborted) timer = schedulePoll(poll, backoff.next(active), controller.signal);
     };
     void poll(); return () => { controller.abort(); clearTimeout(timer); };
-  }, [organizationId, topicId, names, onActivity, onAuthLost]);
+  }, [organizationId, topicId, names, onActivity, onAuthLost, wake]);
   useEffect(() => { if (connected) onActivity(runs.filter(run => run.status !== "succeeded").map(run => ({
     id: "bot:" + run.id, created_at: run.created_at, after_sequence: run.context_through_sequence || undefined,
     body: <ActivityCard title={`${names[run.bot_id] ?? "Bot"} · ${run.model}`} status={run.status} createdAt={run.created_at}

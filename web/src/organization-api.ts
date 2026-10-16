@@ -155,7 +155,51 @@ export function csrfCookie(cookie: string): string | null {
 /** The ApiError message when a failed response carries no string `detail`. */
 export const UNDESCRIBED_ERROR = "Some fields are invalid. Check the form and try again.";
 
+type SharedRead = { started: number; durable: boolean; promise: Promise<unknown> };
+const sharedReads = new Map<string, SharedRead>();
+
+/** Forget every shared read, for example when the signed-in account changes. */
+export function clearSharedReads(): void { sharedReads.clear(); }
+
+function mutationCompleted(path: string): void {
+  // Topic-scoped writes (messages, read cursors, runs, goals, media) never change organization catalogs.
+  const topicScoped = path.includes("/topics/");
+  for (const [key, entry] of sharedReads) if (!(topicScoped && entry.durable)) sharedReads.delete(key);
+}
+
+function abortable<T>(promise: Promise<T>, signal?: AbortSignal): Promise<T> {
+  if (!signal) return promise;
+  if (signal.aborted) return Promise.reject(new DOMException("The request was aborted.", "AbortError"));
+  return new Promise<T>((resolve, reject) => {
+    const abort = () => reject(new DOMException("The request was aborted.", "AbortError"));
+    signal.addEventListener("abort", abort, { once: true });
+    promise.then(resolve, reject).finally(() => signal.removeEventListener("abort", abort));
+  });
+}
+
+/**
+ * A GET shared by every mounted view: concurrent callers share one request, and a result started less than
+ * `maxAge` milliseconds ago is reused. Any write through `request` invalidates shared reads (durable catalogs
+ * survive topic-scoped writes); failures are never reused. Private responses stay in memory only.
+ */
+export function sharedRequest<T>(path: string, options: { maxAge: number; signal?: AbortSignal; durable?: boolean }): Promise<T> {
+  const now = Date.now(), existing = sharedReads.get(path);
+  if (existing && now - existing.started <= options.maxAge)
+    return abortable(existing.promise as Promise<T>, options.signal);
+  const entry: SharedRead = { started: now, durable: Boolean(options.durable), promise: request<T>(path) };
+  sharedReads.set(path, entry);
+  entry.promise.catch(() => { if (sharedReads.get(path) === entry) sharedReads.delete(path); });
+  return abortable(entry.promise as Promise<T>, options.signal);
+}
+
 export async function request<T>(path: string, options: { method?: string; body?: unknown; signal?: AbortSignal } = {}): Promise<T> {
+  if (options.method && options.method !== "GET") {
+    try { return await send<T>(path, options); } finally { mutationCompleted(path); }
+  }
+  return send<T>(path, options);
+}
+
+async function send<T>(path: string, options: { method?: string; body?: unknown; signal?: AbortSignal }): Promise<T> {
   const headers: Record<string, string> = {};
   if (options.body !== undefined) headers["Content-Type"] = "application/json";
   if (options.method && options.method !== "GET") {

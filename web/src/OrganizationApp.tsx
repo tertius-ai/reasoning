@@ -39,12 +39,14 @@ import { ProviderKeyUsage } from "./ProviderKeyUsage";
 import {
   Account, ApiError, Channel, EMPTY_HIERARCHY, Hierarchy, InferenceConfiguration, Invitation, InvitationMail, KeyMetadata, KIND_LABEL, KIND_SYMBOL, KnowledgeTool,
   BotModel, Member, MentionQuery, Message, ModelAttempt, Organization, PendingModelAttempt, OrganizationPrices, Policy, Presence, Project, ProjectMember, SearchResult, Session, Topic, TopicKind,
-  aborted, authorLabel, decimalBudget, errorMessage, invitationEmailLabel, mentionMarkdown, mentionQuery, mentionText, mergeMessages, organizationPath, request, topicPath,
+  aborted, authorLabel, clearSharedReads, decimalBudget, errorMessage, invitationEmailLabel, mentionMarkdown, mentionQuery, mentionText, mergeMessages, organizationPath, request, sharedRequest, topicPath,
 } from "./organization-api";
 
 type Draft = { text: string; clientId: string; attempted: boolean; mentions?: MentionBinding[] };
 type Creation = "organization" | "project" | "channel" | "topic";
 const newDraft = (): Draft => ({ text: "", clientId: crypto.randomUUID(), attempted: false });
+/** Keep the current value when a refresh returns equal data, so dependent views and effects do not restart. */
+export const unchanged = <T,>(current: T, next: T): T => JSON.stringify(current) === JSON.stringify(next) ? current : next;
 // Stable renderer types preserve DOM selection across activity and message polling.
 const messageMarkdownComponents: Components = {
   a: ({ children, href }) => <a href={href} target="_blank" rel="noopener noreferrer">{children}</a>,
@@ -320,7 +322,7 @@ function CreationDialog({ kind, hierarchy, organizationId, parentId, members, us
     if (kind !== "topic") return;
     const controller = new AbortController();
     void Promise.allSettled([
-      request<InferenceConfiguration>(organizationPath(organizationId) + "/inference-configuration", { signal: controller.signal }).then(value => {
+      sharedRequest<InferenceConfiguration>(organizationPath(organizationId) + "/inference-configuration", { maxAge: 2000, signal: controller.signal }).then(value => {
         if (!controller.signal.aborted) setAllowedModels(value.allowed_models);
         return value;
       }),
@@ -700,7 +702,7 @@ function Conversation({ organizationId, topic, members, user, canWrite, canManag
     const refreshBots = async () => {
       try {
         const value = await request<Pick<Member, "id" | "name">[]>(root + "/bots", { signal: controller.signal });
-        if (!controller.signal.aborted) setTopicBots(value);
+        if (!controller.signal.aborted) setTopicBots(current => unchanged(current, value));
       } catch { if (!controller.signal.aborted) setTopicBots([]); }
       if (!controller.signal.aborted) timer = schedulePoll(refreshBots, 10000, controller.signal);
     };
@@ -774,8 +776,8 @@ function Conversation({ organizationId, topic, members, user, canWrite, canManag
     const controller = new AbortController(); let timer: ReturnType<typeof setTimeout>; setModelError("");
     const refreshConfiguration = async () => {
       try {
-        const configuration = await request<InferenceConfiguration>(organizationPath(organizationId) + "/inference-configuration", {
-          signal: controller.signal });
+        const configuration = await sharedRequest<InferenceConfiguration>(organizationPath(organizationId) + "/inference-configuration", {
+          maxAge: 2000, signal: controller.signal });
         if (controller.signal.aborted) return;
         setInferenceConfiguration(configuration);
         setSelectedModel((current) => configuration.allowed_models.includes(current) || current.startsWith("bot/") ? current
@@ -785,7 +787,8 @@ function Conversation({ organizationId, topic, members, user, canWrite, canManag
         if (aborted(cause)) return;
         if (cause instanceof ApiError && cause.status === 401) onAuthLost(); else setModelError(errorMessage(cause));
       }
-      if (!controller.signal.aborted) timer = schedulePoll(refreshConfiguration, 3000, controller.signal);
+      // Display freshness only: the server re-checks policy and admission when a request is sent.
+      if (!controller.signal.aborted) timer = schedulePoll(refreshConfiguration, 10000, controller.signal);
     };
     void refreshConfiguration();
     void request<OrganizationPrices>(organizationPath(organizationId) + "/model-prices", { signal: controller.signal })
@@ -800,10 +803,10 @@ function Conversation({ organizationId, topic, members, user, canWrite, canManag
     const controller = new AbortController(); let timer: ReturnType<typeof setTimeout>;
     const refresh = async () => {
       try {
-        const value = await request<BotModel[]>(root + "/bot-models", { signal: controller.signal });
-        if (!controller.signal.aborted) setBotModels(value);
+        const value = await sharedRequest<BotModel[]>(root + "/bot-models", { maxAge: 2000, signal: controller.signal });
+        if (!controller.signal.aborted) setBotModels(current => unchanged(current, value));
       } catch { /* Keep the last known model choices during a transient refresh failure. */ }
-      if (!controller.signal.aborted) timer = schedulePoll(refresh, topic.kind === "beta" ? 3000 : 10000, controller.signal);
+      if (!controller.signal.aborted) timer = schedulePoll(refresh, topic.kind === "beta" ? 5000 : 10000, controller.signal);
     };
     void refresh();
     return () => { controller.abort(); clearTimeout(timer); };
@@ -981,9 +984,9 @@ function Conversation({ organizationId, topic, members, user, canWrite, canManag
         .map(item => <div key={item.id} data-activity-id={item.id}>{item.body}</div>)}
       {topic.kind === "beta" && <BetaConversation organizationId={organizationId} topicId={topic.id} userId={user.id}
         canWrite={canWrite} canManage={canManage} online={online} toolbarTarget={composerTools} hidePlay={Boolean(draft.text.trim())}
-        attempt={modelAttempt} onAttempt={onModelAttempt} onAuthLost={onAuthLost} onActivity={setBetaActivity} />}
+        attempt={modelAttempt} onAttempt={onModelAttempt} onAuthLost={onAuthLost} onActivity={setBetaActivity} wake={messages.at(-1)?.sequence} />}
       <BotConversation organizationId={organizationId} topicId={topic.id} names={botNames} userId={user.id}
-        canWrite={canWrite} canManage={canManage} onActivity={setBotActivity} onAuthLost={onAuthLost} />
+        canWrite={canWrite} canManage={canManage} onActivity={setBotActivity} onAuthLost={onAuthLost} wake={messages.at(-1)?.sequence} />
 
     </div>
     {!atBottom && messages.length + workflowActivity.length + computeActivity.length + betaActivity.length > 0 && <button className="org-jump" aria-label="Jump to newest message" title="Newest message" onClick={() => {
@@ -1271,6 +1274,7 @@ export function OrganizationApp() {
   const preferenceRefresh = useCallback(() => setRefresh((value) => value + 1), []);
   const beginCreation = (kind: Creation, parentId?: string) => { setCreationParent(parentId); setCreation(kind); };
   const authLost = useCallback(() => {
+    clearSharedReads();
     setUser(null); setOrganizations([]); setOrganizationId(null); setHierarchy(EMPTY_HIERARCHY); setMembers([]);
     setSelection(null); setDrafts({}); setModelAttempts({}); setComputeAttempts({}); setWorkflowAttempts({}); setWorkflowExecutionAttempts({}); setAdmin(false); setCreation(null); setCreationParent(undefined); setResults(null); setSearch("");
     setInformation(null); setTool(null); setEntitySettings(null);
@@ -1302,19 +1306,24 @@ export function OrganizationApp() {
   useEffect(() => {
     if (!user) return;
     const controller = new AbortController();
-    void request<Organization[]>("/organizations", { signal: controller.signal }).then((items) => {
+    void sharedRequest<Organization[]>("/organizations", { maxAge: 2000, signal: controller.signal }).then((items) => {
       setOrganizations(items); setOrganizationId((current) => workspace.organization ?? (items.some((item) => item.id === current) ? current : items[0]?.id ?? null));
     }).catch((cause) => { if (!aborted(cause)) setError(errorMessage(cause)); });
     return () => controller.abort();
   }, [user?.id]);
 
+  const listRound = useRef(0);
+  useEffect(() => { listRound.current = 0; }, [user?.id, organizationId]);
   useEffect(() => {
     if (!user || !organizationId) return;
     const controller = new AbortController(); let timer: ReturnType<typeof setTimeout>;
     const poll = async () => {
+      // Unread state in the hierarchy refreshes every round, including after a read or preference change;
+      // membership and organization lists change rarely and refresh every third round.
+      const lists = listRound.current++ % 3 === 0;
       try {
         const [, people, orgs] = await Promise.all([
-          request<Hierarchy>(organizationPath(organizationId) + "/hierarchy", { signal: controller.signal }).then(tree => {
+          sharedRequest<Hierarchy>(organizationPath(organizationId) + "/hierarchy", { maxAge: 1000, signal: controller.signal }).then(tree => {
             if (controller.signal.aborted) return tree;
             setHierarchy(tree);
             setSelection((current) => {
@@ -1325,11 +1334,13 @@ export function OrganizationApp() {
             });
             return tree;
           }),
-          request<Member[]>(organizationPath(organizationId) + "/members", { signal: controller.signal }),
-          request<Organization[]>("/organizations", { signal: controller.signal }),
+          lists ? sharedRequest<Member[]>(organizationPath(organizationId) + "/members", { maxAge: 2000, signal: controller.signal }) : null,
+          lists ? sharedRequest<Organization[]>("/organizations", { maxAge: 2000, signal: controller.signal }) : null,
         ]);
         if (controller.signal.aborted) return;
-        setMembers(people); setOrganizations(orgs); setOnline(true);
+        if (people) setMembers(people);
+        if (orgs) setOrganizations(orgs);
+        setOnline(true);
       } catch (cause) {
         if (aborted(cause)) return;
         if (cause instanceof ApiError && cause.status === 401) { authLost(); return; }
@@ -1415,6 +1426,7 @@ export function OrganizationApp() {
   }, [hierarchy.topics, selection, creation, admin, helpOpen]);
 
   const authenticated = async (session: Session) => {
+    clearSharedReads();
     setUser(await request<Account>("/auth/me")); setInitialized(true); setError("");
     if (session.organization_id) { setOrganizationId(workspace.organization ?? session.organization_id); setInvitation(""); }
   };

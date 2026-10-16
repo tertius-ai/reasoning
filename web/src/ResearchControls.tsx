@@ -1,8 +1,8 @@
-import { schedulePoll } from "./polling";
+import { PollBackoff, schedulePoll } from "./polling";
 import React, { useEffect, useRef, useState } from "react";
 import { availableEfforts } from "./ReasoningEffort";
 import { createPortal } from "react-dom";
-import { ApiError, OrganizationPrices, aborted, decimalBudget, errorMessage, request, topicPath, usd } from "./organization-api";
+import { ApiError, OrganizationPrices, aborted, decimalBudget, errorMessage, request, sharedRequest, topicPath, usd } from "./organization-api";
 import { ModelPicker } from "./ModelBrowser";
 import { modelOptionGroups } from "./modelRecommendations";
 import { MathematicsBrowser, ResearchMarkdown } from "./MathematicsBrowser";
@@ -118,16 +118,20 @@ export function ResearchControls({ organizationId, topicId, userId, selectedMode
   }, [createOpen, selectedModel, catalog, allowedModels]);
   const fail = (cause: unknown) => { if (cause instanceof ApiError && cause.status === 401) onAuthLost(); else setError(errorMessage(cause)); };
   useEffect(() => {
-    const controller = new AbortController(); let timer: ReturnType<typeof setTimeout>;
+    const controller = new AbortController(), backoff = new PollBackoff(2500, 10000); let timer: ReturnType<typeof setTimeout>;
     const poll = async () => {
+      let active = true;
       try {
         const [current, pending, toolReceipts, checked] = await Promise.all([
-          request<Goal | null>(root + "/goal", { signal: controller.signal }),
+          // The agent activity view polls the same goal more often; reuse its recent result.
+          sharedRequest<Goal | null>(root + "/goal", { maxAge: 2500, signal: controller.signal }),
           request<Proposal[]>(root + "/research-proposals", { signal: controller.signal }),
           request<ToolReceipt[]>(root + "/research-tools?after=" + toolCursor.current, { signal: controller.signal }),
           request<typeof reviews>(root + "/mathematical-reviews", { signal: controller.signal }),
         ]);
         if (controller.signal.aborted) return; setGoal(current); setProposals(pending); setReviews(checked); setPollError("");
+        active = current?.status === "active" || pending.some(proposal => ["pending", "reviewing"].includes(proposal.status))
+          || toolReceipts.some(tool => tool.status === "requested");
         if (toolReceipts.length) {
           toolCursor.current = Math.max(toolCursor.current, ...toolReceipts.map((item) => item.created_at));
           setRecentTools((previous) => [...new Map([...previous, ...toolReceipts].map((item) => [item.id, item])).values()]
@@ -139,7 +143,7 @@ export function ResearchControls({ organizationId, topicId, userId, selectedMode
           else setPollError("Unable to refresh research status; reconnecting. " + errorMessage(cause));
         }
       }
-      if (!controller.signal.aborted) timer = schedulePoll(poll, 2500, controller.signal);
+      if (!controller.signal.aborted) timer = schedulePoll(poll, backoff.next(active), controller.signal);
     };
     void poll();
     void request<{ tools: ResearchTool[]; reviewer_model?: string; compute_allowance_cpu_seconds?: number;
