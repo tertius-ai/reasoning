@@ -12,8 +12,11 @@ import { RichTextPolicy } from "./RichTextPolicy";
 import { LedgerHumanChecks } from "./LedgerHumanChecks";
 import { MarkdownMedia } from "./TopicMedia";
 
-const LedgerDetail = lazy(() => import("./Ledger").then(module => ({ default: module.Detail })));
-const ReferenceDetail = lazy(() => import("./Ledger").then(module => ({ default: module.RefDetail })));
+const loadLedger = () => import("./Ledger");
+// Selecting or pointing at a statement starts loading the inspector alongside its record.
+const preloadLedger = () => { void loadLedger().catch(() => { /* The inspector's boundary reports load failures. */ }); };
+const LedgerDetail = lazy(() => loadLedger().then(module => ({ default: module.Detail })));
+const ReferenceDetail = lazy(() => loadLedger().then(module => ({ default: module.RefDetail })));
 
 type Claim = ClaimSummary;
 type Detail = ClaimDetail;
@@ -39,7 +42,20 @@ export function MathematicsBrowser({ organizationId, topicId, projectId, canWrit
   const selection = useRef(0);
   const scopeQuery = topicId ? "topic_id=" + encodeURIComponent(topicId) : projectId ? "project_id=" + encodeURIComponent(projectId) : "";
   const loadGraph = useCallback(() => request<GraphPayload>(root + "/graph?" + scopeQuery), [root, scopeQuery]);
-  const loadClaim = useCallback((id: string) => request<ClaimDetail>(root + "/" + id + "?history=true"), [root]);
+  // The record that opened a statement is handed to its inspector once instead of being read again.
+  const opened = useRef<{ id: string; refresh: number; at: number; detail: Promise<ClaimDetail> } | null>(null);
+  const currentRefresh = useRef(refresh); currentRefresh.current = refresh;
+  const readClaim = (id: string) => {
+    const detail = request<ClaimDetail>(root + "/" + id + "?history=true");
+    opened.current = { id, refresh: currentRefresh.current, at: Date.now(), detail };
+    return detail;
+  };
+  const loadClaim = useCallback((id: string) => {
+    const handoff = opened.current;
+    opened.current = null;
+    if (handoff && handoff.id === id && handoff.refresh === currentRefresh.current && Date.now() - handoff.at < 10000) return handoff.detail;
+    return request<ClaimDetail>(root + "/" + id + "?history=true");
+  }, [root]);
   const fail = (cause: unknown) => { if (cause instanceof ApiError && cause.status === 401) onAuthLost(); else setError(errorMessage(cause)); };
   useEffect(() => {
     const controller = new AbortController(); let timer: ReturnType<typeof setTimeout>;
@@ -57,11 +73,12 @@ export function MathematicsBrowser({ organizationId, topicId, projectId, canWrit
   const open = async (claimId: string, force = false) => {
     if ((editing || busy) && !force) return;
     const attempt = ++selection.current;
-    try { const value = await request<Detail & { record?: { claim_id?: string; reference_id?: string }; revision?: ReferenceSummary }>(root + "/" + claimId + "?history=true");
+    preloadLedger();
+    try { const value = await readClaim(claimId) as Detail & { record?: { claim_id?: string; reference_id?: string }; revision?: ReferenceSummary };
       if (value.record?.reference_id && value.revision) {
         if (attempt === selection.current) { setSelected(null); setReference(value.revision); }
       } else if (value.record?.claim_id) {
-        const claim = await request<Detail>(root + "/" + value.record.claim_id + "?history=true");
+        const claim = await readClaim(value.record.claim_id);
         if (attempt === selection.current) { setSelected(claim); setReference(null); }
       } else if (value.claim_id && attempt === selection.current) { setSelected(value); setReference(null); }
     } catch (cause) { if (attempt === selection.current) fail(cause); }
@@ -94,9 +111,10 @@ export function MathematicsBrowser({ organizationId, topicId, projectId, canWrit
     <nav className="org-ledger-tabs" aria-label="Ledger views"><button aria-pressed={view === "graph"} onClick={() => setView("graph")}>Dependency graph</button>
       <button aria-pressed={view === "list"} onClick={() => setView("list")}>Statements</button></nav>
     {view === "graph" && !query && <div className="org-ledger-graph"><GraphView projectId={projectId ?? topicId ?? organizationId}
-      version={String(refresh) + JSON.stringify({ counts, claims })} loadGraph={loadGraph} onOpen={id => void open(id)} /></div>}
+      version={String(refresh)} loadGraph={loadGraph} onOpen={id => void open(id)} /></div>}
     <div className={"org-mathematics-layout" + (view === "graph" && !query ? " org-ledger-graph-detail" : "")}><div className="org-mathematics-list" hidden={view === "graph" && !query}>
-      {claims.map((claim) => <button key={claim.claim_id} disabled={editing || busy} aria-current={selected?.claim_id === claim.claim_id ? "true" : undefined} onClick={() => void open(claim.claim_id)}>
+      {claims.map((claim) => <button key={claim.claim_id} disabled={editing || busy} aria-current={selected?.claim_id === claim.claim_id ? "true" : undefined}
+        onPointerEnter={preloadLedger} onFocus={preloadLedger} onClick={() => void open(claim.claim_id)}>
         <span className="org-math-status" data-status={claim.status}>{label(claim)}</span><ResearchMarkdown>{claim.statement_text}</ResearchMarkdown>
         <small>{claim.claim_id}</small></button>)}
       {!claims.length && <p className="org-help">{loading ? "Loading the mathematical record…" : "No matching claims. Research agents record reusable mathematics here as they work."}</p>}
