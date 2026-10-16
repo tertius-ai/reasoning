@@ -142,7 +142,9 @@ def attachment_context(store, db, user, org, source_messages, quotes, allowance,
                 "text_source": "uploader-extracted, untrusted reference text; not a verified PDF transcription",
                 "inspection": "metadata only; image pixels have not been inspected"
                 if row["mime"].startswith("image/")
-                else "text preview only; diagrams, layout and further pages require direct inspection",
+                else "text preview only; diagrams, layout and further pages require direct inspection"
+                if row["preview_text"]
+                else "no text was extracted at upload; media_read explains the alternatives",
             }
             picture = None
             if row["vision_base64"] and images < 2 and all(getattr(quote, "supports_images", False) for quote in quotes):

@@ -26,6 +26,10 @@ _MAX_RESPONSE_BYTES = 8 * 1024 * 1024
 class ScientificToolError(RuntimeError):
     """A scientific provider request or cached response was unusable."""
 
+    def __init__(self, message: str, *, status: int | None = None):
+        super().__init__(message)
+        self.status = status
+
 
 @dataclass(frozen=True)
 class HttpResponse:
@@ -222,13 +226,9 @@ class ScientificGateway:
                     },
                     timeout,
                 )
-                if response.status == 429 or 500 <= response.status < 600:
-                    raise ScientificToolError(
-                        f"{provider} returned HTTP {response.status}"
-                    )
                 if not 200 <= response.status < 300:
                     raise ScientificToolError(
-                        f"{provider} returned HTTP {response.status}"
+                        f"{provider} returned HTTP {response.status}", status=response.status
                     )
                 data = self._decode(response, media)
                 content_sha256 = (
@@ -282,7 +282,9 @@ class ScientificGateway:
             )
             envelope["source"]["warning"] = f"Live refresh failed: {last_error}"
             return envelope
-        raise ScientificToolError(str(last_error or f"{provider} request failed"))
+        raise ScientificToolError(
+            str(last_error or f"{provider} request failed"), status=getattr(last_error, "status", None)
+        )
 
     @staticmethod
     def _envelope(

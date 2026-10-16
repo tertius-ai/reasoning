@@ -91,7 +91,10 @@ contain references, not whole documents. General artifact storage permits up to
 
 Retrieval journals its identity before crossing the network, without keeping a
 database transaction open during the read. A concurrent or interrupted `reading`
-intent returns HTTP 409 rather than repeating the request. Terminal retries
+intent returns HTTP 409 rather than repeating the request. A failed read records
+`public_source_unavailable`; a refused URL, media type, size, redirect or HTTP
+status also records its `reason` code and an actionable `message`, while other
+exception text stays private. Terminal retries
 return the retained capture or safe failure; an intentional refresh uses a new
 request ID. New fenced attempts can read old receipts with current authority.
 Cancellation, revoked grants or expired leases prevent late publication.

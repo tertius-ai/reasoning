@@ -186,11 +186,27 @@ their submitted inputs. A private audience is not a promise of offline execution
 LMFDB supports
 typed field filters and page offsets, not Python-literal queries or unrestricted
 database access. No claim of access to unpublished/private LMFDB collections is
-made. PDF extraction is not performed on the organization host. Transient read-only
-source failures (connection failures or HTTP 429/502/503/504) receive one bounded
-retry. Missing arXiv HTML falls back to a readable primary TeX source member,
-reporting its exact path and limited coverage. Source failures retain sanitized
-HTTP/access/argument categories, not a generic unavailable result alone.
+made. PDF extraction is not performed on the organization host; `web_fetch`
+refuses PDFs and other binary media and names the arXiv and attachment readers
+instead. Transient failures of `web_fetch` and the mathematical adapters
+(connection failures or HTTP 429/502/503/504) receive one bounded retry. The
+research arXiv, Crossref and OEIS tools share one gateway per installation: arXiv
+requests are at least three seconds apart across concurrent runs; connection,
+rate-limit and server errors get up to three attempts that honor `Retry-After` up
+to 30 seconds; and when those attempts fail, an earlier cached copy is returned
+with a warning if one exists. These tools read up
+to 8 MiB per response; `web_fetch` and the mathematical adapters read up to 1 MiB.
+arXiv tools accept versioned and old-style identifiers (`2401.01234v2`,
+`math/0211159`), an `arXiv:` prefix, or an arxiv.org `abs`, `html` or `pdf` URL.
+Missing, oversized or failed arXiv HTML falls back to the largest readable
+primary TeX source member, reporting its exact path, the HTML failure and the
+limited coverage. A single-file submission, which arXiv serves as one gzip file,
+is listed as one `.tex` member; a PDF-only submission is reported as having no
+TeX source. A failed tool call returns a stable code and a message naming what
+was refused, why, and what to do instead: an invalid argument and its schema
+path, an ungranted tool, an unsupported media type, a size limit, a redirect
+target, a missing identifier or version, or a rate-limit wait. Unexpected
+exception text is not returned.
 
 ## Computation, approvals, and the private blog
 

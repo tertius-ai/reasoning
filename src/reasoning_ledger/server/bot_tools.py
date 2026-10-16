@@ -236,16 +236,13 @@ class BotTools:
         research = BotResearch(self.runtime, credential, run_id, lease, compute=self.compute)
         if name in {tool.name for tool in research.registry.list()}:
             from ..agents.scientific import ScientificToolError
-            from .research_network import SourceError
+            from .tool_failures import tool_failure
 
             try:
                 result = research.registry.invoke(name, arguments)
-            except SourceError as exc:
-                result = {"error": "Public source read failed; try another primary source.", "code": exc.code}
-            except (OSError, TimeoutError):
-                result = {"error": "Public source connection failed after bounded read retries.", "code": "source_connection_failed"}
-            except (ValueError, ScientificToolError):
-                result = {"error": "Source arguments or source content were not accepted.", "code": "tool_arguments_or_content_invalid"}
+            except (ValueError, ScientificToolError, OSError, TimeoutError) as exc:
+                code, message = tool_failure(exc, name)
+                result = {"error": message, "code": code}
             with self.store.transaction(write=True) as db:
                 self.runtime.leased(db, credential, run_id, lease)
                 db.execute("INSERT INTO bot_tool_receipts(run_id,name,result_json,created_at) VALUES(?,?,?,?)",
