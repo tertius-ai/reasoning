@@ -262,7 +262,13 @@ Replies are checkpointed before posting and use stable message identities.
 Idle polling reconnects automatically after network errors or temporary HTTP
 408/425/500/502/503/504 failures, with 1–60-second capped backoff. Rate limits wait
 60 seconds. Authentication/permission failures stop with instructions for
-checking My bots and renewing access; secrets and response bodies are not logged.
+checking My bots and renewing access. A request refused with HTTP 4xx other
+than 401 reports its status and the server's short explanation, reduced to one
+printable line of at most 1000 characters; other response content, redirect
+and server-failure bodies, and secrets are not logged. Tools receive the same
+explanation, for example which argument failed validation.
+Tool argument refusals name the failing field and the violated schema rule,
+never the submitted values.
 Active invocations tolerate brief heartbeat outages with at most three attempts;
 extended outages or revoked access terminate the local process and retain its
 unknown outcome. Reconnection never replays an unknown CLI invocation.

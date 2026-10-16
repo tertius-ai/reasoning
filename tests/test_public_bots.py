@@ -131,13 +131,16 @@ def test_reconnect_backoff_is_bounded_and_auth_failures_never_retry():
     assert reports[-1].startswith("✓ Reconnected")
     for status in (401, 403):
         calls = []
-        def reject(request, calls=calls, status=status):
+        detail = "secret" if status == 401 else "bot access is no longer active"
+        def reject(request, calls=calls, status=status, detail=detail):
             calls.append(request)
-            return httpx.Response(status, json={"detail": "secret"})
+            return httpx.Response(status, json={"detail": detail})
         client = BotClient(configuration("https://server.example", "rnb_" + "a" * 43), transport=httpx.MockTransport(reject))
         with pytest.raises(BotClientError, match="My bots") as error:
             reconnect(client.identity, wait=waits.append)
-        assert "secret" not in str(error.value) and len(calls) == 1
+        # Authentication refusals stay opaque; a policy refusal carries its server explanation.
+        assert (detail not in str(error.value)) if status == 401 else ("(HTTP 403): " + detail in str(error.value))
+        assert len(calls) == 1
         client.close()
 
 
@@ -606,7 +609,7 @@ def test_client_rejects_unsafe_origins_without_echoing_input(url):
     assert "secret" not in str(error.value) and url not in str(error.value)
 
 
-@pytest.mark.parametrize("status", [301, 302, 307, 401, 403, 429, 500])
+@pytest.mark.parametrize("status", [301, 302, 307, 401, 429, 500])
 def test_client_refuses_redirects_and_error_bodies_without_echoing_secrets(status):
     calls = []
 
@@ -619,6 +622,23 @@ def test_client_refuses_redirects_and_error_bodies_without_echoing_secrets(statu
         client.identity()
     assert len(calls) == 1 and calls[0].url.host == "server.example" and "credential-secret" not in str(error.value)
     client.close()
+
+
+def test_client_reports_a_policy_refusal_as_one_bounded_line_without_following_redirects():
+    calls = []
+
+    def respond(request):
+        calls.append(request)
+        return httpx.Response(403, headers={"location": "https://attacker.example"},
+                              json={"detail": "bot owner no longer\npermits other users", "extra": "never shown"})
+
+    client = BotClient(configuration("https://server.example", "rnb_" + "a" * 43), transport=httpx.MockTransport(respond))
+    with pytest.raises(BotClientError) as error:
+        client.identity()
+    client.close()
+    assert len(calls) == 1 and calls[0].url.host == "server.example"
+    assert str(error.value).startswith("bot access rejected (HTTP 403): bot owner no longer permits other users.")
+    assert "never shown" not in str(error.value) and "attacker" not in str(error.value)
 
 
 def test_client_messages_validate_order_and_bounds():

@@ -98,3 +98,76 @@ def test_bot_tool_validation_names_the_failing_field_without_echoing_values(fixt
                                                       "evidence": {"kind": "proof-review", "text": "Step 2 is unjustified."}},
                             "verify")
     assert recorded["verdict"] == "flawed" and verifications(store) == 1
+
+
+def client_error(status, body=None, *, content=None):
+    import httpx
+
+    from reasoning_ledger.server.bot_client import BotClient, BotClientError
+
+    def respond(request):
+        if content is not None:
+            return httpx.Response(status, content=content, headers={"content-type": "text/plain"})
+        return httpx.Response(status, json=body)
+    client = BotClient({"server": "https://server.example", "token": "rnb_" + "a" * 43}, transport=httpx.MockTransport(respond))
+    try:
+        with pytest.raises(BotClientError) as raised:
+            client._request("POST", "/api/bot/runs/" + "b" * 32 + "/tools", {})
+        return str(raised.value)
+    finally:
+        client.close()
+
+
+def test_bot_client_surfaces_bounded_server_explanations():
+    explanation = "invalid mathematical tool arguments for ledger_verify: evidence missing required kind"
+    assert client_error(400, {"detail": explanation}) == "bot API rejected request (HTTP 400): " + explanation
+    assert client_error(409, {"detail": "issue request\nchanged\x1b[31m"}).endswith("(HTTP 409): issue request changed [31m")
+    denied = client_error(403, {"detail": "this requester has not been permitted to use developer tools"})
+    assert denied.startswith("bot access rejected (HTTP 403): this requester has not been permitted") and "My bots" in denied
+    validation = client_error(422, {"detail": [{"loc": ["body", "lease"], "type": "missing"}]})
+    assert validation.endswith("(HTTP 422): invalid body.lease (missing)")
+    assert len(client_error(409, {"detail": "x" * 5000})) < 1100
+    # Non-JSON, oversized or unexpected bodies are never echoed.
+    marker = "PRIVATE-BODY-MARKER"
+    assert client_error(409, content=("<html>" + marker + "</html>").encode()) == "bot API rejected request (HTTP 409)"
+    assert client_error(409, {"detail": "y" * 9000}) == "bot API rejected request (HTTP 409)"
+    assert client_error(409, {"error": marker}) == "bot API rejected request (HTTP 409)"
+
+
+def test_real_bot_wire_preserves_the_evidence_explanation(fixture):
+    import asyncio
+    from concurrent.futures import ThreadPoolExecutor
+
+    import httpx
+
+    from reasoning_ledger.server.api import Config, create_app
+    from reasoning_ledger.server.bot_client import BotClient, BotClientError
+
+    store, owner, topics, _, _, bots = fixture
+    bot = bots.create(owner["user_id"], owner["organization_id"], "Reviewer", topics[1:],
+                      ["messages:read", "messages:write", "knowledge:read", "knowledge:write"], personal=True)
+    with store.transaction(write=True) as db:
+        db.execute("UPDATE topics SET knowledge_policy_json='[\"ledger\"]' WHERE id=?", (topics[1],))
+    runtime = BotRuntime(bots)
+    runtime.advertise(bot["token"], "codex", ["default"], False, False)
+    run = runtime.enqueue(owner["user_id"], owner["organization_id"], topics[1], f"bot/{bot['id']}/default", "wire", prompt="Review")
+    lease = runtime.claim(bot["token"])["lease"]
+    app = create_app(Config(store.data_dir, "https://server.example", inference_enabled=False))
+
+    async def dispatch(request):
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app)) as client:
+            response = await client.request(request.method, str(request.url), headers=dict(request.headers), content=request.content)
+            return httpx.Response(response.status_code, headers=response.headers, content=response.content)
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        transport = httpx.MockTransport(lambda request: pool.submit(lambda: asyncio.run(dispatch(request))).result())
+        client = BotClient({"server": "https://server.example", "token": bot["token"]}, transport=transport)
+        try:
+            with pytest.raises(BotClientError) as refused:
+                client._request("POST", f"/api/bot/runs/{run['id']}/tools", {
+                    "lease": lease, "name": "ledger_verify", "client_id": "wire",
+                    "arguments": {"verdict": "flawed", "authority": "review", "claim_id": "clm_" + "0" * 24, "evidence": {}}})
+        finally:
+            client.close()
+    assert str(refused.value) == ("bot API rejected request (HTTP 400): invalid mathematical tool arguments for "
+                                  "ledger_verify: evidence missing required kind")
+    assert bot["token"] not in str(refused.value)
