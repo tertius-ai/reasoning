@@ -1,8 +1,8 @@
-import { schedulePoll } from "./polling";
+import { PollBackoff, schedulePoll } from "./polling";
 import React, { useEffect, useRef, useState } from "react";
 import { publishComputeActivity, useTopicCommand } from "./TopicCommands";
 import { ActivityCard, ActivityDialog, TopicActivity } from "./TopicActivity";
-import { ApiError, aborted, errorMessage, organizationPath, request, topicPath } from "./organization-api";
+import { ApiError, aborted, errorMessage, organizationPath, request, sharedRequest, topicPath } from "./organization-api";
 import {
   ComputeArtifact, ComputeAttempt, ComputeConfiguration, ComputeEvent, ComputeJob, ComputeResources as Limits,
   DEFAULT_COMPUTE_RESOURCES, activeCompute, appendComputeEvents, canCancelCompute, captureComputeAttempt, computeJobPath,
@@ -66,9 +66,9 @@ export function ComputeJobDetail({ organizationId, jobId, userId, canWrite, canM
   const root = computeJobPath(organizationId, jobId);
   useEffect(() => { alive.current = true; return () => { alive.current = false; }; }, []);
   useEffect(() => {
-    const controller = new AbortController(); let timer: ReturnType<typeof setTimeout>;
+    const controller = new AbortController(), backoff = new PollBackoff(2000, 30000, 1); let timer: ReturnType<typeof setTimeout>;
     const poll = async () => {
-      let backlog = false;
+      let backlog = false, active = true;
       try {
         const [current, page, files] = await Promise.all([
           request<ComputeJob>(root, { signal: controller.signal }),
@@ -80,13 +80,14 @@ export function ComputeJobDetail({ organizationId, jobId, userId, canWrite, canM
         const after = cursor.current;
         setEvents((existing) => appendComputeEvents(existing, page, after));
         cursor.current = page.at(-1)?.sequence ?? cursor.current;
-        setJob(current); setArtifacts(files); setError(""); backlog = page.length === 200;
+        setJob(current); setArtifacts(files); setError(""); backlog = page.length === 200; active = activeCompute(current) || page.length > 0;
       } catch (cause) {
         if (aborted(cause)) return;
         if (cause instanceof ApiError && cause.status === 401) { onAuthLost(); return; }
         setError(errorMessage(cause));
       }
-      if (!controller.signal.aborted) timer = schedulePoll(poll, backlog ? 0 : 2000, controller.signal);
+      // A finished job's record, log and artifacts no longer change; keep only a slow consistency check.
+      if (!controller.signal.aborted) timer = schedulePoll(poll, backlog ? 0 : backoff.next(active), controller.signal);
     };
     void poll(); return () => { controller.abort(); clearTimeout(timer); };
   }, [root, refresh, onAuthLost]);
@@ -141,13 +142,11 @@ export function ComputeConversation({ organizationId, topicId, userId, canWrite,
   const allowed = configuration?.images.filter((item) => configuration.policy.allowed_images.includes(item.id)) ?? [];
   useEffect(() => { alive.current = true; return () => { alive.current = false; }; }, []);
   useEffect(() => {
-    const controller = new AbortController(); let timer: ReturnType<typeof setTimeout>;
+    const controller = new AbortController(), backoff = new PollBackoff(2000, 10000); let timer: ReturnType<typeof setTimeout>;
     const poll = async () => {
+      let active = true;
       try {
-        const [config, first] = await Promise.all([
-          request<ComputeConfiguration>(root + "/compute-configuration", { signal: controller.signal }),
-          request<ComputeJob[]>(path + "?limit=50&standalone=true", { signal: controller.signal }),
-        ]);
+        const first = await request<ComputeJob[]>(path + "?limit=50&standalone=true", { signal: controller.signal });
         const records = [...first]; let page = first;
         while (!controller.signal.aborted && page.length === 50 && records.length < visibleLimit) {
           page = await request<ComputeJob[]>(path + "?limit=50&standalone=true&before=" + page.at(-1)!.sequence, { signal: controller.signal });
@@ -155,7 +154,8 @@ export function ComputeConversation({ organizationId, topicId, userId, canWrite,
         }
         setMore(page.length === 50);
         if (controller.signal.aborted) return;
-        setConfiguration(config); setJobs(records); setConnected(true);
+        setJobs(records); setConnected(true);
+        active = Boolean(pending.current) || records.some(activeCompute);
         const saved = pending.current;
         if (saved && records.some((job) => matchesComputeAttempt(job, saved, organizationId, topicId, userId))) {
           pending.current = undefined; updateAttempt.current(undefined);
@@ -166,10 +166,27 @@ export function ComputeConversation({ organizationId, topicId, userId, canWrite,
         if (cause instanceof ApiError && cause.status === 401) { onAuthLost(); return; }
         setError(errorMessage(cause));
       }
-      if (!controller.signal.aborted) timer = schedulePoll(poll, 2000, controller.signal);
+      if (!controller.signal.aborted) timer = schedulePoll(poll, backoff.next(active), controller.signal);
     };
     void poll(); return () => { controller.abort(); clearTimeout(timer); };
   }, [root, path, refresh, visibleLimit, organizationId, topicId, userId, onAuthLost]);
+  useEffect(() => {
+    // Images, policy and CPU balance are shown only in the submission dialog.
+    if (!editorOpen) return;
+    const controller = new AbortController(); let timer: ReturnType<typeof setTimeout>;
+    const poll = async () => {
+      try {
+        const value = await sharedRequest<ComputeConfiguration>(root + "/compute-configuration", { maxAge: 1000, signal: controller.signal });
+        if (!controller.signal.aborted) setConfiguration(value);
+      } catch (cause) {
+        if (aborted(cause)) return;
+        if (cause instanceof ApiError && cause.status === 401) { onAuthLost(); return; }
+        setError(errorMessage(cause));
+      }
+      if (!controller.signal.aborted) timer = schedulePoll(poll, 5000, controller.signal);
+    };
+    void poll(); return () => { controller.abort(); clearTimeout(timer); };
+  }, [root, editorOpen, refresh, onAuthLost]);
   const fail = (cause: unknown) => { if (cause instanceof ApiError && cause.status === 401) onAuthLost(); else setError(errorMessage(cause)); };
   const submit = async (event: React.FormEvent) => {
     event.preventDefault(); if (working.current || !canWrite || !connected) return;

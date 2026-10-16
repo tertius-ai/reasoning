@@ -150,7 +150,8 @@ node --test --test-concurrency=1 web/tests/public-ledger.browser.mjs web/tests/p
   web/tests/navigation.browser.mjs web/tests/topic-media.browser.mjs \
   web/tests/bot-controls.browser.mjs web/tests/bot-approvals.browser.mjs \
   web/tests/model-selection.browser.mjs web/tests/chat-polish.browser.mjs \
-  web/tests/invitations.browser.mjs web/tests/organization-responsiveness.browser.mjs
+  web/tests/invitations.browser.mjs web/tests/organization-responsiveness.browser.mjs \
+  web/tests/organization-requests.browser.mjs
 ```
 
 The batch runs serially because its Vite fixtures share a dependency optimizer
@@ -159,8 +160,9 @@ They exercise ordinary beta delegation, reactions, cutoff-safe forks, retained
 comparisons, exact-revision human ledger checks, expandable graph statements,
 blog deletion and accessible mathematics, phone navigation persistence,
 scoped picture/PDF uploads and previews, bot-access editing, bot-model mentions,
-invitation batches with live provider-status totals, and conversation, model, and bot rendering
-while secondary startup requests are held.
+invitation batches with live provider-status totals, conversation, model, and bot rendering
+while secondary startup requests are held, and request budgets for opening and idling in a beta
+topic, measured against a production build.
 The PostgreSQL shards repeat storage, permission, review, fork, feedback, blog
 deletion and navigation contracts against PostgreSQL 16. Organization-storage
 contracts and leases/project-compute contracts run in separate parallel jobs;
