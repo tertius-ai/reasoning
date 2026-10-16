@@ -123,7 +123,17 @@ def recipe_identity(root, profile):
     return revision, hashlib.sha256(command(["git", "archive", revision, *paths], cwd=root)).hexdigest()
 
 
+def require_public_noether(sbom):
+    """Publication accepts the approved public Noether source revision only."""
+    from .image_context import NOETHER_PUBLIC_COMMIT
+
+    sources = [package.get("versionInfo") for package in sbom.get("packages", []) if package.get("name") == "noether-source"]
+    if sources != [NOETHER_PUBLIC_COMMIT]:
+        raise ValueError("compute publication requires the approved public Noether release; rebuild the image and source bundle")
+
+
 def verify_source_bundle(path, audit, sbom):
+    require_public_noether(sbom)
     if hash_file(path) != (audit["source_bundle_sha256"], audit["source_bundle_bytes"]):
         raise ValueError("source bundle differs from the signed review")
     files = audit["files"]

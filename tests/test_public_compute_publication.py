@@ -115,6 +115,23 @@ def test_publication_catalog_only_after_all_review_public_pull_and_actual_execut
     assert not list(args[-1].glob("reasoning-registry-*")), "credential files are private and removed after the scoped operation"
 
 
+def test_signed_prior_noether_image_is_refused_before_public_fetch_or_registry_effect(reviewed, monkeypatch, tmp_path):
+    args, audit, sign, _, _ = reviewed
+    def prior(sbom):
+        source = next(package for package in sbom["packages"] if package["name"] == "noether-source")
+        source["versionInfo"] = "ca8fc50f3d9a902a827fbd558dba138ad7bf0f8f"
+    directory = tmp_path / "prior"
+    directory.mkdir()
+    archive, _, _ = write_oci(directory, change_inventory=prior)
+    report, _ = inspect_image(archive, SCHEMA, args[3])
+    audit["image_digest"] = report["image"]["reference"].split("@")[1]
+    sign()
+    monkeypatch.setattr(publication, "fetch_source", lambda *arguments: pytest.fail("must refuse before public source fetch"))
+    monkeypatch.setattr(publication, "run", lambda *arguments: pytest.fail("must refuse before any registry effect"))
+    with pytest.raises(ValueError, match="approved public Noether release; rebuild"):
+        publication.publish(args[0], archive, *args[2:], token="fixture-private-token", username="fixture-user")
+
+
 @pytest.mark.parametrize("change", ["signature", "untrusted-key", "review", "digest", "revision", "recipe",
                                     "bundle", "coverage", "notices"])
 def test_failed_review_has_no_registry_effect_or_completion_catalog(reviewed, monkeypatch, change):

@@ -20,6 +20,7 @@ import uvicorn
 
 from .deployment.host import InstallError
 from .deployment.private import protected_parent
+from .image_context import NOETHER_VERSION
 from .image_release import digest, write_new
 from .server.api import Config, create_app
 from .server.compute_catalog import DEFAULT_RESOURCES, canonical, load_catalog
@@ -59,7 +60,7 @@ def noether_program(operation: str, payload: dict, assertions: str) -> str:
 NOETHER_PROGRAMS = {
     "noether_status": noether_program(
         "capabilities", {},
-        'assert r["version"] == "0.3.1" and r["operations"] > 0\n'
+        f'assert r["version"] == "{NOETHER_VERSION}" and r["operations"] > 0\n'
         'assert set(r["domains"]) == {"category","combin","commalg","geometry","groups","homalg","linalg","numthy","topology"}\n'
         'print("REASONING_NOETHER_STATUS_OK")\n',
     ),

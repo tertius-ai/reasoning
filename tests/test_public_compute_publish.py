@@ -308,6 +308,19 @@ def test_sources_changing_after_read_only_preflight_fail_before_upload(tmp_path,
     assert called == []
 
 
+def test_candidate_rejects_prepublic_noether_before_source_upload_or_signing(tmp_path, monkeypatch):
+    def old_source(sbom):
+        source = next(package for package in sbom["packages"] if package["name"] == "noether-source")
+        source["versionInfo"] = "ca8fc50f3d9a902a827fbd558dba138ad7bf0f8f"
+    archive, _, _ = write_oci(tmp_path, change_inventory=old_source)
+    service = wizard.Services()
+    monkeypatch.setattr(service, "gh", lambda arguments: candidate_run())
+    monkeypatch.setattr(service, "artifact", lambda *arguments: pytest.fail("unapproved source must fail before further CI reads"))
+    with locked_directory(tmp_path / "private") as state, pytest.raises(ValueError, match="approved public Noether release; rebuild"):
+        service.candidate(ROOT, ROOT, "research/bench", {"source_revision": REVISION, "candidate_workflow_run": 101},
+                          "research-cpu", {"archive": archive, "repository": "ghcr.io/research/bench/research-cpu"}, state)
+
+
 @pytest.mark.parametrize("changed", [None, "run", "manifest", "config", "sbom", "acceptance"])
 def test_candidate_binds_actual_retained_oci_to_authenticated_ci_not_local_hints(tmp_path, monkeypatch, changed):
     archive, _, _ = write_oci(tmp_path)

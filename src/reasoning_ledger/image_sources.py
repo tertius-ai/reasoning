@@ -20,12 +20,13 @@ from pathlib import Path
 
 import httpx
 
+from .image_context import NOETHER_PUBLIC_COMMIT
 from .image_publication import hash_file, public_url
 from .image_release import SOURCE_PATHS, BoundedTarInfo, command, member_name, write_new
 from .server.compute_catalog import canonical
 
 MAX_ARTIFACT = 8 * 1024**3
-NOETHER_PIN = "ca8fc50f3d9a902a827fbd558dba138ad7bf0f8f"
+NOETHER_PIN = NOETHER_PUBLIC_COMMIT
 
 
 def inventory(sbom: dict) -> list[dict]:

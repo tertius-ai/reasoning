@@ -8,7 +8,6 @@ from __future__ import annotations
 import hashlib
 import os
 import re
-import selectors
 import stat
 import subprocess
 import tarfile
@@ -17,10 +16,14 @@ import time
 from pathlib import Path, PurePosixPath
 from urllib.parse import urlsplit
 
+import httpx
+
 from .server.compute_catalog import canonical
 
 MAXIMUM_ARCHIVE = 64 * 1024**2
 MAXIMUM_EXPANDED = 256 * 1024**2
+NOETHER_PUBLIC_COMMIT = "4c92c269c59da02a4d32c833c2ee093407f8e22f"
+NOETHER_VERSION = "0.3.2"
 
 
 def validate_noether(lock):
@@ -29,13 +32,17 @@ def validate_noether(lock):
         raise ValueError("Noether requires an exact source commit")
     if value.get("version") != lock["versions"].get("noether") or value.get("build_context") != "noether-source":
         raise ValueError("Noether source/version/context differs from the image lock")
+    if value["commit"] != NOETHER_PUBLIC_COMMIT or value["version"] != NOETHER_VERSION:
+        raise ValueError("Noether image recipe must use the approved public release")
     archive = value.get("source_archive", {})
     url = urlsplit(archive.get("url", ""))
-    if (archive.get("transport") != "github-api" or url.scheme != "https" or url.netloc != "api.github.com"
-            or url.query or url.fragment or not re.fullmatch(r"/repos/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/releases/assets/[0-9]+", url.path)
+    if (archive.get("transport") != "https" or url.scheme != "https" or url.netloc != "codeload.github.com"
+            or value.get("source_repository") != "https://github.com/tertius-ai/noether"
+            or url.query or url.fragment or url.path != "/tertius-ai/noether/tar.gz/" + value["commit"]
+            or archive.get("strip_prefix") != "noether-" + value["commit"]
             or not re.fullmatch(r"[a-f0-9]{64}", archive.get("sha256", ""))
             or type(archive.get("bytes")) is not int or not 0 < archive["bytes"] <= MAXIMUM_ARCHIVE):
-        raise ValueError("Noether source handoff requires a bounded hash-locked release asset")
+        raise ValueError("Noether requires a bounded hash-locked public commit archive")
     return value
 
 
@@ -51,11 +58,12 @@ def checked_archive(path, lock):
         raise ValueError("Noether source archive SHA256 differs from its lock")
 
 
-def materialize(archive_path, output, lock):
+def materialize(archive_path, output, lock, *, prefix=None):
     """Extract only bounded regular files/directories; no links or repository data."""
     from .image_release import BoundedTarInfo
 
     output.mkdir(mode=0o700)
+    prefix = lock["source_archive"]["strip_prefix"] if prefix is None else prefix
     count = size = 0
     names = set()
     with tarfile.open(archive_path, "r:gz", tarinfo=BoundedTarInfo) as archive:
@@ -68,6 +76,14 @@ def materialize(archive_path, output, lock):
                     or member.sparse is not None or not (member.isdir() or member.isreg())):
                 raise ValueError("unsafe or duplicate Noether source archive member")
             names.add(str(name))
+            if prefix:
+                if not name.parts or name.parts[0] != prefix:
+                    raise ValueError("unsafe Noether source archive root; use the exact public commit archive")
+                name = PurePosixPath(*name.parts[1:])
+                if not name.parts:
+                    if not member.isdir():
+                        raise ValueError("unsafe Noether source archive root")
+                    continue
             target = output / name
             if member.isdir():
                 target.mkdir(mode=0o700, parents=True, exist_ok=True)
@@ -93,40 +109,30 @@ def materialize(archive_path, output, lock):
 
 
 def download_archive(expected, path):
-    """Bound both the bytes and wall clock of this owned gh process."""
-    process = subprocess.Popen(["gh", "api", expected["url"], "--header", "Accept: application/octet-stream"],
-                               stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+    """Fetch the pinned public archive anonymously with byte and time bounds."""
     deadline = time.monotonic() + 180
     try:
-        count = 0
-        with selectors.DefaultSelector() as selector, path.open("xb") as stream:
-            selector.register(process.stdout, selectors.EVENT_READ)
-            while True:
-                remaining = deadline - time.monotonic()
-                if remaining <= 0 or not selector.select(remaining):
-                    raise ValueError("exact Noether source download timed out")
-                body = os.read(process.stdout.fileno(), 65536)
-                if not body:
-                    break
-                count += len(body)
-                if count > expected["bytes"]:
-                    raise ValueError("Noether source download exceeds its locked byte allowance")
-                stream.write(body)
-        if process.wait(timeout=max(0.01, deadline - time.monotonic())):
-            raise ValueError("exact Noether source download failed; supply --noether-source-root or --noether-source-archive")
-    finally:
-        process.stdout.close()
-        if process.poll() is None:
-            process.terminate()
-            try:
-                process.wait(timeout=5)
-            except subprocess.TimeoutExpired:
-                process.kill()
-                process.wait(timeout=5)
+        with (
+            httpx.Client(trust_env=False, follow_redirects=False, timeout=30) as client,
+            client.stream("GET", expected["url"], headers={"Accept-Encoding": "identity"}) as response,
+        ):
+            if response.status_code != 200 or response.headers.get("content-encoding", "identity") != "identity":
+                raise ValueError("exact public Noether source download failed")
+            count = 0
+            with path.open("xb") as stream:
+                for body in response.iter_raw():
+                    if time.monotonic() >= deadline:
+                        raise ValueError("exact Noether source download timed out")
+                    count += len(body)
+                    if count > expected["bytes"]:
+                        raise ValueError("Noether source download exceeds its locked byte allowance")
+                    stream.write(body)
+    except httpx.HTTPError:
+        raise ValueError("exact public Noether source download failed; supply --noether-source-root or --noether-source-archive") from None
 
 
 def stage_noether(lock, output, *, source_root=None, source_archive=None):
-    """No credentials enter the Docker context; git and gh only produce source bytes."""
+    """Export the locked Git object or snapshot the byte-locked public archive."""
     if source_root is not None and source_archive is not None:
         raise ValueError("select either a Noether Git source root or an exact source archive")
     with tempfile.TemporaryDirectory(prefix="reasoning-noether-input-") as temporary:
@@ -150,9 +156,14 @@ def stage_noether(lock, output, *, source_root=None, source_archive=None):
                     destination.write(body)
         else:
             expected = lock["source_archive"]
-            # gh handles the maintainer/Actions token privately. Never pass token text in arguments.
-            # A regular supplied archive remains available when gh or repository access is absent.
             download_archive(expected, path)
-        checked_archive(path, lock)
-        materialize(path, output, lock)
+        if source_root is None:
+            checked_archive(path, lock)
+        else:
+            if path.stat().st_size > MAXIMUM_ARCHIVE:
+                raise ValueError("Noether Git export exceeds its archive allowance")
+            with tarfile.open(path, "r:gz") as archive:
+                if archive.pax_headers.get("comment") != lock["commit"]:
+                    raise ValueError("Noether Git export differs from its locked source commit")
+        materialize(path, output, lock, prefix="" if source_root is not None else None)
     return output
