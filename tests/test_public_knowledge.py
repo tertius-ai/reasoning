@@ -107,9 +107,31 @@ def test_static_blog_math_uses_the_built_dependency_styles(tmp_path):
     manifest.mkdir()
     (manifest / "manifest.json").write_text(json.dumps({"src/blogMathBootstrap.ts": {"imports": ["_shared.js"]},
         "_shared.js": {"css": ["assets/shared-katex.css"], "imports": ["_shared.js"]}}))
-    html = page("Math", "$x$", "org", tmp_path).body.decode()
+    (tmp_path / "assets").mkdir()
+    for name in ("blogMathBootstrap-AbCd1234.js", "blogTheme-EfGh5678.js"):
+        (tmp_path / "assets" / name).write_text("")
+    html = page("Math", "$x$", "org", tmp_path, math=True).body.decode()
     assert "href='/assets/shared-katex.css'" in html
+    assert "src='/assets/blogMathBootstrap-AbCd1234.js'" in html and "src='/assets/blogTheme-EfGh5678.js'" in html
     assert "markdownMath-" not in html
+    plain = page("Index", "<h2>Titles</h2>", "org", tmp_path).body.decode()
+    assert "shared-katex.css" not in plain and "blogMathBootstrap" not in plain
+    assert "src='/assets/blogTheme-EfGh5678.js'" in plain, "every page keeps the reader's explicit color mode"
+
+
+def test_static_blog_detects_math_outside_code():
+    from markdown_it import MarkdownIt
+    from mdit_py_plugins.dollarmath import dollarmath_plugin
+    from mdit_py_plugins.texmath import texmath_plugin
+
+    from reasoning_ledger.server.research_blog import MATH_DELIMITERS, has_math
+    renderer = MarkdownIt("commonmark", {"html": False}).enable("table")
+    renderer.use(texmath_plugin, delimiters="brackets").use(dollarmath_plugin, allow_labels=False, double_inline=True)
+    for body in ("Inline $x^2$.", "$$\\int_0^1 x\\,dx$$", "Bracketed \\(a+b\\).", "| a |\n|---|\n| $y$ |"):
+        assert has_math(renderer.parse(body)), body
+    for body in ("Prices in `$5` and", "```sh\n$ ls\n```", "Plain **text**."):
+        assert not has_math(renderer.parse(body)), body
+    assert MATH_DELIMITERS.search("The $p$-adic case") and not MATH_DELIMITERS.search("Weekly notes")
 
 
 def test_blog_publication_snapshot_draft_edit_and_explicit_unpublish(installation):

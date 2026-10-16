@@ -115,6 +115,16 @@ test("static blog and editor show one accessible equation on desktop/mobile; dra
       assert.equal(reply.status, 404);
     }
     assert.deepEqual((await call(root + "/blog", undefined, "GET")).posts, []);
+    // The empty index renders no math: it loads only the theme script, which still applies an explicit color mode.
+    await page.evaluate(() => localStorage.setItem("reasoning.color-mode", "dark"));
+    const scripts = [];
+    page.on("request", request => { if (request.resourceType() === "script") scripts.push(new URL(request.url()).pathname); });
+    await page.goto(url + `/blog/${session.organization_id}`);
+    await page.getByText("No published posts.", { exact: true }).waitFor();
+    await page.waitForFunction(() => document.documentElement.dataset.theme === "dark");
+    assert.ok(scripts.some(path => /\/assets\/blogTheme-/.test(path)), scripts.join(", "));
+    assert.deepEqual(scripts.filter(path => /blogMathBootstrap|katex|RichTextPolicy|styles-/.test(path)), []);
+    assert.equal(await page.locator("link[rel=stylesheet][href*='katex']").count(), 0);
     assert.deepEqual(errors, []); assert.deepEqual(failedAssets, []);
   } catch (error) { error.message += "\nLocal fixture logs:\n" + logs; throw error; }
   finally {

@@ -41,6 +41,14 @@ export default defineConfig({
         entryFileNames: "assets/[name]-[hash].js",
         chunkFileNames: "assets/[name]-[hash].js",
         assetFileNames: "assets/[name]-[hash][extname]",
+        // The static blog's math enhancement needs only KaTeX and the color-mode helper. Their own chunks keep it
+        // from importing React or the Markdown renderer through a shared chunk.
+        codeSplitting: {
+          groups: [
+            { name: "katex", test: /[\\/]node_modules[\\/]katex[\\/].*\.m?js$/ },
+            { name: "appearance", test: /[\\/]src[\\/]appearance\.ts$/ },
+          ],
+        },
       },
     },
   },
