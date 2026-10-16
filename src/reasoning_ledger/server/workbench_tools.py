@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 import inspect
 import json
 
@@ -60,7 +61,20 @@ DESCRIPTIONS = {
     "ledger_search_references": "Search existing scholarly references before creating a duplicate.",
     "ledger_withdraw": "Withdraw or restore a mathematical claim without deleting its history.",
     "ledger_abandon": "Abandon or resume a proof attempt without deleting its history.",
-    "ledger_verify": "Record a flaw, inconclusive check, or counterexample. Authors cannot issue positive or machine verdicts.",
+    "ledger_verify": "Record a flaw, inconclusive check, or counterexample. Authors cannot issue positive or machine verdicts. "
+    'evidence needs a nonempty kind, for example {"kind": "proof-review", "text": "the substantive report"}.',
+}
+# Stored verifications require a nonempty evidence.kind (schemas/verification.schema.json);
+# further evidence fields are retained as given.
+EVIDENCE_SCHEMA = {
+    "type": "object",
+    "required": ["kind"],
+    "properties": {
+        "kind": {"type": "string", "minLength": 1, "maxLength": 200,
+                 "description": "Evidence category, for example proof-review, counterexample or computation."},
+        "text": {"type": "string", "maxLength": 32000, "description": "The substantive report."},
+    },
+    "description": 'For example {"kind": "proof-review", "text": "the substantive report"}.',
 }
 
 
@@ -97,6 +111,8 @@ def operation_schema(function):
             field = {"type": "string", "maxLength": 32000 if name in {"statement", "argument", "notes"} else 1000}
         elif name in booleans:
             field = {"type": "boolean"}
+        elif name == "evidence":
+            field = copy.deepcopy(EVIDENCE_SCHEMA)
         elif name in objects:
             field = {"type": "object"}
         elif name in arrays:
@@ -273,6 +289,8 @@ class MathematicalLedger:
                         values.get("verdict") not in {"flawed", "inconclusive", "refuted"} or values.get("authority") != "review"
                     ):
                         raise StoreError(403, "authors cannot issue positive or machine-authority verdicts")
+                    if name == "ledger_verify" and (problem := service.evidence_problem(values.get("evidence"))):
+                        raise StoreError(400, "ledger_verify " + problem)
                     if agent and name == "ledger_status":
                         values.setdefault("statement_budget", 8000)
                     if agent and name == "ledger_search":

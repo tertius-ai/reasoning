@@ -641,6 +641,19 @@ def revise_proof_payload(
     return payload
 
 
+EVIDENCE_EXAMPLE = '{"kind": "proof-review", "text": "the substantive report"}'
+
+
+def evidence_problem(evidence) -> str | None:
+    """Explain a verification evidence object that storage would refuse."""
+    if not isinstance(evidence, dict):
+        return "evidence must be an object, for example " + EVIDENCE_EXAMPLE
+    kind = evidence.get("kind")
+    if not isinstance(kind, str) or not kind:
+        return "evidence.kind must be a nonempty string, for example " + EVIDENCE_EXAMPLE
+    return None
+
+
 def verify_payload(
     store: LedgerStore,
     *,
@@ -652,6 +665,9 @@ def verify_payload(
     revision_id: str | None = None,
     author: dict | None = None,
 ) -> dict:
+    problem = evidence_problem(evidence)
+    if problem:
+        raise LedgerStoreError(problem)
     if proof_id is not None:
         head = store.proof_head(proof_id)
         subject = {
