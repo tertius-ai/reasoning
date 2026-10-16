@@ -274,8 +274,15 @@ apply to HTML and source alike. The API index is
 `GET /api/organizations/{organization_id}/blog?project=ID&before=CURSOR`.
 `DELETE /api/organizations/{organization_id}/blog/{post_id}` accepts
 `client_id` and `expected_revision` for an authorized editor's deletion.
-The static reader loads KaTeX styles from the build's dependency manifest when
-available, or selects the emitted KaTeX stylesheet in a packaged release.
+Every static blog page loads a small script that applies the reader's explicit
+light/dark choice. Only pages that show math also load KaTeX: an article whose
+parsed Markdown contains dollar or bracket math (code spans and blocks do not
+count), or an index page with TeX delimiters in a listed title. The KaTeX
+enhancement imports only KaTeX and its stylesheet, not the interface's React
+bundle. The static reader loads KaTeX styles from the build's dependency manifest when
+available, or selects the emitted KaTeX stylesheet in a packaged release; the
+selection is computed once per frontend build. The index's project filter reads
+only the reader's accessible projects, without the topic tree or unread state.
 Styles accompany local math enhancement, preserving accessible MathML without
 displaying its fallback text beside the visual equation.
 

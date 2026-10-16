@@ -614,20 +614,30 @@ class Store:
             result = {"organization_id": invitation["organization_id"], "user_id": user_id}
             return result if user else {**result, **self._new_session(db, user_id)}
 
+    @staticmethod
+    def _visible_projects(db, user_id: str, organization_id: str, role: str) -> list[dict[str, Any]]:
+        projects = [dict(row) for row in db.execute(
+            """SELECT p.*,pm.role AS project_role FROM projects p
+            LEFT JOIN project_memberships pm ON pm.organization_id=p.organization_id AND pm.project_id=p.id AND pm.user_id=?
+            WHERE p.organization_id=? AND p.deleted_at IS NULL
+                AND (p.visibility='organization' OR ? IN ('owner','admin') OR pm.user_id IS NOT NULL)
+            ORDER BY p.created_at,p.id""", (user_id, organization_id, role)
+        )]
+        for project in projects:
+            project.pop("deleted_at")
+            if project["project_role"] is None:
+                project.pop("project_role")
+        return projects
+
+    def visible_projects(self, user_id: str, organization_id: str) -> list[dict[str, Any]]:
+        """The projects of `hierarchy`, without channels, topics, or per-topic unread state."""
+        with self.transaction() as db:
+            return self._visible_projects(db, user_id, organization_id, self._require(db, user_id, organization_id))
+
     def hierarchy(self, user_id: str, organization_id: str) -> dict[str, Any]:
         with self.transaction() as db:
             role = self._require(db, user_id, organization_id)
-            projects = [dict(row) for row in db.execute(
-                """SELECT p.*,pm.role AS project_role FROM projects p
-                LEFT JOIN project_memberships pm ON pm.organization_id=p.organization_id AND pm.project_id=p.id AND pm.user_id=?
-                WHERE p.organization_id=? AND p.deleted_at IS NULL
-                    AND (p.visibility='organization' OR ? IN ('owner','admin') OR pm.user_id IS NOT NULL)
-                ORDER BY p.created_at,p.id""", (user_id, organization_id, role)
-            )]
-            for project in projects:
-                project.pop("deleted_at")
-                if project["project_role"] is None:
-                    project.pop("project_role")
+            projects = self._visible_projects(db, user_id, organization_id, role)
             project_ids = {project["id"] for project in projects}
             channels = [
                 dict(row)

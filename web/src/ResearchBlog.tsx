@@ -21,8 +21,8 @@ export function ResearchBlog({ organizationId, hierarchy, canWrite, initialProje
   const [next, setNext] = useState(cursors);
   const saving = useRef(false), pending = useRef<Attempt | null>(null);
   const root = organizationPath(organizationId), blog = `/blog/${encodeURIComponent(organizationId)}`;
-  // Keep the static blog's local math enhancement in the public release graph.
-  useEffect(() => { void import("./blogMathBootstrap"); }, []);
+  // Keep the static blog's theme and math enhancement in the public release graph.
+  useEffect(() => { void import("./blogTheme"); void import("./blogMathBootstrap"); }, []);
   // The authenticated editor and static reader share one server-owned stylesheet.
   useEffect(() => {
     const stylesheet = document.createElement("link");

@@ -231,3 +231,15 @@ def test_frontend_asset_symlinks_cannot_expose_installation_secrets(tmp_path):
     (frontend / "assets" / "leak").symlink_to(store.data_dir / "setup-token")
     client = TestClient(create_app(config))
     assert client.get("/assets/leak").status_code == 404
+
+
+def test_visible_projects_match_the_hierarchy_for_each_reader(installation):
+    _, store, client, owner = installation
+    org, user = owner["organization_id"], owner["user_id"]
+    structure(client, org)
+    store.create_entity(user, org, "projects", "Private", visibility="private", owner_id=user)
+    _, _, member = invited(installation)
+    for reader in (user, member["user_id"]):
+        assert store.visible_projects(reader, org) == store.hierarchy(reader, org)["projects"]
+    assert "Private" in [project["name"] for project in store.visible_projects(user, org)]
+    assert "Private" not in [project["name"] for project in store.visible_projects(member["user_id"], org)]

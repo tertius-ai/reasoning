@@ -1,6 +1,8 @@
 """Permission-scoped Markdown blog with immutable publication snapshots."""
 
+import functools
 import json
+import re
 from datetime import UTC, datetime
 from html import escape
 from typing import Annotated
@@ -141,7 +143,25 @@ def published_post(store, user, org, post):
         return value
 
 
-def page(title, content, org, frontend=None):
+# Delimiters that the browser math enhancement renders in plain text such as titles.
+MATH_DELIMITERS = re.compile(r"\$|\\\(|\\\[")
+
+
+def has_math(tokens):
+    """Whether parsed Markdown contains math (dollar or bracket delimiters), ignoring code."""
+    return any(token.type.startswith("math") or (token.children and has_math(token.children)) for token in tokens)
+
+
+def blog_assets(frontend):
+    """(theme, math) tags for the static blog. A release's assets never change in place; a rebuilt development
+    directory changes its modification time."""
+    return _blog_assets(frontend, (frontend / "assets").stat().st_mtime_ns)
+
+
+@functools.lru_cache(maxsize=8)
+def _blog_assets(frontend, _assets_version):
+    theme = "".join(f"<script type='module' src='/assets/{escape(path.name)}'></script>"
+                    for path in sorted((frontend / "assets").glob("blogTheme-*.js")))
     assets = ""
     if frontend:
         # Vite may extract KaTeX CSS into a shared dependency rather than a
@@ -171,6 +191,15 @@ def page(title, content, org, frontend=None):
             assets += f"<link rel='stylesheet' href='/{escape(path, quote=True)}'>"
         for path in sorted((frontend / "assets").glob("blogMathBootstrap-*.js")):
             assets += f"<script type='module' src='/assets/{escape(path.name)}'></script>"
+    return theme, assets
+
+
+def page(title, content, org, frontend=None, *, math=False):
+    """Server-rendered blog page; KaTeX enhancement is included only when the page shows math."""
+    assets = ""
+    if frontend:
+        theme, enhancement = blog_assets(frontend)
+        assets = theme + (enhancement if math else "")
     # MarkdownIt rejects dangerous links, raw HTML is disabled, and no author
     # content is inserted into a script or style. Static reading needs no JS.
     return HTMLResponse("<!doctype html><html lang='en'><head><meta charset='utf-8'>"
@@ -212,7 +241,7 @@ def install_routes(app, store, authenticated, *, frontend=None):
     @app.get("/blog/{organization_id}", include_in_schema=False)
     def index(organization_id: str, user: User, before: str | None = None, project: str | None = None):
         data = published_posts(store, user, organization_id, before=before, project=project)
-        projects = sorted(store.hierarchy(user, organization_id)["projects"], key=lambda value: value["name"].casefold())
+        projects = sorted(store.visible_projects(user, organization_id), key=lambda value: value["name"].casefold())
         options = "<option value=''>All projects</option>" + "".join(
             f"<option value='{escape(value['id'], quote=True)}'{' selected' if value['id'] == project else ''}>"
             f"{escape(value['name'])}</option>" for value in projects)
@@ -233,7 +262,9 @@ def install_routes(app, store, authenticated, *, frontend=None):
             content += f"<a href='?{query}'>Older posts</a></nav>"
         elif before:
             content += f"<nav class='blog-pages' aria-label='Blog pages'><a href='?{newest}'>Newest</a></nav>"
-        return page("Research blog", content, organization_id, frontend)
+        # The index renders titles only; it needs math enhancement only for a title with TeX delimiters.
+        math = any(MATH_DELIMITERS.search(post["title"]) for post in data["posts"])
+        return page("Research blog", content, organization_id, frontend, math=math)
 
     @app.get("/blog/{organization_id}/{post_id}.md", include_in_schema=False)
     def source(organization_id: str, post_id: str, user: User):
@@ -251,6 +282,8 @@ def install_routes(app, store, authenticated, *, frontend=None):
         # External images are not fetched automatically from private research.
         renderer.renderer.rules["image"] = lambda tokens, index, *_: escape(tokens[index].content)
         content = f"<article class='blog-article'><h1>{escape(value['title'])}</h1>{post_metadata(value)}"
-        content += renderer.render(value["body"])
+        tokens = renderer.parse(value["body"])
+        content += renderer.renderer.render(tokens, renderer.options, {})
         content += f"</article><nav class='blog-pages'><a href='{blog_path(organization_id, post_id)}.md'>Markdown source</a></nav>"
-        return page(value["title"], content, organization_id, frontend)
+        math = has_math(tokens) or MATH_DELIMITERS.search(value["title"]) is not None
+        return page(value["title"], content, organization_id, frontend, math=math)

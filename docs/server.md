@@ -552,7 +552,7 @@ On narrow screens, the top-bar overflow menu exposes search, people, export and 
 knowledge link; no workspace action is hidden to fit the toolbar.
 The people, topic export, ledger, bibliography and blog controls form one evenly spaced icon group.
 Ledger and bibliography open inside the chat shell in the current tab; the static blog and editor also use same-tab links and shared light/dark theme colors.
-The account menu offers keyboard shortcut help (`?` outside a text field). The sun toggle's default follows the operating system, including live changes; explicit light/dark overrides persist locally and apply to the static blog when its enhancement script is available.
+The account menu offers keyboard shortcut help (`?` outside a text field). The sun toggle's default follows the operating system, including live changes; explicit light/dark overrides persist locally and apply to the static blog when its theme script is available.
 Consecutive alpha-topic messages by the same non-assistant author within five minutes and the same local day share an author header. Date separators label days; continuation timestamps appear on hover or keyboard focus, with full dates in their tooltips.
 Message hover actions appear in order: reaction, message actions (including beta
 forking when authorized), and copy. Copy places only that message's Markdown text

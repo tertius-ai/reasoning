@@ -1,7 +1,5 @@
 import renderMathInElement from "katex/contrib/auto-render";
 import "katex/dist/katex.min.css";
-import { initializeColorMode } from "./appearance";
-initializeColorMode();
 
 // The static blog is readable without JavaScript; this progressively enhances
 // its TeX. Never render author-provided HTML or enable trusted TeX commands.
