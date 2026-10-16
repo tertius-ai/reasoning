@@ -1,6 +1,6 @@
 import { PollBackoff, schedulePoll } from "./polling";
 import React, { useEffect, useRef, useState } from "react";
-import { MessageUsageDetails } from "./OrganizationUsage";
+import { MessageUsageDetails } from "./MessageUsageDetails";
 import { TopicActivity } from "./TopicActivity";
 import { submitModelAttempt } from "./BotConversation";
 import { OutputActions } from "./ChatFeedback";

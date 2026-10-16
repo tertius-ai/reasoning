@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { ActivityCard, TopicActivity } from "./TopicActivity";
-import { MessageUsageDetails } from "./OrganizationUsage";
+import { MessageUsageDetails } from "./MessageUsageDetails";
 import { RunProgress, runFailureMessage } from "./BetaConversation";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
