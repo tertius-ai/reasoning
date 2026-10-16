@@ -607,8 +607,16 @@ sent, so display refreshes do not authorize work.
 Views share in-memory reads of the same resource: concurrent requests for the
 organization list, hierarchy, members, a topic goal, model or compute configuration,
 or topic bot models use one response, and a recent response is reused within a
-short per-view window (at most a few seconds). Any write invalidates shared reads.
-Shared reads are cleared on sign-out and session loss, and failures are never reused.
+short per-view window (at most a few seconds). The public model catalog
+(`model-prices`) and model benchmarks are shared for five minutes across topics and
+dialogs; "Refresh catalog" fetches them again. Any write invalidates shared reads;
+the catalog and benchmarks survive only writes within a topic. The eight most
+recently viewed topics keep their loaded messages and message/edit cursors in
+memory: revisiting one shows them at once while the poll fetches only newer
+messages and edits, and a 403 or 404 discards the snapshot (and its displayed
+messages if not yet revalidated). Shared reads and topic snapshots are cleared on
+sign-out and session loss, and failures are never reused. Sending, model requests
+and other spending actions are checked by the server when they are made.
 Startup loads health and session state concurrently; an authenticated session can
 open the workspace before health finishes. The topic tree, initial conversation
 page, and bot list render independently of member, edit-history, and permission-tree

@@ -162,7 +162,7 @@ blog deletion and accessible mathematics, phone navigation persistence,
 scoped picture/PDF uploads and previews, bot-access editing, bot-model mentions,
 invitation batches with live provider-status totals, conversation, model, and bot rendering
 while secondary startup requests are held, and request budgets for opening and idling in a beta
-topic, measured against a production build.
+topic, revisiting a topic, and reopening model capabilities, measured against a production build.
 The PostgreSQL shards repeat storage, permission, review, fork, feedback, blog
 deletion and navigation contracts against PostgreSQL 16. Organization-storage
 contracts and leases/project-compute contracts run in separate parallel jobs;

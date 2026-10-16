@@ -9,31 +9,35 @@ import { chromium } from "playwright";
 import { build, preview } from "vite";
 
 const sleep = milliseconds => new Promise(resolve => setTimeout(resolve, milliseconds));
+const user = "a".repeat(32), org = "b".repeat(32), topics = ["c".repeat(32), "e".repeat(32)];
+const model = { id: "fixture/reasoner", name: "Reasoner", supports_tools: true, supports_reasoning: true,
+  reasoning_efforts: [], supported_parameters: [], input_modalities: [], output_modalities: [] };
+const transcript = topic => Array.from({ length: 13 }, (_, index) => ({ id: `${topic.slice(0, 4)}-message-${index}`, sequence: index + 1,
+  topic_id: topic, created_at: 1_800_000_000 + index, author_kind: index % 2 ? "assistant" : "human", author_id: user,
+  assistant_model: model.id, client_id: "fixture-" + index,
+  content: `Step ${index} of ${topic.slice(0, 4)}: $$\\sum_{k=1}^{n} k^${index} = \\int_0^1 x^${index}\\,dx$$ and $a_${index}$.` }));
 
 /**
- * Count API requests while an idle beta topic with a math transcript opens, then while it stays open. A production
- * build is measured: development StrictMode deliberately runs every startup effect twice.
+ * Run a scenario against a production build of the organization interface and a mocked API, recording every API
+ * request. A production build is measured: development StrictMode deliberately runs every startup effect twice.
  */
-async function observeIdleBetaTopic() {
+async function withApplication(scenario, { hold = () => null } = {}) {
   const root = fileURLToPath(new URL("../", import.meta.url)), outDir = await mkdtemp(join(tmpdir(), "reasoning-requests-"));
   await build({ root, logLevel: "silent", build: { outDir, emptyOutDir: true } });
   const server = await preview({ root, logLevel: "silent", build: { outDir }, preview: { host: "127.0.0.1", port: 0 } });
   const browser = await chromium.launch({ headless: true });
   try {
     const page = await browser.newPage(), errors = [], requests = [];
-    const user = "a".repeat(32), org = "b".repeat(32), topic = "c".repeat(32);
     const hierarchy = { projects: [{ id: "project", name: "Testing", visibility: "organization" }],
       channels: [{ id: "channel", name: "research", project_id: "project" }],
-      topics: [{ id: topic, name: "Algebra", channel_id: "channel", kind: "beta", default_model: "fixture/reasoner", knowledge_tools: [] }], topic_state: [] };
-    const model = { id: "fixture/reasoner", name: "Reasoner", supports_tools: true, supports_reasoning: true,
-      reasoning_efforts: [], supported_parameters: [], input_modalities: [], output_modalities: [] };
-    const messages = Array.from({ length: 13 }, (_, index) => ({ id: "message-" + index, sequence: index + 1, topic_id: topic,
-      created_at: 1_800_000_000 + index, author_kind: index % 2 ? "assistant" : "human", author_id: user, assistant_model: model.id,
-      client_id: "fixture-" + index, content: `Step ${index}: $$\\sum_{k=1}^{n} k^${index} = \\int_0^1 x^${index}\\,dx$$ and $a_${index}$.` }));
+      topics: topics.map((id, index) => ({ id, name: index ? "Geometry" : "Algebra", channel_id: "channel", kind: "beta",
+        default_model: model.id, knowledge_tools: [] })), topic_state: [] };
     page.on("pageerror", error => errors.push(error.message));
     await page.route("**/api/**", async route => {
-      const request = route.request(), path = new URL(request.url()).pathname;
-      requests.push({ at: Date.now(), method: request.method(), path });
+      const request = route.request(), url = new URL(request.url()), path = url.pathname;
+      requests.push({ at: Date.now(), method: request.method(), path, query: url.search });
+      await hold(path, url);
+      const topic = topics.find(id => path.includes("/topics/" + id + "/"));
       let data = [];
       if (path === "/api/health") data = { initialized: true };
       else if (path === "/api/auth/me") data = { id: user, name: "Alice", email: "alice@example.org" };
@@ -42,28 +46,25 @@ async function observeIdleBetaTopic() {
       else if (path.endsWith("/members")) data = [{ id: user, name: "Alice", role: "owner" }];
       else if (path.endsWith("/presence")) data = { humans: [], bots: [] };
       else if (path.endsWith("/inference-configuration")) data = { allowed_models: [model.id], tools: [] };
-      else if (path.endsWith("/model-prices")) data = { models: [model], allowed_models: [model.id] };
+      else if (path.endsWith("/model-prices")) data = { models: [model], allowed_models: [model.id], fetched_at: 1_800_000_000 };
+      else if (path.endsWith("/model-benchmarks")) data = { models: {} };
       else if (path.endsWith("/research-instructions")) data = { system_prompt: "Research safely.", prompt_version: "fixture" };
       else if (path.endsWith("/research-settings")) data = { tools: [] };
       else if (path.endsWith("/compute-configuration")) data = { images: [], policy: { allowed_images: [] } };
       else if (path.endsWith("/navigation-usage")) data = { projects: {}, channels: {}, topics: {} };
-      else if (path.endsWith("/messages")) data = new URL(request.url()).searchParams.has("after") ? [] : messages;
+      else if (path.endsWith("/messages")) data = url.searchParams.has("after") ? [] : transcript(topic);
       else if (path.endsWith("/message-updates")) data = { after: 0, messages: [] };
-      else if (path.endsWith("/reactions")) data = Object.fromEntries(messages.map(message => [message.id, { counts: { up: 0, down: 0, upside_down: 0 }, mine: [] }]));
-      else if (path.includes("/reactions/")) data = { counts: { up: 0, down: 0, upside_down: 0 }, mine: [] };
-      else if (path.endsWith("/goal")) data = null;
-      else if (path.endsWith("/read")) data = null;
+      else if (path.endsWith("/reactions/messages")) data = Object.fromEntries(transcript(topic).map(message =>
+        [message.id, { counts: { up: 0, down: 0, upside_down: 0 }, mine: [] }]));
+      else if (path.endsWith("/goal") || path.endsWith("/read")) data = null;
       await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(data) });
     });
     const started = Date.now();
     await page.goto(server.resolvedUrls.local[0] + "organization.html");
     await page.locator("#message-13").waitFor();
-    await sleep(started + 3000 - Date.now());
-    const startup = requests.length;
-    await sleep(20000);
-    const idle = requests.filter(request => request.at >= started + 3000 && request.at < started + 23000);
+    const result = await scenario({ page, requests, started });
     assert.deepEqual(errors, []);
-    return { startup, startupPaths: requests.slice(0, startup).map(request => request.path), idle: idle.map(request => request.path) };
+    return result;
   } finally {
     await browser.close();
     await server.close();
@@ -72,7 +73,13 @@ async function observeIdleBetaTopic() {
 }
 
 test("an idle beta topic bounds startup and foreground polling requests", { timeout: 60000 }, async () => {
-  const observed = await observeIdleBetaTopic();
+  const observed = await withApplication(async ({ requests, started }) => {
+    await sleep(started + 3000 - Date.now());
+    const startup = requests.length;
+    await sleep(20000);
+    const idle = requests.filter(request => request.at >= started + 3000 && request.at < started + 23000);
+    return { startup, startupPaths: requests.slice(0, startup).map(request => request.path), idle: idle.map(request => request.path) };
+  });
   const count = (paths, suffix) => paths.filter(path => path.endsWith(suffix)).length;
   if (process.env.REASONING_REQUEST_REPORT) console.log(JSON.stringify({ startup: observed.startup, idle: observed.idle.length,
     startupPaths: observed.startupPaths.map(path => path.replace(/[a-f0-9]{32}/g, ":id")),
@@ -85,4 +92,32 @@ test("an idle beta topic bounds startup and foreground polling requests", { time
   assert.ok(observed.startup <= 46, `startup requests: ${observed.startup}`);
   // Messages keep their two-second cadence; idle activity views slow down.
   assert.ok(observed.idle.length <= 100, `idle requests in twenty seconds: ${observed.idle.length}`);
+});
+
+test("revisiting a topic shows its snapshot at once and the model catalog is fetched once", { timeout: 60000 }, async () => {
+  let release = () => {}, holding = false;
+  await withApplication(async ({ page, requests }) => {
+    const navigation = page.getByRole("navigation", { name: "Projects and channels" });
+    await navigation.getByRole("button", { name: /^beta topic -Geometry\b/ }).click();
+    await page.locator('[data-sequence="13"]').filter({ hasText: "Step 12 of eeee" }).waitFor();
+    // Hold every request for the first topic: its revisit must render from the retained snapshot.
+    holding = true;
+    const revisit = requests.length;
+    await navigation.getByRole("button", { name: /^beta topic -Algebra\b/ }).click();
+    await page.locator('[data-sequence="13"]').filter({ hasText: "Step 12 of cccc" }).waitFor({ timeout: 2000 });
+    const messages = requests.slice(revisit).filter(request => request.path.endsWith(`/topics/${topics[0]}/messages`));
+    assert.ok(messages.length >= 1 && messages.every(request => request.query.includes("after=13")), "the revisit fetches only the delta");
+    holding = false; release();
+    for (const _ of [0, 1]) {
+      await page.getByRole("button", { name: "Account menu", exact: true }).click();
+      await page.getByRole("button", { name: "Model capabilities", exact: true }).click();
+      const dialog = page.getByRole("dialog", { name: "Model capabilities", exact: true });
+      await dialog.getByText(/models · refreshed/).waitFor();
+      await dialog.getByRole("button", { name: "Close dialog" }).click();
+    }
+    assert.equal(requests.filter(request => request.path.endsWith("/model-prices")).length, 1,
+      "two topics and two dialog openings share one catalog transfer");
+  }, { hold: async path => {
+    if (holding && path.includes(`/topics/${topics[0]}/`)) await new Promise(resolve => { const previous = release; release = () => { previous(); resolve(); }; });
+  } });
 });

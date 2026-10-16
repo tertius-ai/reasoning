@@ -144,3 +144,15 @@ test("sign-in loads only the shell; the signed-in application and rare views loa
     assert.match(app, new RegExp(`import\\("\\./${view}"\\)`), view);
   }
 });
+
+test("recent topic snapshots are bounded and forgotten on sign-out", () => {
+  api.clearSharedReads();
+  const snapshot = index => ({ messages: [{ id: "m" + index, sequence: 1 }], cursor: 1, editCursor: 0, older: false });
+  for (let index = 0; index <= api.TOPIC_SNAPSHOT_LIMIT; index++) api.rememberTopicSnapshot("topic-" + index, snapshot(index));
+  assert.equal(api.readTopicSnapshot("topic-0"), undefined, "the least recently viewed topic is dropped");
+  assert.equal(api.readTopicSnapshot("topic-1").messages[0].id, "m1");
+  api.rememberTopicSnapshot("topic-1", null);
+  assert.equal(api.readTopicSnapshot("topic-1"), undefined);
+  api.clearSharedReads();
+  assert.equal(api.readTopicSnapshot("topic-2"), undefined);
+});
