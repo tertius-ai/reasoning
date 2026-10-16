@@ -35,8 +35,8 @@ import { BatchInvitations, InvitationDeliveryProgress } from "./BatchInvitations
 import { ProviderKeyUsage } from "./ProviderKeyUsage";
 import {
   Account, ApiError, Channel, EMPTY_HIERARCHY, Hierarchy, InferenceConfiguration, Invitation, InvitationMail, KeyMetadata, KIND_LABEL, KIND_SYMBOL, KnowledgeTool,
-  BotModel, Member, MentionQuery, Message, ModelAttempt, Organization, PendingModelAttempt, OrganizationPrices, Policy, Presence, Project, ProjectMember, SearchResult, Session, Topic, TopicKind,
-  aborted, authorLabel, decimalBudget, errorMessage, invitationEmailLabel, mentionMarkdown, mentionQuery, mentionText, mergeMessages, organizationPath, request, sharedRequest, topicPath,
+  BotModel, Member, MentionQuery, Message, ModelAttempt, Organization, OrganizationPrices, Policy, Presence, Project, ProjectMember, SearchResult, Session, Topic, TopicKind, aborted,
+  authorLabel, decimalBudget, errorMessage, invitationEmailLabel, mentionMarkdown, mentionQuery, mentionText, mergeMessages, modelCatalog as sharedModelCatalog, organizationPath, readTopicSnapshot, rememberTopicSnapshot, request, sharedRequest, topicPath, PendingModelAttempt,
 } from "./organization-api";
 
 // Views opened by deliberate navigation load on first use.
@@ -291,7 +291,7 @@ function CreationDialog({ kind, hierarchy, organizationId, parentId, members, us
         if (!controller.signal.aborted) setAllowedModels(value.allowed_models);
         return value;
       }),
-      request<OrganizationPrices>(organizationPath(organizationId) + "/model-prices", { signal: controller.signal }),
+      sharedModelCatalog(organizationId, controller.signal),
     ]).then(([configuration, prices]) => {
       if (controller.signal.aborted) return;
       if (configuration.status === "rejected") { if (!aborted(configuration.reason)) setError(errorMessage(configuration.reason)); return; }
@@ -608,12 +608,15 @@ function Conversation({ organizationId, topic, members, user, canWrite, canManag
   workflowAttempt?: WorkflowAttempt; onWorkflowAttempt: (attempt?: WorkflowAttempt) => void;
   workflowExecutionAttempt?: WorkflowExecutionAttempt; onWorkflowExecutionAttempt: (attempt?: WorkflowExecutionAttempt) => void;
 }) {
-  const [messages, setMessages] = useState<Message[]>([]);
-  const [loading, setLoading] = useState(true);
+  // A recent visit's messages and cursors render at once; the poll then fetches only what changed.
+  const snapshotKey = anchor === null ? `${user.id}/${organizationId}/${topic.id}` : "";
+  const [snapshot] = useState(() => snapshotKey ? readTopicSnapshot(snapshotKey) : undefined);
+  const [messages, setMessages] = useState<Message[]>(snapshot?.messages ?? []);
+  const [loading, setLoading] = useState(!snapshot);
   const [online, setOnline] = useState(true);
   const [error, setError] = useState("");
   const [sending, setSending] = useState(false);
-  const [older, setOlder] = useState(true);
+  const [older, setOlder] = useState(snapshot?.older ?? true);
   const [loadingOlder, setLoadingOlder] = useState(false);
   const [atBottom, setAtBottom] = useState(anchor === null);
   const [mention, setMention] = useState<MentionQuery | null>(null);
@@ -654,8 +657,16 @@ function Conversation({ organizationId, topic, members, user, canWrite, canManag
   const [botActivity, setBotActivity] = useState<TopicActivity[]>([]);
   const viewport = useRef<HTMLDivElement>(null);
   const textarea = useRef<HTMLTextAreaElement>(null);
-  const cursor = useRef(0);
-  const editCursor = useRef(0);
+  const cursor = useRef(snapshot?.cursor ?? 0);
+  const editCursor = useRef(snapshot?.editCursor ?? 0);
+  const retained = useRef({ messages, older, loading, failed: false });
+  const revalidated = useRef(!snapshot);
+  retained.current = { ...retained.current, messages, older, loading };
+  useEffect(() => () => {
+    const { messages, older, loading, failed } = retained.current;
+    if (snapshotKey) rememberTopicSnapshot(snapshotKey, loading || failed || !cursor.current ? null
+      : { messages, older, cursor: cursor.current, editCursor: editCursor.current });
+  }, [snapshotKey]);
   const acknowledged = useRef(0);
   const alive = useRef(true);
   const bottom = useRef(anchor === null);
@@ -758,7 +769,7 @@ function Conversation({ organizationId, topic, members, user, canWrite, canManag
       if (!controller.signal.aborted) timer = schedulePoll(refreshConfiguration, 10000, controller.signal);
     };
     void refreshConfiguration();
-    void request<OrganizationPrices>(organizationPath(organizationId) + "/model-prices", { signal: controller.signal })
+    void sharedModelCatalog(organizationId, controller.signal)
       .then((catalog) => { if (!controller.signal.aborted) setModelCatalog(catalog); })
       .catch((cause) => {
         if (aborted(cause)) return;
@@ -801,13 +812,18 @@ function Conversation({ organizationId, topic, members, user, canWrite, canManag
         editCursor.current = updates.after;
         setMessages((existing) => mergeMessages(mergeMessages(existing, incoming), updates.messages.filter(message =>
           existing.some(prior => prior.id === message.id) || incoming.some(prior => prior.id === message.id))));
-        setOnline(true); setLoading(false);
+        setOnline(true); setLoading(false); revalidated.current = true;
         if (incoming.some((message) => message.client_id === currentDraft.current.clientId && message.author_id === user.id)) {
           updateDraft(newDraft()); setError("");
         }
       } catch (cause) {
         if (aborted(cause)) return;
         if (cause instanceof ApiError && cause.status === 401) { onAuthLost(); return; }
+        // A topic that is no longer readable must not be shown again from memory.
+        if (cause instanceof ApiError && (cause.status === 403 || cause.status === 404)) {
+          retained.current.failed = true; if (snapshotKey) rememberTopicSnapshot(snapshotKey, null);
+          if (!revalidated.current) setMessages([]);
+        }
         setOnline(false); setError(errorMessage(cause)); setLoading(false);
       }
       if (!controller.signal.aborted) timer = schedulePoll(poll, 2000, controller.signal);

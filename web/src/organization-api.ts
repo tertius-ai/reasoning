@@ -158,8 +158,28 @@ export const UNDESCRIBED_ERROR = "Some fields are invalid. Check the form and tr
 type SharedRead = { started: number; durable: boolean; promise: Promise<unknown> };
 const sharedReads = new Map<string, SharedRead>();
 
-/** Forget every shared read, for example when the signed-in account changes. */
-export function clearSharedReads(): void { sharedReads.clear(); }
+/** Recently viewed topics' loaded messages and cursors, so a revisit shows content at once and fetches only the delta. */
+export type TopicSnapshot = { messages: Message[]; cursor: number; editCursor: number; older: boolean };
+const topicSnapshots = new Map<string, TopicSnapshot>();
+export const TOPIC_SNAPSHOT_LIMIT = 8;
+export function readTopicSnapshot(key: string): TopicSnapshot | undefined { return topicSnapshots.get(key); }
+export function rememberTopicSnapshot(key: string, snapshot: TopicSnapshot | null): void {
+  topicSnapshots.delete(key);
+  if (!snapshot) return;
+  topicSnapshots.set(key, snapshot);
+  while (topicSnapshots.size > TOPIC_SNAPSHOT_LIMIT) topicSnapshots.delete(topicSnapshots.keys().next().value!);
+}
+
+/** Forget every shared read and topic snapshot, for example when the signed-in account changes. */
+export function clearSharedReads(): void { sharedReads.clear(); topicSnapshots.clear(); }
+
+/** Drop one shared read so the next request fetches it again, for example after an explicit refresh. */
+export function forgetSharedRead(path: string): void { sharedReads.delete(path); }
+
+/** The public model catalog is large and changes slowly; mounted views share one copy for five minutes. */
+export const CATALOG_MAX_AGE = 300_000;
+export const modelCatalog = (organizationId: string, signal?: AbortSignal) =>
+  sharedRequest<OrganizationPrices>(organizationPath(organizationId) + "/model-prices", { maxAge: CATALOG_MAX_AGE, durable: true, signal });
 
 function mutationCompleted(path: string): void {
   // Topic-scoped writes (messages, read cursors, runs, goals, media) never change organization catalogs.
