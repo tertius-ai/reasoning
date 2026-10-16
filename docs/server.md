@@ -573,6 +573,9 @@ inline and fenced code unchanged. Author labels and timestamps accompany every
 message. Private uploaded pictures and PDFs render through authenticated attachment
 references; `/attach` opens the file chooser. Raw HTML and external images are not rendered;
 member names inserted by mentions are escaped as Markdown text.
+A message's Markdown and KaTeX output is rendered again only when its displayed
+text changes; refreshes that return no change, composer typing, and model-menu
+updates reuse the rendered transcript.
 
 Visible-tab message polling uses an exclusive sequence cursor every two seconds
 and retries after a network failure. The topic hierarchy (including unread state)

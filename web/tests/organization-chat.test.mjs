@@ -4,11 +4,11 @@ import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { createServer } from "vite";
 
-let server, api, TopicNavigation, automaticModelAttempt, prepareMessageAttempt, initializeDraft, agentCommand, alphaMessageGroups;
+let server, api, TopicNavigation, automaticModelAttempt, prepareMessageAttempt, initializeDraft, agentCommand, alphaMessageGroups, MessageMarkdown;
 before(async () => {
   server = await createServer({ appType: "custom", logLevel: "silent", server: { middlewareMode: true } });
   api = await server.ssrLoadModule("/src/organization-api.ts");
-  ({ TopicNavigation, automaticModelAttempt, prepareMessageAttempt, initializeDraft, agentCommand, alphaMessageGroups } = await server.ssrLoadModule("/src/OrganizationApp.tsx"));
+  ({ TopicNavigation, automaticModelAttempt, prepareMessageAttempt, initializeDraft, agentCommand, alphaMessageGroups, MessageMarkdown } = await server.ssrLoadModule("/src/OrganizationApp.tsx"));
 });
 after(async () => { await server?.close(); });
 
@@ -68,6 +68,19 @@ test("message reconciliation retains intervening messages and removes replay dup
   const revised = { ...one, content: "An edited prompt", revision: 1 };
   assert.deepEqual(api.mergeMessages([revised], [one]), [revised], "a stale poll cannot replace a saved edit");
   assert.deepEqual(api.mergeMessages([one], [revised]), [revised]);
+});
+
+test("message reconciliation keeps unchanged identities so polling does not rebuild the transcript", () => {
+  const one = { id: "one", sequence: 1, content: "$x$" }, two = { id: "two", sequence: 2, content: "$y$" }, existing = [one, two];
+  assert.equal(api.mergeMessages(existing, []), existing, "an empty delta returns the same array");
+  assert.equal(api.mergeMessages(existing, [{ ...one }, { ...two }]), existing, "an equal replay returns the same array");
+  const usage = { ...two, usage: { prompt_tokens: 3 } }, merged = api.mergeMessages(existing, [usage]);
+  assert.notEqual(merged, existing); assert.equal(merged[0], one, "unchanged messages keep their objects"); assert.equal(merged[1], usage);
+});
+
+test("message Markdown renders again only when its source text changes", () => {
+  assert.equal(MessageMarkdown.$$typeof, Symbol.for("react.memo"));
+  assert.match(renderToStaticMarkup(React.createElement(MessageMarkdown, { markdown: "Area $\\pi r^2$" })), /katex/);
 });
 
 test("agent controls are exact commands rather than paid inference requests", () => {
