@@ -618,7 +618,7 @@ function PresenceSidebar({ organizationId, open, onClose, onAuthLost }: {
           ? <button type="button" className="org-bot-review-name" onClick={() => setReviewBot(bot)}>{bot.name}</button> : bot.name}</strong>
         {approvals.rows.some(row => row.bot_id === bot.id) ? <button type="button" className="org-bot-approval-indicator"
           aria-label={`Review ${approvals.rows.filter(row => row.bot_id === bot.id).length} pending requests from ${bot.name}`}
-          title="Owner approval needed" onClick={() => setReviewBot(bot)}>!</button> : <i className={bot.activity ? "org-bot-thinking" : ""}
+          title="Approval needed" onClick={() => setReviewBot(bot)}>!</button> : <i className={bot.activity ? "org-bot-thinking" : ""}
           title={bot.activity?.replaceAll("_", " ")} aria-label={bot.activity?.replaceAll("_", " ") ?? (bot.online ? "online" : "offline")} />
         }
       </div>)}

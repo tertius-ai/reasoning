@@ -21,6 +21,11 @@ AWAITING_CONSENT = (
     "(EXISTS (SELECT 1 FROM bot_execution_approvals a WHERE a.run_id=bot_runs.id AND a.status IN ('pending','approved')) "
     "OR EXISTS (SELECT 1 FROM bot_issue_approvals a WHERE a.run_id=bot_runs.id AND a.status IN ('pending','approved')))"
 )
+# Who must decide a run's pending GitHub issue request: the requester when the owner lets them approve their own.
+APPROVAL_BY = (
+    "(SELECT CASE WHEN a.approver_id IS NOT NULL AND a.approver_id<>a.owner_id THEN 'requester' ELSE 'owner' END "
+    "FROM bot_issue_approvals a WHERE a.run_id=r.id AND a.status='pending' ORDER BY a.created_at DESC LIMIT 1) AS approval_by"
+)
 # A mention whose author the bot owner's runner policy excludes; recorded so the requester sees why.
 DECLINED = "requester_not_permitted"
 MENTION = re.compile(r"@\[([a-f0-9]{32})(?::([A-Za-z0-9][A-Za-z0-9._/-]{0,99})(?:!(low|medium|high|xhigh|max))?)?\]")
@@ -247,7 +252,7 @@ class BotRuntime:
         return {"bot_name": dict(row).get("bot_name"),
                 "effort": dict(row).get("effort"), "gateway": json.loads(dict(row).get("gateway_json", "{}")),
                 "activity": json.loads(dict(row).get("activity_json", "[]")),
-                "owner_user_id": dict(row).get("owner_user_id"),
+                "owner_user_id": dict(row).get("owner_user_id"), "approval_by": dict(row).get("approval_by"),
                 **{key: row[key] for key in ("id", "organization_id", "project_id", "channel_id", "topic_id", "bot_id",
                 "requested_by", "model", "status", "phase", "created_at", "updated_at", "context_through_sequence",
                 "output_text", "error_code")}}
@@ -256,8 +261,8 @@ class BotRuntime:
         with self.store.transaction(write=True) as db:
             self.store._topic_access(db, user, org, topic)
             self.expire(db, org)
-            return [self.public(row) for row in db.execute("SELECT r.*,u.name AS bot_name,b.created_by AS owner_user_id "
-                "FROM bot_runs r JOIN users u ON u.id=r.bot_id JOIN bots b ON b.id=r.bot_id "
+            return [self.public(row) for row in db.execute("SELECT r.*,u.name AS bot_name,b.created_by AS owner_user_id,"
+                + APPROVAL_BY + " FROM bot_runs r JOIN users u ON u.id=r.bot_id JOIN bots b ON b.id=r.bot_id "
                 "WHERE r.organization_id=? AND r.topic_id=? ORDER BY r.created_at DESC,r.id DESC LIMIT 100", (org, topic))]
 
     def get(self, user, org, run_id):
@@ -265,9 +270,9 @@ class BotRuntime:
             run = _row(db.execute("SELECT * FROM bot_runs WHERE organization_id=? AND id=?", (org, run_id)).fetchone())
             self.store._topic_access(db, user, org, run["topic_id"])
             self.expire(db, org)
-            return self.public(db.execute("SELECT r.*,u.name AS bot_name,b.created_by AS owner_user_id FROM bot_runs r "
-                                          "JOIN users u ON u.id=r.bot_id JOIN bots b ON b.id=r.bot_id WHERE r.id=?",
-                                          (run_id,)).fetchone())
+            return self.public(db.execute("SELECT r.*,u.name AS bot_name,b.created_by AS owner_user_id," + APPROVAL_BY
+                                          + " FROM bot_runs r JOIN users u ON u.id=r.bot_id JOIN bots b ON b.id=r.bot_id "
+                                          "WHERE r.id=?", (run_id,)).fetchone())
 
     def stop(self, user, org, run_id):
         """Fence future bot effects, without claiming an external invocation stopped."""

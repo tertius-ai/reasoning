@@ -78,9 +78,12 @@ def register(gateway, registry, directory, policy):
         if approval["status"] == "created":
             return {"issue_url": approval["issue_url"]}
         if approval["status"] != "approved":
-            return {"refused": "The owner did not approve this exact GitHub issue, or its outcome is unknown."}
+            return {"refused": "This exact GitHub issue was rejected in Reasoning, its approval was withdrawn by a "
+                               "permission change or stop, or its outcome is unknown. Do not resubmit it unchanged."}
         receipt = gateway.request(f"/issues/{approval['id']}/consume")
-        if any(receipt[key] != value for key, value in {"repository": repository, "title": title, "body": body}.items()):
+        # The server may append its attribution line; everything the bot wrote must be published unchanged.
+        if (receipt["repository"] != repository or receipt["title"] != title
+                or receipt["body"] != body and not receipt["body"].startswith(body + "\n\n---\n\nRequested in Reasoning by ")):
             raise BotClientError("issue consent differs from the exact frozen issue preview")
         write_document(path, {"status": "outcome_unknown", "repository": repository,
                               "document_sha256": receipt["document_sha256"]}, new=True)
@@ -94,8 +97,11 @@ def register(gateway, registry, directory, policy):
                               "document_sha256": receipt["document_sha256"], "issue_url": url})
         gateway.request(f"/issues/{approval['id']}/receipt", issue_url=url)
         return {"issue_url": url}
-    registry.register(ToolDefinition("github_issue_create", "Draft an issue in an allowed repository. The bot owner must approve "
-                                    "the exact repository/title/body in People before one authenticated GitHub write.",
+    registry.register(ToolDefinition("github_issue_create", "Draft an issue in an allowed repository. The exact "
+                                    "repository/title/body must be approved in People before one authenticated GitHub write: "
+                                    "by the bot owner, or by the requesting member when the owner lets them approve their "
+                                    "own issues. Another member's request carries a server-added attribution line. "
+                                    "Returns issue_url on success.",
                                     {"type": "object", "properties": properties, "required": list(properties),
                                      "additionalProperties": False},
                                     create, risk="write", idempotent=False))

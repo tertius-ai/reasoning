@@ -128,6 +128,9 @@ class DeveloperPermissions(Input):
     enabled: bool = False
     repositories: Annotated[list[Annotated[str, Field(max_length=140)]], Field(max_length=20)] = Field(default_factory=list)
     requesters: Annotated[list[Annotated[str, Field(pattern=r"^[a-f0-9]{32}$")]], Field(max_length=64)] = Field(default_factory=list)
+    issue_self_approvers: Annotated[list[Annotated[str, Field(pattern=r"^[a-f0-9]{32}$")]], Field(max_length=64)] = Field(
+        default_factory=list)
+    issue_daily_limit: Annotated[int, Field(ge=1, le=20, strict=True)] = 3
 
 
 class IssueRequest(Lease):

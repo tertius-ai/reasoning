@@ -31,6 +31,19 @@ test("running bots pulse their real reported phase without fabricated reasoning"
   assert.match(html, /org-working/); assert.match(html, /using tools…/); assert.doesNotMatch(html, /thinking/);
   const waiting = renderToStaticMarkup(React.createElement(conversation.BotRunStatus, { run: { status: "waiting_approval" } }));
   assert.match(waiting, /bot owner/); assert.doesNotMatch(waiting, /org-working/);
+  const requester = renderToStaticMarkup(React.createElement(conversation.BotRunStatus, { run: { status: "waiting_approval", approval_by: "requester" } }));
+  assert.match(requester, /requesting member to approve the exact GitHub issue preview/); assert.doesNotMatch(requester, /bot owner/);
+});
+
+test("a requester reviewing their own issue preview is told the owner delegated that decision", async () => {
+  const approvals = await server.ssrLoadModule("/src/BotApprovals.tsx");
+  const row = { id: "issue", bot_id: "bot", run_id: "run", requester_name: "Bob", topic_name: "Research", created_at: 1, kind: "issue",
+    repository: "research/bench", title: "Exact", body: "Body\n\n---\n\nRequested in Reasoning by `Bob` through the bot `Math Bot`.",
+    document_sha256: "f".repeat(64) };
+  const render = role => renderToStaticMarkup(React.createElement(approvals.BotApprovalDialog, { organizationId: "org",
+    bot: { id: "bot", name: "Math Bot", online: true }, rows: [{ ...row, approval_role: role }], onClose() {}, onDecided() {} }));
+  assert.match(render("requester"), /You requested this issue/); assert.match(render("requester"), /Publish once/);
+  assert.doesNotMatch(render("owner"), /You requested this issue/);
 });
 
 test("a mention the owner's policy excludes explains why it was not run", () => {

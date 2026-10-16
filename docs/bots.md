@@ -206,7 +206,7 @@ Mentions retain immutable bot/model identities rather than guessing from names.
 Conflicting models for the same bot in one message are refused. Editing a source
 message does not change an already admitted bot invocation or replay it.
 Chat and People show compact allowlisted activity from CLI/tool events, such as
-reading topic history, writing ledger entries, and awaiting owner approval.
+reading topic history, writing ledger entries, and waiting for approval.
 Heartbeats preserve tool activity; the run retains its last twelve activity labels.
 Private reasoning, tool arguments, and CLI stderr are not included in activity.
 
@@ -228,7 +228,10 @@ Each exact command requires **the bot owner's** approval in **People**, includin
 when another member requested the computation. A pending-request symbol replaces
 the bot's connection dot; click its name or symbol to review the exact action.
 Local execution, container computation and GitHub issue requests share this dialog.
-Closing it leaves requests pending. Requests have no decision-age timeout:
+The one exception to owner approval is a GitHub issue requested by a member the
+owner lets approve their own issues (see [Developer bots](#developer-bots)); that
+member, not the owner, sees it in this dialog, and the topic's bot activity says
+which of them is awaited. Closing it leaves requests pending. Requests have no decision-age timeout:
 they remain until decided, stopped, or invalidated by access/action changes.
 The runner's active runtime allowance excludes server-confirmed consent waits;
 provider CLIs and MCP transports can still impose their own connection limits.
@@ -416,7 +419,11 @@ server, and no paid inference is performed by these CLI commands.
 
 Install and authenticate GitHub CLI (`gh auth login`) on the bot computer.
 The `github_issue_create` tool proposes an exact repository, title and body in
-**People → the bot's pending requests**. Only the bot owner can approve publication.
+**People → the bot's pending requests**. The bot owner approves publication,
+except as described below. When another member requested the issue, the server
+appends a final line, `Requested in Reasoning by <member> through the bot <bot>.`,
+with both names as inert code spans; it is part of the previewed and approved text.
+GitHub shows the owner's `gh` account as the author.
 Review the preview carefully: an issue may be public and its body can contain
 private context. Approval is consumed durably once before the local gateway's
 fixed authenticated GitHub API request. GitHub credentials stay on that computer;
@@ -426,6 +433,33 @@ receipt outside the topic workspace. A timeout or interrupted write remains
 unconfirmed/unknown and is never republished automatically; inspect GitHub and the
 receipt before proposing a new request. No inferred model text grants developer
 privileges or bypasses this approval.
+
+Self-approved issues are off by default. Under **Other permitted requesters**,
+the owner can mark a permitted requester as **Approves their own GitHub issues**
+and set a limit of 1–20 self-approved issues per member in any 24 hours
+(default 3). Such a member's issue requests go to that member instead of the
+owner: the bot's **!** marker appears for them in **People**, and they review
+and publish the exact preview, including the attribution line. They cannot
+decide anyone else's request, and the owner cannot decide theirs; either can
+stop the invocation. Such a member can publish, without the owner's review,
+anything the bot can read during their invocation: the topic and its workspace,
+sanitized diagnostics, and tracked development source and test results on the
+bot computer. Enable it only for members trusted with that. The allowlisted repositories, exact request hash,
+consume-once publication, unknown-outcome handling and the owner's local `gh`
+credentials are unchanged. Approval and consumption recheck that the member is
+still a permitted, self-approving requester with current topic access. Requests
+beyond the limit, counting approved and pending ones, go to the owner instead,
+and approval past the limit is refused. Any developer-access change denies
+pending and approved, unconsumed issue requests. Each decision records who made
+it: the audit log has a `bot.issue.approve` or `bot.issue.deny` event with that
+person as actor, and the owner's issue approval list
+(`GET /api/organizations/{organization_id}/my-bots/issue-approvals`) shows
+consumed, published and unknown-outcome self-approved requests with the deciding
+member. The configuration is the
+`issue_self_approvers` (a subset of `requesters`, excluding the owner) and
+`issue_daily_limit` fields of
+`PUT /api/organizations/{organization_id}/my-bots/{bot_id}/developer`; omitted
+fields reset to off and 3.
 
 Every organization member can open **Account menu → My bots** to create and
 manage their own personal bot. Use **Follow my access**, or select exact topics, and message/knowledge

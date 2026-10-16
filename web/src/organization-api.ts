@@ -72,7 +72,7 @@ export type InferenceCall = { id: string; sequence: number; run_id: string; requ
   receipts?: { sequence: number; kind: string; recorded_at: number; data: Record<string, unknown> }[] };
 export type InferenceCallPage = { calls: InferenceCall[]; next_before: number | null };
 export type BotMetadata = { id: string; name: string; organization_id: string; created_by: string; authorized_by: string;
-  developer?: { enabled: boolean; repositories: string[]; requesters: string[] };
+  developer?: { enabled: boolean; repositories: string[]; requesters: string[]; issue_self_approvers?: string[]; issue_daily_limit?: number };
   runtime?: { engine: string; models: string[]; local_tools: boolean; online: boolean } | null;
   public_access?: boolean; explicit_topic_ids?: string[];
   delegation_kind?: "administrator" | "personal";
@@ -83,7 +83,7 @@ export type BotModel = { id: string; name: string; bot_id: string; engine: strin
 export type BotRun = { id: string; bot_id: string; bot_name?: string | null; model: string; topic_id: string; status: string; phase: string;
   activity?: { kind: string; label: string; at: number }[];
   context_through_sequence?: number;
-  requested_by?: string; owner_user_id?: string | null;
+  requested_by?: string; owner_user_id?: string | null; approval_by?: "owner" | "requester" | null;
   created_at: number; updated_at: number; output_text: string; error_code: string | null };
 export type SearchResult = Message & { project_name: string; channel_name: string; topic_name: string; topic_kind: TopicKind };
 export type Session = { user_id: string; organization_id?: string; csrf_token?: string };

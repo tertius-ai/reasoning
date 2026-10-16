@@ -8,7 +8,7 @@ type BaseApproval = { id: string; bot_id: string; run_id: string; requester_name
   created_at: number; delivery_interrupted?: boolean };
 export type BotApproval = BaseApproval & (
   { kind: "execution"; command_json: string; command_sha256: string } |
-  { kind: "issue"; repository: string; title: string; body: string; document_sha256: string } |
+  { kind: "issue"; repository: string; title: string; body: string; document_sha256: string; approval_role?: "owner" | "requester" } |
   { kind: "compute"; image_digest: string; request_sha256: string;
     parameters: { image_id: string; language: string; program: string; resources: Record<string, number> } }
 );
@@ -73,7 +73,8 @@ export function BotApprovalDialog({ organizationId, bot, rows, onClose, onDecide
           <p className="org-help">Uses the organization's isolated compute pool. Provider charges may apply.</p></>
           : <><p className="org-approval-repository">{row.repository}</p><h4>{row.title}</h4>
             <div className="org-approval-body"><ReactMarkdown remarkPlugins={[remarkGfm]}>{row.body}</ReactMarkdown></div>
-            <p className="org-help">This exact title and body leave Reasoning and may be public. Check for private content and secrets.</p></>}
+            <p className="org-help">This exact title and body leave Reasoning and may be public. Check for private content and secrets.</p>
+            {row.approval_role === "requester" && <p className="org-help">You requested this issue. The bot owner lets you approve your own issues to this repository; it is published with the owner's GitHub account and the attribution line above.</p>}</>}
       <footer><button type="button" className="org-primary" disabled={busy !== null || row.delivery_interrupted} onClick={() => void decide(row, true)}>
         {busy === row.id ? "Saving…" : row.kind === "issue" ? "Publish once" : "Allow once"}</button>
         <button type="button" disabled={busy !== null} onClick={() => void decide(row, false)}>Reject</button></footer>

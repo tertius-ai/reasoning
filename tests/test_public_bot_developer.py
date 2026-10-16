@@ -238,6 +238,151 @@ def test_topic_context_tells_the_model_when_this_requester_lacks_developer_tools
     assert tools.context(*args)["developer"] == {"enabled": True, "repositories": ["research/bench"]}
 
 
+def trusted(fixture, *, self_approve=True, limit=3):
+    """A developer bot whose owner permits another member, optionally to approve their own issues."""
+    store, owner, topics, _, _, _ = fixture
+    runtime, bot, model, run, _ = setup(fixture, other_users=True)
+    developer, org = BotDeveloper(runtime), owner["organization_id"]
+    other = member(fixture)
+    developer.configure(owner["user_id"], org, bot["id"], True, ["research/bench"], [other],
+                        [other] if self_approve else [], limit)
+    runtime.finish(bot["token"], run["id"], runtime.claim(bot["token"])["lease"], "succeeded", "Finished")
+    requested = runtime.enqueue(other, org, topics[1], model, "trusted-run", prompt="file an issue")
+    lease = runtime.claim(bot["token"])["lease"]
+    return developer, bot, other, requested, (bot["token"], requested["id"], lease)
+
+
+def pending(developer, user, org):
+    return [row for row in developer.approvals(user, org) if row["status"] == "pending"]
+
+
+def test_trusted_requester_approves_own_exact_issue_with_attribution_and_audit(fixture):
+    store, owner, topics, _, _, _ = fixture
+    developer, bot, other, run, args = trusted(fixture)
+    org, owner_id = owner["organization_id"], owner["user_id"]
+    approval = developer.request(*args, "research/bench", "Exact title", "Exact body", "trusted")
+    attribution = "\n\n---\n\nRequested in Reasoning by `Member` through the bot `Codex`."
+    assert approval["approver_id"] == other and approval["body"] == "Exact body" + attribution
+    # A retry with the bot's original inputs is the same request; changed inputs are refused.
+    assert developer.request(*args, "research/bench", "Exact title", "Exact body", "trusted")["id"] == approval["id"]
+    with pytest.raises(StoreError, match="different inputs"):
+        developer.request(*args, "research/bench", "Exact title", "Other body", "trusted")
+    assert pending(developer, owner_id, org) == []
+    [row] = pending(developer, other, org)
+    assert row["id"] == approval["id"] and row["approval_role"] == "requester" and row["body"].endswith(attribution)
+    assert developer.runtime.listing(other, org, topics[1])[0]["approval_by"] == "requester"
+    with pytest.raises(StoreError):
+        developer.approve(owner_id, org, approval["id"], True)  # The owner delegated this decision.
+    with pytest.raises(StoreError, match="changed"):
+        developer.approve(other, org, approval["id"], True, request_sha256="0" * 64)
+    assert developer.approve(other, org, approval["id"], True, request_sha256=approval["document_sha256"])["status"] == "approved"
+    receipt = developer.receipt(*args, approval["id"], consume=True)
+    assert receipt["status"] == "consumed" and receipt["body"].endswith(attribution) and receipt["decided_by"] == other
+    url = "https://github.com/research/bench/issues/3"
+    assert developer.receipt(*args, approval["id"], issue_url=url)["status"] == "created"
+    owner_view = developer.approvals(owner_id, org)
+    assert [(item["id"], item["decided_by_name"], item["approval_role"]) for item in owner_view] == [
+        (approval["id"], "Member", "requester")]
+    with store.transaction() as db:
+        audit = db.execute("SELECT actor_id,action FROM audit_events WHERE target_id=?", (approval["id"],)).fetchall()
+    assert [tuple(item) for item in audit] == [(other, "bot.issue.approve")]
+
+
+def test_owner_requests_are_unattributed_and_untrusted_requesters_still_need_the_owner(fixture):
+    store, owner, _, _, _, _ = fixture
+    developer, bot, other, _, args = trusted(fixture, self_approve=False)
+    org = owner["organization_id"]
+    approval = developer.request(*args, "research/bench", "Title", "Body", "untrusted")
+    assert approval["approver_id"] == owner["user_id"] and approval["body"].startswith("Body\n\n---\n\nRequested in Reasoning by")
+    assert pending(developer, other, org) == []
+    with pytest.raises(StoreError):
+        developer.approve(other, org, approval["id"], True)
+    assert pending(developer, owner["user_id"], org)[0]["approval_role"] == "owner"
+    runtime, (_, run_id, _) = developer.runtime, args
+    runtime.stop(owner["user_id"], org, run_id)
+    own_run = runtime.enqueue(owner["user_id"], org, fixture[2][1], f"bot/{bot['id']}/default", "own-run", prompt="file")
+    lease = runtime.claim(bot["token"])["lease"]
+    own = developer.request(bot["token"], own_run["id"], lease, "research/bench", "Title", "Body", "own")
+    assert own["body"] == "Body" and own["approver_id"] == owner["user_id"]
+
+
+def test_self_approval_daily_limit_routes_excess_requests_to_the_owner(fixture):
+    store, owner, _, _, _, _ = fixture
+    developer, bot, other, _, args = trusted(fixture, limit=1)
+    org = owner["organization_id"]
+    first = developer.request(*args, "research/bench", "First", "Body", "first")
+    assert first["approver_id"] == other
+    developer.approve(other, org, first["id"], True)
+    developer.receipt(*args, first["id"], consume=True)
+    second = developer.request(*args, "research/bench", "Second", "Body", "second")
+    assert second["approver_id"] == owner["user_id"] and pending(developer, other, org) == []
+    # Even a request routed to the requester cannot be approved past the limit.
+    with store.transaction(write=True) as db:
+        db.execute("UPDATE bot_issue_approvals SET approver_id=? WHERE id=?", (other, second["id"]))
+    with pytest.raises(StoreError) as limited:
+        developer.approve(other, org, second["id"], True)
+    assert limited.value.status == 429 and "limit of 1" in limited.value.message
+    assert developer.approve(other, org, second["id"], False)["status"] == "denied"
+
+
+def test_permission_changes_invalidate_self_approval_and_recheck_on_consumption(fixture):
+    store, owner, _, _, _, _ = fixture
+    developer, bot, other, _, args = trusted(fixture)
+    org, owner_id = owner["organization_id"], owner["user_id"]
+    approval = developer.request(*args, "research/bench", "Title", "Body", "invalidated")
+    developer.configure(owner_id, org, bot["id"], True, ["research/bench"], [other], [], 3)
+    with store.transaction() as db:
+        assert db.execute("SELECT status FROM bot_issue_approvals WHERE id=?", (approval["id"],)).fetchone()[0] == "denied"
+    with pytest.raises(StoreError):
+        developer.approve(other, org, approval["id"], True)
+    developer.configure(owner_id, org, bot["id"], True, ["research/bench"], [other], [other], 3)
+    approval = developer.request(*args, "research/bench", "Title", "Body", "approved-then-revoked")
+    developer.approve(other, org, approval["id"], True)
+    # A grant edited outside configure() still fences an approved, unconsumed self-approval.
+    with store.transaction(write=True) as db:
+        db.execute("UPDATE bot_developer_permissions SET issue_self_approvers_json='[]' WHERE bot_id=?", (bot["id"],))
+    with pytest.raises(StoreError, match="no longer lets"):
+        developer.receipt(*args, approval["id"], consume=True)
+    for requesters, invalid in (([other], ["f" * 32]), ([other], [owner_id]), ([other, owner_id], [owner_id])):
+        with pytest.raises(StoreError, match="their own issues|already approves"):
+            developer.configure(owner_id, org, bot["id"], True, ["research/bench"], requesters, invalid, 3)
+    with pytest.raises(StoreError):
+        developer.configure(owner_id, org, bot["id"], True, ["research/bench"], [other], [other], 21)
+
+
+def test_gateway_publishes_the_attributed_preview_approved_by_the_requester(fixture, tmp_path, monkeypatch):
+    developer, bot, other, _, args = trusted(fixture)
+    org, published = bot["organization_id"], []
+
+    class Gateway:
+        workspace = tmp_path
+        def request(self, suffix, **values):
+            if suffix == "/issues":
+                result = developer.request(*args, **values)
+                if result["status"] == "pending":
+                    developer.approve(other, org, result["id"], True, request_sha256=result["document_sha256"])
+                return developer.receipt(*args, result["id"])
+            approval_id = suffix.split("/")[2]
+            return developer.receipt(*args, approval_id, consume=suffix.endswith("/consume"), **values)
+    def publish(repository, title, body, **options):
+        published.append(body)
+        return "https://github.com/research/bench/issues/8"
+    monkeypatch.setattr("reasoning_ledger.server.bot_issue_gateway.publish_issue", publish)
+    monkeypatch.setattr("reasoning_ledger.server.bot_issue_gateway.github_executable", lambda _: "/usr/bin/gh")
+    registry = ToolRegistry()
+    register(Gateway(), registry, tmp_path, {"enabled": True, "repositories": ["research/bench"]})
+    arguments = {"repository": "research/bench", "title": "Exact", "body": "Exact body", "client_id": "requester"}
+    assert registry.invoke("github_issue_create", arguments)["issue_url"].endswith("/8")
+    assert published == ["Exact body\n\n---\n\nRequested in Reasoning by `Member` through the bot `Codex`."]
+
+
+def test_attribution_names_cannot_mention_link_or_format():
+    from reasoning_ledger.server.bot_developer import attribution_label
+
+    assert attribution_label("@team `x` [link](https://e.example)\n**bold**") == "`@team x [link](https://e.example) **bold**`"
+    assert attribution_label("") == "`unnamed`" and len(attribution_label("n" * 500)) == 102
+
+
 def test_exact_issue_approval_consume_once_and_result_receipt(fixture):
     developer, bot, run, lease = enabled(fixture)
     owner, org = bot["created_by"], bot["organization_id"]
@@ -430,6 +575,11 @@ def test_developer_wire_requires_human_csrf_owner_approval_and_live_bot_lease(fi
             assert (await client.put(root + "/" + bot["id"] + "/developer", json=permissions)).status_code == 403
             human = {"origin": "https://server.example", "x-csrf-token": owner["csrf_token"]}
             assert (await client.put(root + "/" + bot["id"] + "/developer", json=permissions, headers=human)).status_code == 200
+            for invalid, status in (({"issue_self_approvers": ["f" * 32]}, 400), ({"issue_daily_limit": 21}, 422)):
+                response = await client.put(root + "/" + bot["id"] + "/developer", json={**permissions, **invalid}, headers=human)
+                assert response.status_code == status
+            developer = next(item for item in (await client.get(root)).json() if item["id"] == bot["id"])["developer"]
+            assert developer["issue_self_approvers"] == [] and developer["issue_daily_limit"] == 3
             client.cookies.clear()
             bearer = {"authorization": "Bearer " + bot["token"]}
             path = "/api/bot/runs/" + run["id"]

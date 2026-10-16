@@ -9,7 +9,7 @@ LABELS = {
     "searching_bibliography": "Searching bibliography", "writing_bibliography": "Writing bibliography",
     "reading_blog": "Reading blog", "writing_blog": "Writing blog draft", "reading_attachment": "Reading attachment",
     "reading_workspace": "Reading workspace", "writing_workspace": "Writing workspace",
-    "waiting_approval": "Waiting for owner approval", "running_compute": "Running approved computation",
+    "waiting_approval": "Waiting for approval", "running_compute": "Running approved computation",
     "running_lean": "Running Lean", "compiling_tex": "Compiling TeX", "using_tools": "Using tools",
     "writing_response": "Writing response", "finishing": "Finishing",
 }
