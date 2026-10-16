@@ -18,6 +18,7 @@ from .openrouter import (
     ProviderError,
     StreamLines,
     Usage,
+    json_type,
     protocol_diagnostics,
     response_rejection,
     stream_error_diagnostics,
@@ -25,6 +26,72 @@ from .openrouter import (
 from .research_context import HARNESS_VERSION, PROMPT_VERSION, encoded
 from .store import StoreError
 from .usage_store import UsageStore
+
+REASONING_TEXT_FIELDS = ("text", "summary", "data", "signature")
+
+
+class ReasoningFieldError(Exception):
+    """A reasoning field outside the documented shape; carries only closed names."""
+
+    def __init__(self, field, value):
+        super().__init__(field)
+        self.field, self.value_type = field, json_type(value)
+
+
+class ReasoningDetails:
+    """Accumulate streamed OpenRouter ``reasoning_details`` fragments in arrival order.
+
+    A fragment continues the latest detail with its index (or, without an
+    index, the latest detail) when its type, id, format and other non-text
+    fields agree; text, summary, data and signature fragments are concatenated
+    and null text fragments add nothing. A disagreeing fragment starts a new
+    detail. Unknown well-formed types and fields are preserved for replay.
+    """
+
+    def __init__(self):
+        self.items = []
+
+    def add(self, fragment):
+        if not isinstance(fragment, dict):
+            raise ReasoningFieldError("reasoning_details[]", fragment)
+        index = fragment.get("index")
+        if index is not None and (type(index) is not int or index < 0):
+            raise ReasoningFieldError("reasoning_details[].index", index)
+        kind = fragment.get("type")
+        if kind is not None and (not isinstance(kind, str) or not kind):
+            raise ReasoningFieldError("reasoning_details[].type", kind)
+        for field in ("id", "format", *REASONING_TEXT_FIELDS):
+            value = fragment.get(field)
+            if value is not None and not isinstance(value, str):
+                raise ReasoningFieldError("reasoning_details[]." + field, value)
+        target = self._continued(fragment, index)
+        if target is None:
+            target = {}
+            self.items.append(target)
+        for field, value in fragment.items():
+            if field in REASONING_TEXT_FIELDS:
+                if value is None:
+                    target.setdefault(field, None)
+                else:
+                    target[field] = (target.get(field) or "") + value
+            elif target.get(field) is None:
+                target[field] = value
+        return target
+
+    def _continued(self, fragment, index):
+        candidate = next((item for item in reversed(self.items) if index is None or item.get("index") == index), None)
+        if candidate is None:
+            return None
+        for field, value in fragment.items():
+            if field in REASONING_TEXT_FIELDS or field == "index" or value is None:
+                continue
+            if candidate.get(field) is not None and candidate[field] != value:
+                return None
+        return candidate
+
+    @staticmethod
+    def summary(detail):
+        return detail.get("summary") or (detail.get("text") if detail.get("type") == "reasoning.summary" else None)
 
 
 class ResearchCompletion:
@@ -346,7 +413,7 @@ class ResearchCompletion:
     async def _read_agent_stream(self, key, payload, timeout):
         self.protocol_stage = "stream_framing"
         text, generation, usage, finish, tools = "", None, None, None, {}
-        reasoning, details = "", {}
+        reasoning, details = "", ReasoningDetails()
         prefix = await self._stream_prefix_async()
         last_flush = 0.0
         last_summary = ""
@@ -465,35 +532,20 @@ class ResearchCompletion:
                                         raise ProviderError("execution_fenced")
                                     last_flush = time.monotonic()
                             self.protocol_stage = "reasoning"
-                            thought = delta.get("reasoning") or delta.get("reasoning_content") or ""
-                            if not isinstance(thought, str):
-                                raise ProviderError("provider_protocol")
-                            reasoning += thought
-                            for detail in delta.get("reasoning_details") or []:
-                                if not isinstance(detail, dict):
-                                    raise ProviderError("provider_protocol")
-                                index = detail.get("index", 0)
-                                if type(index) is not int or index < 0:
-                                    raise ProviderError("provider_protocol")
-                                current_detail = details.setdefault(index, {})
-                                for field, value in detail.items():
-                                    if value is None and field in {"signature", "id"}:
-                                        # Null signatures and absent identities are valid OpenRouter metadata.
-                                        current_detail.setdefault(field, None)
-                                        continue
-                                    if field in {"text", "summary", "data", "signature"}:
-                                        if not isinstance(value, str):
-                                            raise ProviderError("provider_protocol")
-                                        current_detail[field] = (current_detail.get(field) or "") + value
-                                    elif field == "id" and current_detail.get(field) is None:
-                                        current_detail[field] = value
-                                    elif field in current_detail and current_detail[field] != value:
-                                        raise ProviderError("provider_protocol")
-                                    else:
-                                        current_detail[field] = value
-                                summary = current_detail.get("summary") or (
-                                    current_detail.get("text") if current_detail.get("type") == "reasoning.summary" else None
-                                )
+                            try:
+                                for field in ("reasoning", "reasoning_content"):
+                                    if delta.get(field) is not None and not isinstance(delta[field], str):
+                                        raise ReasoningFieldError(field, delta[field])
+                                reasoning += delta.get("reasoning") or delta.get("reasoning_content") or ""
+                                fragments = delta.get("reasoning_details")
+                                if fragments is not None and not isinstance(fragments, list):
+                                    raise ReasoningFieldError("reasoning_details", fragments)
+                                merged = [details.add(fragment) for fragment in fragments or []]
+                            except ReasoningFieldError as exc:
+                                raise ProviderError("provider_protocol", diagnostics=protocol_diagnostics(
+                                    "reasoning", "response_structure", total, exc.field, exc.value_type)) from None
+                            for current_detail in merged:
+                                summary = ReasoningDetails.summary(current_detail)
                                 if (
                                     self.stream_visible
                                     and summary
@@ -519,8 +571,8 @@ class ResearchCompletion:
                 raise ProviderError("provider_incomplete")
         message = {"role": "assistant", "content": text or None}
         if self.stream_visible:
-            for detail in details.values():
-                summary = detail.get("summary") or (detail.get("text") if detail.get("type") == "reasoning.summary" else None)
+            for detail in details.items:
+                summary = ReasoningDetails.summary(detail)
                 if summary and summary != last_summary:
                     await summarize(summary)
         if self.stream_visible and text:
@@ -529,8 +581,8 @@ class ResearchCompletion:
             await self._stream_content_async(self._display_round(prefix, text), generation)
         if reasoning:
             message["reasoning"] = reasoning
-        if details:
-            message["reasoning_details"] = [details[index] for index in sorted(details)]
+        if details.items:
+            message["reasoning_details"] = details.items
         if tools:
             self.protocol_stage = "tool_validation"
             message["tool_calls"] = [tools[index] for index in sorted(tools)]

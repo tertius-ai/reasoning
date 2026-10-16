@@ -136,6 +136,37 @@ PROTOCOL_STAGES = {
 MAX_STREAM_BYTES = 64 * 1024 * 1024
 MAX_EVENT_BYTES = 2 * 1024 * 1024
 PROTOCOL_RULES = {"content_type", "stream_size", "event_size", "invalid_json", "invalid_utf8", "response_structure"}
+# Closed names for the response field that failed validation, with the JSON
+# shape the parser accepts there. Diagnostics never echo provider values.
+PROTOCOL_FIELDS = {
+    "reasoning": "a string or null",
+    "reasoning_content": "a string or null",
+    "reasoning_details": "an array",
+    "reasoning_details[]": "an object",
+    "reasoning_details[].type": "a non-empty string",
+    "reasoning_details[].index": "a non-negative integer",
+    "reasoning_details[].id": "a string or null",
+    "reasoning_details[].format": "a string or null",
+    "reasoning_details[].text": "a string or null",
+    "reasoning_details[].summary": "a string or null",
+    "reasoning_details[].data": "a string or null",
+    "reasoning_details[].signature": "a string or null",
+}
+JSON_TYPES = {"object", "array", "string", "integer", "number", "boolean", "null"}
+PROTOCOL_ACTION = (
+    "No automatic retry was made, and a charge may have occurred. Reconcile the call's generation ID with "
+    "OpenRouter activity, then retry explicitly."
+)
+
+
+def json_type(value: object) -> str:
+    if value is None:
+        return "null"
+    if isinstance(value, bool):
+        return "boolean"
+    if isinstance(value, int):
+        return "integer"
+    return {dict: "object", list: "array", str: "string"}.get(type(value), "number")
 
 
 class StreamLines:
@@ -159,17 +190,27 @@ class StreamLines:
                 yield line
 
 
-def protocol_diagnostics(stage: str, rule=None, received_bytes=None) -> dict:
+def protocol_diagnostics(stage: str, rule=None, received_bytes=None, field=None, value_type=None) -> dict:
     stage = stage if stage in PROTOCOL_STAGES else "stream_framing"
     result = {
         "category": "protocol", "protocol_stage": stage,
         "message": "The response could not be parsed: " + PROTOCOL_STAGES[stage] + ".",
-        "action": "Inspect the topic diagnostic export and provider activity before retrying; a charge may have occurred.",
+        "action": PROTOCOL_ACTION,
     }
     if rule in PROTOCOL_RULES:
         result["protocol_rule"] = rule
         if rule in {"stream_size", "event_size"}:
             result["message"] = "Provider transport exceeded its safety allowance: " + rule.replace("_", " ") + "."
+    if isinstance(field, str) and field in PROTOCOL_FIELDS:
+        result["protocol_field"] = field
+        received = ""
+        if isinstance(value_type, str) and value_type in JSON_TYPES:
+            result["protocol_value_type"] = value_type
+            received = "; received " + value_type
+        result["message"] = (
+            "The response could not be parsed: " + PROTOCOL_STAGES[stage] + " field " + field
+            + " must be " + PROTOCOL_FIELDS[field] + received + "."
+        )
     if type(received_bytes) is int and 0 <= received_bytes <= 2**63 - 1:
         result["received_bytes"] = received_bytes
     return result
@@ -178,7 +219,8 @@ def protocol_diagnostics(stage: str, rule=None, received_bytes=None) -> dict:
 def safe_diagnostics(value: object) -> dict | None:
     if (isinstance(value, dict) and value.get("category") == "protocol"
             and isinstance(value.get("protocol_stage"), str) and value["protocol_stage"] in PROTOCOL_STAGES):
-        return protocol_diagnostics(value["protocol_stage"], value.get("protocol_rule"), value.get("received_bytes"))
+        return protocol_diagnostics(value["protocol_stage"], value.get("protocol_rule"), value.get("received_bytes"),
+                                    value.get("protocol_field"), value.get("protocol_value_type"))
     status = value.get("http_status") if isinstance(value, dict) else None
     return rejection_error(status, value).diagnostics if type(status) is int and 300 <= status <= 599 else None
 
