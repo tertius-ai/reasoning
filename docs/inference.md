@@ -535,8 +535,26 @@ organization routing does. Browsing makes no paid inference calls.
 Protocol failures retain a static, allowlisted parser-stage diagnostic (framing,
 generation, usage, choices, content, reasoning, tool calls/validation, or encoding).
 Raw provider payloads and exception text are not copied into error messages.
-Nullable reasoning signatures/identities are accepted and preserved across tool
-continuations. Unknown charges or unresolved side effects still block automatic
+Streamed reasoning follows OpenRouter's
+[reasoning details shape](https://openrouter.ai/docs/guides/best-practices/reasoning-tokens):
+`reasoning`/`reasoning_content` are strings or null, and `reasoning_details` is
+an array of objects whose optional `type` is a non-empty string; `index` is an
+optional non-negative integer; and `id`, `format`, `text`, `summary`, `data` and
+`signature` are strings or null. A fragment continues the latest detail with
+its index, or the latest detail when it has no index; its `text`, `summary`,
+`data` and `signature` strings are appended in arrival order, and null values
+add nothing. A fragment whose type, id, format or other non-text field differs
+starts a new detail. Other types, such as `reasoning.server_tool_call`, and
+unknown fields are preserved unchanged and returned with tool and output-limit continuations. Any other shape
+fails the call with `protocol_field` (for example `reasoning_details[].index`) and
+`protocol_value_type`, the JSON type received, named in the message.
+
+A `provider_protocol` failure after submission is never retried automatically
+and leaves the call's charge uncertain unless trustworthy usage arrived first.
+To recover, read the call's generation ID and diagnostic in the inference ledger
+or topic diagnostic export, and compare it with the OpenRouter activity record.
+Then reconcile the verified cost as described above, and start a new turn
+deliberately. Unknown charges or unresolved side effects still block automatic
 goal continuation; known recoverable turn failures schedule a fresh durable turn.
 
 `GET /api/organizations/{organization_id}/usage` returns all-time usage totals and

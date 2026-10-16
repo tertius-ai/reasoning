@@ -1,0 +1,104 @@
+{
+  "description": "Sanitized OpenRouter Chat Completions streaming reasoning shapes. Each case lists the choices[0].delta reasoning fields of successive events. Shapes follow OpenRouter's published reasoning-tokens guide and OpenAPI ReasoningDetailUnion (reasoning.summary, reasoning.encrypted, reasoning.text, reasoning.server_tool_call; nullable id, format, text and signature; optional index). Text is synthetic.",
+  "accepted": {
+    "documented_message_example": {
+      "deltas": [
+        {"reasoning_details": [
+          {"type": "reasoning.summary", "summary": "Analyzed the problem by breaking it into components", "id": "reasoning-summary-1", "format": "anthropic-claude-v1", "index": 0},
+          {"type": "reasoning.text", "text": "Let me work through this systematically.", "signature": null, "id": "reasoning-text-1", "format": "anthropic-claude-v1", "index": 1}
+        ]}
+      ],
+      "expected": [
+        {"type": "reasoning.summary", "summary": "Analyzed the problem by breaking it into components", "id": "reasoning-summary-1", "format": "anthropic-claude-v1", "index": 0},
+        {"type": "reasoning.text", "text": "Let me work through this systematically.", "signature": null, "id": "reasoning-text-1", "format": "anthropic-claude-v1", "index": 1}
+      ]
+    },
+    "streamed_text_then_signature_with_null_text": {
+      "deltas": [
+        {"reasoning": "Check the ", "reasoning_details": [{"type": "reasoning.text", "text": "Check the ", "signature": null, "id": null, "format": "anthropic-claude-v1", "index": 0}]},
+        {"reasoning": "hypotheses.", "reasoning_details": [{"type": "reasoning.text", "text": "hypotheses.", "format": "anthropic-claude-v1", "index": 0}]},
+        {"reasoning": null, "reasoning_details": [{"type": "reasoning.text", "text": null, "signature": "c2lnbmF0dXJlLWZpeHR1cmU=", "format": "anthropic-claude-v1", "index": 0}]}
+      ],
+      "expected": [
+        {"type": "reasoning.text", "text": "Check the hypotheses.", "signature": "c2lnbmF0dXJlLWZpeHR1cmU=", "id": null, "format": "anthropic-claude-v1", "index": 0}
+      ],
+      "reasoning": "Check the hypotheses."
+    },
+    "late_null_format_and_id": {
+      "deltas": [
+        {"reasoning_details": [{"type": "reasoning.text", "text": "First part. ", "id": "rt-1", "format": "google-gemini-v1", "index": 0}]},
+        {"reasoning_details": [{"type": "reasoning.text", "text": "Second part.", "id": null, "format": null, "index": 0}]}
+      ],
+      "expected": [
+        {"type": "reasoning.text", "text": "First part. Second part.", "id": "rt-1", "format": "google-gemini-v1", "index": 0}
+      ]
+    },
+    "text_then_encrypted_at_same_index": {
+      "deltas": [
+        {"reasoning_details": [{"type": "reasoning.text", "text": "Visible thought.", "format": "google-gemini-v1", "index": 0}]},
+        {"reasoning_details": [{"type": "reasoning.encrypted", "data": "ZW5jcnlwdGVkLWZpeHR1cmU=", "format": "google-gemini-v1", "index": 0}]}
+      ],
+      "expected": [
+        {"type": "reasoning.text", "text": "Visible thought.", "format": "google-gemini-v1", "index": 0},
+        {"type": "reasoning.encrypted", "data": "ZW5jcnlwdGVkLWZpeHR1cmU=", "format": "google-gemini-v1", "index": 0}
+      ]
+    },
+    "distinct_ids_at_same_index": {
+      "deltas": [
+        {"reasoning_details": [{"type": "reasoning.summary", "summary": "First item.", "id": "rs_fixture_1", "format": "openai-responses-v1", "index": 0}]},
+        {"reasoning_details": [{"type": "reasoning.encrypted", "data": "b3BhcXVlLTE=", "id": "rs_fixture_1", "format": "openai-responses-v1", "index": 1}]},
+        {"reasoning_details": [{"type": "reasoning.summary", "summary": "Second item.", "id": "rs_fixture_2", "format": "openai-responses-v1", "index": 0}]}
+      ],
+      "expected": [
+        {"type": "reasoning.summary", "summary": "First item.", "id": "rs_fixture_1", "format": "openai-responses-v1", "index": 0},
+        {"type": "reasoning.encrypted", "data": "b3BhcXVlLTE=", "id": "rs_fixture_1", "format": "openai-responses-v1", "index": 1},
+        {"type": "reasoning.summary", "summary": "Second item.", "id": "rs_fixture_2", "format": "openai-responses-v1", "index": 0}
+      ]
+    },
+    "omitted_and_null_index": {
+      "deltas": [
+        {"reasoning_details": [{"type": "reasoning.text", "text": "No index, "}]},
+        {"reasoning_details": [{"type": "reasoning.text", "text": "still the same detail.", "index": null}]}
+      ],
+      "expected": [
+        {"type": "reasoning.text", "text": "No index, still the same detail.", "index": null}
+      ]
+    },
+    "server_tool_call_record": {
+      "deltas": [
+        {"reasoning_details": [{"type": "reasoning.server_tool_call", "tool_name": "openrouter:fusion", "tool_call_id": null, "arguments": "{\"prompt\":\"fixture\"}", "result": "{\"status\":\"ok\"}", "format": "unknown", "index": 0}]}
+      ],
+      "expected": [
+        {"type": "reasoning.server_tool_call", "tool_name": "openrouter:fusion", "tool_call_id": null, "arguments": "{\"prompt\":\"fixture\"}", "result": "{\"status\":\"ok\"}", "format": "unknown", "index": 0}
+      ]
+    },
+    "unknown_future_type_and_format": {
+      "deltas": [
+        {"reasoning_details": [{"type": "reasoning.future_kind", "payload": {"opaque": [1, 2]}, "format": "future-provider-v9", "index": 0}]}
+      ],
+      "expected": [
+        {"type": "reasoning.future_kind", "payload": {"opaque": [1, 2]}, "format": "future-provider-v9", "index": 0}
+      ]
+    },
+    "reasoning_content_alias": {
+      "deltas": [
+        {"reasoning_content": "Provider alias text."}
+      ],
+      "expected": [],
+      "reasoning": "Provider alias text."
+    }
+  },
+  "rejected": {
+    "signature_object": {"delta": {"reasoning_details": [{"type": "reasoning.text", "text": "x", "signature": {"private": "SENTINEL"}, "index": 0}]}, "field": "reasoning_details[].signature", "value_type": "object"},
+    "text_number": {"delta": {"reasoning_details": [{"type": "reasoning.text", "text": 7, "index": 0}]}, "field": "reasoning_details[].text", "value_type": "integer"},
+    "negative_index": {"delta": {"reasoning_details": [{"type": "reasoning.text", "text": "x", "index": -1}]}, "field": "reasoning_details[].index", "value_type": "integer"},
+    "string_index": {"delta": {"reasoning_details": [{"type": "reasoning.text", "text": "x", "index": "SENTINEL"}]}, "field": "reasoning_details[].index", "value_type": "string"},
+    "fractional_index": {"delta": {"reasoning_details": [{"type": "reasoning.text", "text": "x", "index": 0.5}]}, "field": "reasoning_details[].index", "value_type": "number"},
+    "boolean_type": {"delta": {"reasoning_details": [{"type": true, "text": "x"}]}, "field": "reasoning_details[].type", "value_type": "boolean"},
+    "array_id": {"delta": {"reasoning_details": [{"type": "reasoning.text", "id": ["SENTINEL"]}]}, "field": "reasoning_details[].id", "value_type": "array"},
+    "string_entry": {"delta": {"reasoning_details": ["SENTINEL"]}, "field": "reasoning_details[]", "value_type": "string"},
+    "object_details": {"delta": {"reasoning_details": {"type": "reasoning.text", "text": "SENTINEL"}}, "field": "reasoning_details", "value_type": "object"},
+    "object_reasoning": {"delta": {"reasoning": {"text": "SENTINEL"}}, "field": "reasoning", "value_type": "object"},
+    "array_reasoning_content": {"delta": {"reasoning_content": ["SENTINEL"]}, "field": "reasoning_content", "value_type": "array"}
+  }
+}
