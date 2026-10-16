@@ -304,11 +304,21 @@ Use `/api/organizations/{organization_id}/topics/{topic_id}/inference-runs`:
   token capacity, cited memory and pins.
 - Replaying the same client ID, requester, organization, topic, and parameters
   returns the existing runs without another catalog fetch or provider call.
-  Reusing the ID for different parameters returns 409. The browser retains a
-  lost-response attempt and its captured parameters in memory across topic
-  navigation; retry does not create a new request. This in-memory retry state is
-  cleared by reload, sign-out, or session loss. Inspect existing runs before
-  manually starting another request after reloading.
+  Reusing the ID for different parameters returns 409. While a submission is in
+  flight the conversation shows a sending status. After a network error, HTTP
+  408, or a server error, the browser retains the attempt and its captured
+  parameters in memory across topic navigation, and the conversation explains
+  that the message was saved but acceptance of the reply request is unconfirmed.
+  It shows the failure reason, the model, any selected effort, and where the request's
+  conversation context ends ("Conversation context ends at message #N"). **Retry
+  same request** resends the same client ID, model, effort, and context end, so
+  an accepted request returns its existing runs instead of starting another.
+  **Dismiss pending retry** clears only this browser state: it does not cancel
+  an accepted run, change its accounting, or delete the message; **Stop current
+  work** remains the cancellation control. Any other 4xx answer clears the
+  attempt and shows its error. The in-memory retry state is cleared by reload,
+  sign-out, or session loss. Inspect existing runs before manually starting
+  another request after reloading.
 - `GET` returns the most recent runs, with `limit` of 1–50 (default 20).
   Viewers can read but cannot submit or cancel.
 

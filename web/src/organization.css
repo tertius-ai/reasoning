@@ -232,10 +232,12 @@
 .org-model-run pre { max-height: 220px; overflow: auto; white-space: pre-wrap; font: 13px/1.6 var(--font-mono); }
 .org-reconcile > summary { cursor: pointer; font-size: 12px; }
 .org-reconcile form { display: flex; flex-direction: column; gap: 10px; font-size: 12px; }
-.org-pending-request { display: flex; align-items: center; gap: 8px; }
-.org-pending-request > div { flex: 1; min-width: 0; }
+.org-pending-request { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 8px; }
+.org-pending-request > div:first-child { flex: 1 1 18rem; min-width: 0; }
 .org-pending-request strong, .org-pending-request small { display: block; overflow-wrap: anywhere; }
+.org-pending-request p { margin: 4px 0 0; font-size: 13px; overflow-wrap: anywhere; }
 .org-pending-request small { color: var(--muted); margin-top: 3px; }
+.org-pending-actions { display: flex; flex-wrap: wrap; gap: 8px; }
 .org-app .org-older { display: block; margin: 0 auto 18px; color: var(--muted); }
 .org-app .org-jump { position: absolute; bottom: 12px; right: max(16px, calc((100% - 900px) / 2)); display: grid; place-items: center; width: 34px; height: 34px; padding: 0; border-radius: 50%; background: transparent; color: var(--blue); z-index: 2; backdrop-filter: blur(3px); }
 .org-reconnecting { font-size: 11px; color: var(--amber); margin: 3px 16px; }

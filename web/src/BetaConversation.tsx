@@ -8,9 +8,65 @@ import { createPortal } from "react-dom";
 import { TransportControls, dispatchTopicCommand, useComputeActivity, useTopicCommand } from "./TopicCommands";
 import { useBotActivity } from "./BotPlayback";
 import {
-  ApiError, ModelAttempt, ModelRun,
+  ApiError, ModelAttempt, ModelRun, PendingModelAttempt, UNDESCRIBED_ERROR,
   aborted, decimalBudget, errorMessage, organizationPath, request, topicPath, usd,
 } from "./organization-api";
+
+/** A 4xx answer other than 408 means the server did not accept the request. */
+export const definitiveRejection = (cause: unknown) =>
+  cause instanceof ApiError && cause.status >= 400 && cause.status < 500 && cause.status !== 408;
+
+/** Why acceptance of a reply request is unknown, without claiming either outcome. */
+export function unconfirmedReason(cause: unknown): string {
+  if (!(cause instanceof ApiError)) return "The connection failed before the server answered.";
+  if (cause.status === 408) return "The server timed out (HTTP 408) before confirming it.";
+  const detail = cause.message && cause.message !== UNDESCRIBED_ERROR ? ": " + cause.message.slice(0, 200) : "";
+  return `The server reported an error (HTTP ${cause.status}${detail}) before confirming it.`;
+}
+
+/** Exactly the submitted parameters, so a retry replays the same request. */
+const modelAttemptRequest = ({ client_id, models, max_completion_tokens, context_message_limit, through_sequence, effort }: ModelAttempt): ModelAttempt =>
+  ({ client_id, models, max_completion_tokens, context_message_limit, through_sequence, effort });
+
+/**
+ * Submits a reply request and reports what is known about its acceptance:
+ * cleared when accepted or definitively rejected, otherwise kept with its
+ * client ID so a retry returns an already accepted run instead of a new one.
+ * The outcome is always reported, because the caller's state outlives the view.
+ */
+export async function requestModelReply(organizationId: string, topicId: string, attempt: ModelAttempt,
+  onAttempt: (attempt?: PendingModelAttempt) => void): Promise<void> {
+  const body = modelAttemptRequest(attempt);
+  try {
+    await submitModelAttempt(organizationId, topicId, body);
+    onAttempt(undefined);
+  } catch (cause) {
+    onAttempt(definitiveRejection(cause) ? undefined : { ...body, unconfirmed: { reason: unconfirmedReason(cause) } });
+    throw cause;
+  }
+}
+
+export function PendingReplyRequest({ attempt, busy, retrying, retryBlocked, onRetry, onDismiss }: {
+  attempt: PendingModelAttempt; busy: boolean; retrying: boolean; retryBlocked: string; onRetry: () => void; onDismiss: () => void;
+}) {
+  const model = attempt.models[0];
+  if (!attempt.unconfirmed) return <p role="status" className="org-working">Sending the reply request to {model}…</p>;
+  return <div className="org-pending-request" role="group" aria-label="Unconfirmed reply request">
+    <div>
+      <strong>Reply request not confirmed</strong>
+      <p>Your message was saved, but the server did not confirm the reply request to {model}, so it may or may not
+        have started. {attempt.unconfirmed.reason}</p>
+      <small>Conversation context ends at message #{attempt.through_sequence}{attempt.effort ? " · effort " + attempt.effort : ""}</small>
+      <small>Retry sends the same request: if the server already accepted it, that reply continues and no second request
+        is made. Dismissing clears only this browser's pending retry; it does not cancel an accepted reply or its charges.</small>
+      {retryBlocked && <small role="status">{retryBlocked}</small>}
+    </div>
+    <div className="org-pending-actions">
+      <button type="button" disabled={busy || !!retryBlocked} onClick={onRetry}>{retrying ? "Retrying…" : "Retry same request"}</button>
+      <button type="button" disabled={busy} onClick={onDismiss}>Dismiss pending retry</button>
+    </div>
+  </div>;
+}
 
 export function runFailureMessage(code: string): string {
   const messages: Record<string, string> = {
@@ -62,7 +118,7 @@ function ReconcileCost({ root, run, onUpdated, onAuthLost }: {
 
 export function BetaConversation({ organizationId, topicId, userId, canWrite, canManage, online, attempt, onAttempt, onAuthLost, onActivity, toolbarTarget, hidePlay }: {
   organizationId: string; topicId: string; userId: string; canWrite: boolean; canManage: boolean;
-  online: boolean; attempt?: ModelAttempt; onAttempt: (attempt?: ModelAttempt) => void; onAuthLost: () => void;
+  online: boolean; attempt?: PendingModelAttempt; onAttempt: (attempt?: PendingModelAttempt) => void; onAuthLost: () => void;
   onActivity: (entries: TopicActivity[]) => void;
   toolbarTarget?: HTMLElement | null;
   hidePlay?: boolean;
@@ -71,6 +127,7 @@ export function BetaConversation({ organizationId, topicId, userId, canWrite, ca
   const [threads, setThreads] = useState<{ root_run: string; status: string; reason?: string | null; requested_by: string; tasks: number }[]>([]);
   const [goal, setGoal] = useState<{ id: string; status: string; owned_by: string } | null>(null);
   const [busy, setBusy] = useState(false);
+  const [retrying, setRetrying] = useState(false);
   const [error, setError] = useState("");
   const [connected, setConnected] = useState(false);
   const [pollError, setPollError] = useState("");
@@ -109,31 +166,32 @@ export function BetaConversation({ organizationId, topicId, userId, canWrite, ca
     if (cause instanceof ApiError && cause.status === 401) onAuthLost();
     else setError(errorMessage(cause));
   };
+  const retryBlocked = !canWrite ? "Retry needs write access to this topic."
+    : !online ? "Retry is available when this browser is back online."
+    : !connected ? "Reconnecting to the server before retry is available…" : "";
   const retry = async () => {
-    if (!attempt || busy || !canWrite || !online || !connected) return;
-    setBusy(true); setError("");
+    if (!attempt?.unconfirmed || busy || retryBlocked) return;
+    setBusy(true); setRetrying(true); setError("");
     try {
-      await submitModelAttempt(organizationId, topicId, attempt);
-      if (!alive.current) return;
-      onAttempt(undefined); setRefresh((value) => value + 1);
+      await requestModelReply(organizationId, topicId, attempt, onAttempt);
+      if (alive.current) setRefresh((value) => value + 1);
     } catch (cause) {
-      if (!alive.current) return;
-      if (cause instanceof ApiError && cause.status >= 400 && cause.status < 500 && cause.status !== 408) onAttempt(undefined);
-      failed(cause);
-    } finally { if (alive.current) setBusy(false); }
+      // An unconfirmed outcome is already shown with its new reason.
+      if (alive.current && definitiveRejection(cause)) failed(cause);
+    } finally { if (alive.current) { setBusy(false); setRetrying(false); } }
   };
   const controllable = threads.filter(thread => canWrite && (canManage || thread.requested_by === userId));
   const activeRuns = runs.filter(run => ["queued", "running"].includes(run.status) && !run.cancel_requested
     && canWrite && (canManage || run.requested_by === userId));
   const controlledGoal = goal && canWrite && (canManage || goal.owned_by === userId) ? goal : null;
-  const canPlay = !busy && online && connected && canWrite && (!!attempt || controllable.some(thread => thread.status === "paused")
+  const canPlay = !busy && online && connected && canWrite && (!!attempt?.unconfirmed || controllable.some(thread => thread.status === "paused")
     || !!controlledGoal && ["paused", "blocked"].includes(controlledGoal.status));
   const canStop = !busy && online && (botActive || connected && (computeActive || activeRuns.length > 0
     || controllable.some(thread => thread.status === "active") || controlledGoal?.status === "active"));
   const pausedReason = controllable.find(thread => thread.status === "paused" && thread.reason)?.reason;
   const transport = async (playing: boolean) => {
     if (playing && !canPlay || !playing && !canStop) return;
-    if (playing && attempt) { await retry(); return; }
+    if (playing && attempt?.unconfirmed) { await retry(); return; }
     setBusy(true); setError("");
     try {
       const selected = controllable.filter(thread => thread.status === (playing ? "paused" : "active"));
@@ -159,15 +217,16 @@ export function BetaConversation({ organizationId, topicId, userId, canWrite, ca
   }))); }, [runs, busy, online, connected, canWrite, canManage, userId, root, organizationId, topicId, onActivity, onAuthLost]);
   return <section className="org-beta" aria-label="Agent activity">
     {toolbarTarget && createPortal(<TransportControls {...{ canPlay, canStop, hidePlay }}
-      playTitle={pausedReason ? "Resume retained request — " + runFailureMessage(pausedReason) : undefined}
+      playTitle={attempt?.unconfirmed ? "Retry the unconfirmed reply request"
+        : pausedReason ? "Resume retained request — " + runFailureMessage(pausedReason) : undefined}
       onPlay={() => dispatchTopicCommand(topicId, "play")} onStop={() => dispatchTopicCommand(topicId, "stop")} />, toolbarTarget)}
-    {attempt && <div className="org-pending-request"><div><strong>Reply request needs attention</strong>
-      <small>{attempt.models[0]} · context through message {attempt.through_sequence}</small></div>
-      <button disabled={busy} onClick={() => {
-        if (window.confirm("Abandon this pending retry? The provider may already have accepted the original request.")) {
+    {attempt && <PendingReplyRequest attempt={attempt} busy={busy} retrying={retrying} retryBlocked={retryBlocked}
+      onRetry={() => void retry()} onDismiss={() => {
+        if (window.confirm("Dismiss the pending retry? This clears only the retry kept in this browser. Your saved message stays, "
+          + "and a reply the server already accepted keeps running with its accounting unchanged. Use Stop current work (■) to cancel a running reply.")) {
           onAttempt(undefined); setError("");
         }
-      }}>Abandon</button></div>}
+      }} />}
     {error && <p role="alert" className="org-error">{error}</p>}
     {pollError && <p role="alert" className="org-error">{pollError}</p>}
   </section>;

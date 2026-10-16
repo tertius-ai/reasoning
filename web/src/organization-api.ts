@@ -107,6 +107,12 @@ export type ModelAttempt = {
   client_id: string; models: string[]; max_completion_tokens?: number | null; context_message_limit: number; through_sequence: number;
   effort?: string | null;
 };
+/**
+ * Browser-only state of a reply request. Without `unconfirmed` the submission
+ * is in flight; with it, the submission failed without a definitive answer and
+ * the server may or may not have accepted it.
+ */
+export type PendingModelAttempt = ModelAttempt & { unconfirmed?: { reason: string } };
 export type ModelRun = {
   timing?: { wait_phase: "local_queue" | "preparing_context" | "provider_wait" | "provider_stream" | "tool_execution" | null;
     queue_wait_ms: number | null; preparation_ms: number | null; provider_elapsed_ms: number | null;
@@ -146,6 +152,9 @@ export function csrfCookie(cookie: string): string | null {
   return null;
 }
 
+/** The ApiError message when a failed response carries no string `detail`. */
+export const UNDESCRIBED_ERROR = "Some fields are invalid. Check the form and try again.";
+
 export async function request<T>(path: string, options: { method?: string; body?: unknown; signal?: AbortSignal } = {}): Promise<T> {
   const headers: Record<string, string> = {};
   if (options.body !== undefined) headers["Content-Type"] = "application/json";
@@ -159,7 +168,7 @@ export async function request<T>(path: string, options: { method?: string; body?
   });
   if (!response.ok) {
     const body = await response.json().catch(() => null);
-    throw new ApiError(response.status, typeof body?.detail === "string" ? body.detail : "Some fields are invalid. Check the form and try again.");
+    throw new ApiError(response.status, typeof body?.detail === "string" ? body.detail : UNDESCRIBED_ERROR);
   }
   return response.status === 204 ? undefined as T : response.json();
 }

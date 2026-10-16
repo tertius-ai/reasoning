@@ -58,6 +58,8 @@ for (const loss of ["network", "gateway-timeout"]) test(`shared beta responses s
         supported_parameters: ["max_completion_tokens"], top_provider: { max_completion_tokens: 131072 },
       })) })); return;
     }
+    // Benchmark metadata is optional; the server degrades to an empty snapshot.
+    if (request.url.split("?")[0] === "/api/v1/benchmarks") { response.writeHead(404).end(); return; }
     assert.equal(request.url, "/api/v1/chat/completions");
     assert.equal(request.headers.authorization, "Bearer " + key);
     let body = ""; for await (const chunk of request) body += chunk;
@@ -201,13 +203,32 @@ for (const loss of ["network", "gateway-timeout"]) test(`shared beta responses s
       else await route.fulfill({ status: 504, contentType: "application/json", body: JSON.stringify({ detail: "Gateway timeout after acceptance" }) });
       hiddenComplete = true;
     });
+    const cancellations = [];
+    member.on("request", (sent) => { if (sent.method() === "POST" && /\/cancel$/.test(new URL(sent.url()).pathname)) cancellations.push(sent.url()); });
     await send(member, "One question for the default model.");
     await until(() => hiddenComplete, "lost submission reply delivered");
-    await member.locator(".org-pending-request").waitFor();
-    await member.evaluate(id => window.dispatchEvent(new CustomEvent("reasoning-topic-command", { detail: { topicId: id, command: "play" } })), topic.id);
+    const pending = member.getByRole("group", { name: "Unconfirmed reply request", exact: true });
+    await visible(pending);
+    const explanation = await pending.innerText();
+    assert.match(explanation, /Your message was saved, but the server did not confirm the reply request to test\/one/);
+    assert.match(explanation, loss === "network" ? /The connection failed before the server answered/
+      : /HTTP 504: Gateway timeout after acceptance/);
+    assert.match(explanation, /Conversation context ends at message #\d+/);
+    assert.doesNotMatch(explanation, /needs attention|context through|Abandon/);
     await member.unroute("**/topics/*/inference-runs");
+    if (loss === "network") {
+      // Retry beside the explanation replays the same client ID.
+      await pending.getByRole("button", { name: "Retry same request", exact: true }).click();
+    } else {
+      // Dismissal clears only local recovery state: the accepted run continues.
+      member.once("dialog", (dialog) => dialog.accept());
+      await pending.getByRole("button", { name: "Dismiss pending retry", exact: true }).click();
+    }
+    await until(async () => (await pending.count()) === 0, "pending reply request resolved");
     await visible(reviewer.getByLabel("Streaming response from test/one"));
     await until(() => calls.length === 1, "one provider call, not a replay");
+    assert.deepEqual(cancellations, []);
+    await visible(member.locator(".org-message").filter({ hasText: "One question for the default model." }));
     await member.getByRole("button", { name: "Choose reply model", exact: true }).click();
     await member.getByLabel("All chat models", { exact: true }).check();
     await member.getByRole("radio", { name: /test\/two/ }).check();
