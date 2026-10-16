@@ -179,6 +179,49 @@ def test_frontend_is_same_origin_and_never_exposes_local_workbench(tmp_path):
     assert "frame-ancestors 'none'" in client.get("/").headers["Content-Security-Policy"]
 
 
+def test_only_successful_hashed_assets_are_cacheable(tmp_path):
+    frontend = tmp_path / "frontend"
+    (frontend / "assets").mkdir(parents=True)
+    (frontend / "organization.html").write_text('<script src="/assets/organization-Necs_lms.js"></script>')
+    (frontend / "assets" / "organization-Necs_lms.js").write_text("export const fixture = true;")
+    (frontend / "assets" / "chat.js").write_text("export const unversioned = true;")
+    client = TestClient(create_app(Config(tmp_path / "state", "https://chat.example.org", frontend)))
+    hashed = client.get("/assets/organization-Necs_lms.js")
+    assert hashed.status_code == 200
+    assert hashed.headers["cache-control"] == "public, max-age=31536000, immutable"
+    assert hashed.headers["x-content-type-options"] == "nosniff"
+    assert "script-src 'self'" in hashed.headers["content-security-policy"]
+    revalidated = client.get("/assets/organization-Necs_lms.js", headers={"If-None-Match": hashed.headers["etag"]})
+    assert revalidated.status_code == 304 and revalidated.headers["cache-control"] == "public, max-age=31536000, immutable"
+    for path in ("/assets/chat.js", "/assets/missing-AbCd1234.js", "/", "/api/health"):
+        assert client.get(path).headers["cache-control"] == "no-store", path
+    assert client.get("/assets/missing-AbCd1234.js").status_code == 404
+
+
+def test_hashed_assets_of_retained_releases_stay_available(tmp_path):
+    releases = tmp_path / "opt/reasoning/releases"
+    old, current = releases / ("a" * 64), releases / ("b" * 64)
+    for release, chunk in ((old, "Ledger-OldChunk.js"), (current, "Ledger-NewChunk.js")):
+        (release / "web/assets").mkdir(parents=True)
+        (release / "web/organization.html").write_text("<html></html>")
+        (release / "web/assets" / chunk).write_text("export const release = " + repr(release.name) + ";")
+    (old / "web/assets/unhashed.js").write_text("export const old = true;")
+    (releases / ".release-partial/web/assets").mkdir(parents=True)
+    (releases / ".release-partial/web/assets/Partial-Abcd1234.js").write_text("partial")
+    client = TestClient(create_app(Config(tmp_path / "state", "https://chat.example.org", current / "web")))
+    assert client.get("/assets/Ledger-NewChunk.js").text.endswith(repr(current.name) + ";")
+    retained = client.get("/assets/Ledger-OldChunk.js")
+    assert retained.status_code == 200 and retained.text.endswith(repr(old.name) + ";")
+    assert retained.headers["cache-control"] == "public, max-age=31536000, immutable"
+    for path in ("/assets/unhashed.js", "/assets/Partial-Abcd1234.js", "/assets/..%2F..%2F" + "a" * 64 + "%2Fweb%2Forganization.html"):
+        assert client.get(path).status_code == 404, path
+    standalone = tmp_path / "standalone"
+    (standalone / "assets").mkdir(parents=True)
+    (standalone / "organization.html").write_text("<html></html>")
+    assert TestClient(create_app(Config(tmp_path / "state2", "https://chat.example.org", standalone))).get(
+        "/assets/Ledger-OldChunk.js").status_code == 404
+
+
 def test_frontend_asset_symlinks_cannot_expose_installation_secrets(tmp_path):
     frontend = tmp_path / "frontend"
     (frontend / "assets").mkdir(parents=True)
