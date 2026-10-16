@@ -32,19 +32,23 @@ export function ResearchBlog({ organizationId, hierarchy, canWrite, initialProje
   }, []);
   const fail = (cause: unknown) => { if (cause instanceof ApiError && cause.status === 401) onAuthLost(); else setError(errorMessage(cause)); };
   useEffect(() => {
+    // The published and draft lists are independent: request both at once and show each as it arrives.
     const abort = new AbortController();
-    void (async () => {
-      const published: { posts: KnowledgeEntry[]; next_before: string | null } = await request(root + "/blog?"
-        + (project ? "project=" + encodeURIComponent(project) + "&" : "")
-        + (cursors.published ? "before=" + encodeURIComponent(cursors.published) : ""), { signal: abort.signal });
-      const entries: KnowledgeEntry[] = await request(root + "/knowledge?kind=journal&limit=50"
-        + (project ? "&project_id=" + encodeURIComponent(project) : "")
-        + (cursors.drafts ? "&before=" + encodeURIComponent(cursors.drafts) : ""), { signal: abort.signal });
-      if (!abort.signal.aborted) {
-        setPosts(published.posts); setDrafts(entries.filter(entry => entry.state === "draft")); const last = entries.at(-1);
-        setNext({ published: published.next_before, drafts: entries.length === 50 && last ? `${last.revised_at}:${last.id}` : null });
-      }
-    })().catch(cause => { if (!aborted(cause)) fail(cause); });
+    const failed = (cause: unknown) => { if (!aborted(cause)) fail(cause); };
+    void request<{ posts: KnowledgeEntry[]; next_before: string | null }>(root + "/blog?"
+      + (project ? "project=" + encodeURIComponent(project) + "&" : "")
+      + (cursors.published ? "before=" + encodeURIComponent(cursors.published) : ""), { signal: abort.signal })
+      .then(published => {
+        if (!abort.signal.aborted) { setPosts(published.posts); setNext(current => ({ ...current, published: published.next_before })); }
+      }).catch(failed);
+    void request<KnowledgeEntry[]>(root + "/knowledge?kind=journal&limit=50"
+      + (project ? "&project_id=" + encodeURIComponent(project) : "")
+      + (cursors.drafts ? "&before=" + encodeURIComponent(cursors.drafts) : ""), { signal: abort.signal })
+      .then(entries => {
+        if (abort.signal.aborted) return;
+        setDrafts(entries.filter(entry => entry.state === "draft")); const last = entries.at(-1);
+        setNext(current => ({ ...current, drafts: entries.length === 50 && last ? `${last.revised_at}:${last.id}` : null }));
+      }).catch(failed);
     return () => abort.abort();
   }, [root, refresh, onAuthLost, cursors, project]);
   const edit = async (entry?: KnowledgeEntry) => {

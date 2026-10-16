@@ -57,6 +57,7 @@ async function withApplication(scenario, { hold = () => null } = {}) {
       else if (path.endsWith("/reactions/messages")) data = Object.fromEntries(transcript(topic).map(message =>
         [message.id, { counts: { up: 0, down: 0, upside_down: 0 }, mine: [] }]));
       else if (path.endsWith("/goal") || path.endsWith("/read")) data = null;
+      else if (path.endsWith("/invitation-mail")) data = { enabled: false, daily_limit: null, worker_running: false };
       await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(data) });
     });
     const started = Date.now();
@@ -117,6 +118,17 @@ test("revisiting a topic shows its snapshot at once and the model catalog is fet
     }
     assert.equal(requests.filter(request => request.path.endsWith("/model-prices")).length, 1,
       "two topics and two dialog openings share one catalog transfer");
+    const administration = requests.length;
+    await page.getByRole("button", { name: "Account menu", exact: true }).click();
+    await page.getByRole("button", { name: "Administration", exact: true }).click();
+    const dialog = page.getByRole("dialog", { name: "Testing administration", exact: true });
+    await dialog.locator(".org-admin-list strong").filter({ hasText: "Alice" }).waitFor();
+    const opened = requests.slice(administration).map(request => request.path.split("/").at(-1));
+    for (const other of ["invitations", "invitation-mail", "provider-keys", "policy"]) assert.ok(!opened.includes(other), other);
+    await dialog.getByRole("button", { name: "Invitations", exact: true }).click();
+    for (let waited = 0; !requests.slice(administration).some(request => request.path.endsWith("/invitation-mail")); waited += 50) {
+      assert.ok(waited < 5000, "the invitations tab loads its own data"); await sleep(50);
+    }
   }, { hold: async path => {
     if (holding && path.includes(`/topics/${topics[0]}/`)) await new Promise(resolve => { const previous = release; release = () => { previous(); resolve(); }; });
   } });
