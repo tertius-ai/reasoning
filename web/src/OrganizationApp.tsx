@@ -4,11 +4,11 @@ import ReactMarkdown, { Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import remarkMath from "remark-math";
 import rehypeKatex from "rehype-katex";
-import { BetaConversation } from "./BetaConversation";
+import { BetaConversation, definitiveRejection, requestModelReply } from "./BetaConversation";
 import { ForkOrigin, MessageActions } from "./ChatFeedback";
 import { BotAdministration } from "./BotAdministration";
 import { BotApprovalDialog, useBotApprovals } from "./BotApprovals";
-import { BotConversation, submitModelAttempt } from "./BotConversation";
+import { BotConversation } from "./BotConversation";
 import { withBotModels } from "./botModels";
 import { availableEfforts } from "./ReasoningEffort";
 import { editMentions, encodeMentions, MentionBinding } from "./composerMentions";
@@ -38,7 +38,7 @@ import { BatchInvitations, InvitationDeliveryProgress } from "./BatchInvitations
 import { ProviderKeyUsage } from "./ProviderKeyUsage";
 import {
   Account, ApiError, Channel, EMPTY_HIERARCHY, Hierarchy, InferenceConfiguration, Invitation, InvitationMail, KeyMetadata, KIND_LABEL, KIND_SYMBOL, KnowledgeTool,
-  BotModel, Member, MentionQuery, Message, ModelAttempt, Organization, OrganizationPrices, Policy, Presence, Project, ProjectMember, SearchResult, Session, Topic, TopicKind,
+  BotModel, Member, MentionQuery, Message, ModelAttempt, Organization, PendingModelAttempt, OrganizationPrices, Policy, Presence, Project, ProjectMember, SearchResult, Session, Topic, TopicKind,
   aborted, authorLabel, decimalBudget, errorMessage, invitationEmailLabel, mentionMarkdown, mentionQuery, mentionText, mergeMessages, organizationPath, request, topicPath,
 } from "./organization-api";
 
@@ -636,7 +636,7 @@ function Conversation({ organizationId, topic, members, user, canWrite, canManag
   draft: Draft; updateDraft: (draft: Draft) => void; anchor: number | null;
   onPreference: () => void; onAuthLost: () => void;
   onForked: (topicId: string) => void;
-  modelAttempt?: ModelAttempt; onModelAttempt: (attempt?: ModelAttempt) => void;
+  modelAttempt?: PendingModelAttempt; onModelAttempt: (attempt?: PendingModelAttempt) => void;
   computeAttempt?: ComputeAttempt; onComputeAttempt: (attempt?: ComputeAttempt) => void;
   workflowAttempt?: WorkflowAttempt; onWorkflowAttempt: (attempt?: WorkflowAttempt) => void;
   workflowExecutionAttempt?: WorkflowExecutionAttempt; onWorkflowExecutionAttempt: (attempt?: WorkflowExecutionAttempt) => void;
@@ -898,13 +898,12 @@ function Conversation({ organizationId, topic, members, user, canWrite, canManag
         if (selectedEffort) modelRequest.effort = selectedEffort;
         onModelAttempt(modelRequest);
         try {
-          await submitModelAttempt(organizationId, topic.id, modelRequest);
-          if (alive.current) onModelAttempt(undefined);
+          await requestModelReply(organizationId, topic.id, modelRequest, onModelAttempt);
         } catch (cause) {
           if (!alive.current) return;
-          if (cause instanceof ApiError && cause.status >= 400 && cause.status < 500 && cause.status !== 408) onModelAttempt(undefined);
           if (cause instanceof ApiError && cause.status === 401) onAuthLost();
-          else setError(`Message sent, but ${errorMessage(cause).replace(/^./, (letter) => letter.toLowerCase())}`);
+          // An unconfirmed request is explained, with retry, in the conversation.
+          else if (definitiveRejection(cause)) setError(`Message sent, but ${errorMessage(cause).replace(/^./, (letter) => letter.toLowerCase())}`);
         }
       }
     } catch (cause) {
@@ -952,11 +951,7 @@ function Conversation({ organizationId, topic, members, user, canWrite, canManag
             const attempt = automaticModelAttempt(selectedModel, message.sequence, metadata?.max_completion_tokens ?? 8192);
             if (selectedEffort) attempt.effort = selectedEffort;
             onModelAttempt(attempt);
-            try { await submitModelAttempt(organizationId, topic.id, attempt); onModelAttempt(undefined); }
-            catch (cause) {
-              if (cause instanceof ApiError && cause.status >= 400 && cause.status < 500 && cause.status !== 408) onModelAttempt(undefined);
-              throw cause;
-            }
+            await requestModelReply(organizationId, topic.id, attempt, onModelAttempt);
           } : undefined}
           kind={topic.kind} canWrite={canWrite} onForked={(id) => {
             try { if (selectedModel) localStorage.setItem(`reasoning-model:${user.id}:${organizationId}:${id}`, selectedModel); }
@@ -1014,7 +1009,8 @@ function Conversation({ organizationId, topic, members, user, canWrite, canManag
       <SlashCommandPalette topicId={topic.id} kind={topic.kind} text={draft.text} onSelect={chooseCommand} />
       <label className="org-visually-hidden" htmlFor="org-message">Message</label>
       <textarea id="org-message" ref={textarea} placeholder={!canWrite ? "You have read-only access" : topic.kind === "beta" && modelAttempt
-        ? "Resolve the pending model request before sending another message" : topic.kind === "beta" && selectedModel
+        ? modelAttempt.unconfirmed ? "Retry or dismiss the unconfirmed reply request before sending another message"
+          : "Sending the reply request…" : topic.kind === "beta" && selectedModel
       ? `Message ${replyCatalog?.models.find(model => model.id === selectedModel)?.execution_source === "bot"
         ? replyCatalog.models.find(model => model.id === selectedModel)?.name : selectedModel}…` : "Write a message…"} value={draft.text}
         disabled={!canWrite || sending || (topic.kind === "beta" && !!modelAttempt)} maxLength={16000} rows={1} onChange={(event) => {
@@ -1210,7 +1206,7 @@ export function OrganizationApp() {
   const [members, setMembers] = useState<Member[]>([]);
   const [selection, setSelection] = useState<{ topic: string; anchor: number | null } | null>(null);
   const [drafts, setDrafts] = useState<Record<string, Draft>>({});
-  const [modelAttempts, setModelAttempts] = useState<Record<string, ModelAttempt | undefined>>({});
+  const [modelAttempts, setModelAttempts] = useState<Record<string, PendingModelAttempt | undefined>>({});
   const [computeAttempts, setComputeAttempts] = useState<Record<string, ComputeAttempt | undefined>>({});
   const [workflowAttempts, setWorkflowAttempts] = useState<Record<string, WorkflowAttempt | undefined>>({});
   const [workflowExecutionAttempts, setWorkflowExecutionAttempts] = useState<Record<string, WorkflowExecutionAttempt | undefined>>({});

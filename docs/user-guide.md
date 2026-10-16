@@ -18,6 +18,13 @@ Markdown, code blocks, tables, and TeX render in messages. Raw HTML is not execu
 The fork icon opens beta-topic forking and available message actions. Forked
 conversations have a captured history, not access to future origin messages.
 
+If a beta reply request is sent but the server's answer is lost, the
+conversation shows **Reply request not confirmed**: the message is saved, and
+the request may or may not have started. **Retry same request** resends it
+without creating a second request if the first was accepted. **Dismiss pending
+retry** only clears that retry from this browser; it does not stop an accepted
+reply or its charges. Use **Stop current work** to cancel running work.
+
 ## Agents and bots
 
 A beta coordinator works through the same conversation tools as its delegates.
