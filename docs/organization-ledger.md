@@ -17,6 +17,10 @@ expanded statements reflow their column instead of overlapping other nodes.
 The statement list is a
 separate scrollable view. Records are the canonical server ledger, not topic
 transcript copies. Browser rendering never fetches external Markdown images.
+The statement list and the graph each refresh every five seconds; **Refresh** and
+recording a statement refresh both at once. Opening a statement reads its record
+once and hands it to the inspector, whose code starts loading when a statement is
+selected, pointed at or focused.
 
 Humans can mark the inspected claim revision **Checked by a human**, optionally
 adding a note. Checks retain the authenticated person's name and ID, timestamp,

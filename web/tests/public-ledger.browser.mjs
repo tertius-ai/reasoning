@@ -58,9 +58,15 @@ test("ledger graph expands exact statements without overlap, and humans check in
     await page.getByLabel("Password", { exact: true }).fill(password);
     await page.getByRole("button", { name: "Sign in", exact: true }).click();
     await page.getByRole("navigation", { name: "Projects and channels" }).waitFor();
+    const reads = [];
+    page.on("request", request => { if (request.method() === "GET") { const target = new URL(request.url()); reads.push(target.pathname + target.search); } });
+    const opened = Date.now();
     await page.goto(url + "/organization.html?organization=" + session.organization_id + "&view=ledger&project=" + project.id);
     const node = page.locator(`[data-claim-id="${first.claim_id}"]`), below = page.locator(`[data-claim-id="${second.claim_id}"]`);
     await node.waitFor(); const closed = await node.boundingBox();
+    await page.waitForTimeout(Math.max(0, opened + 3000 - Date.now()));
+    // The statement list arriving does not restart the graph; it refreshes on its own five-second cycle.
+    assert.equal(reads.filter(path => path.includes("/mathematics/graph")).length, 1, "opening the ledger reads its graph once");
     await node.locator("annotation[encoding='application/x-tex']").first().waitFor({ state: "attached" });
     assert.deepEqual(await node.locator("annotation[encoding='application/x-tex']").allTextContents(), ["n", "n=n"]);
     assert.equal(await node.locator(".katex-mathml").first().evaluate(element => getComputedStyle(element).position), "absolute");
@@ -78,6 +84,8 @@ test("ledger graph expands exact statements without overlap, and humans check in
     await node.getByRole("button", { name: `Inspect proof ${first.claim_id}` }).click();
     const checks = page.getByRole("region", { name: "Human checks" });
     await until(async () => await checks.count() === 2);
+    assert.equal(reads.filter(path => path.endsWith(`/mathematics/${first.claim_id}?history=true`)).length, 1,
+      "the inspector reuses the record that opened it");
     await checks.first().getByLabel("Human check note").fill("Checked the full statement and its quantifiers.");
     await checks.first().getByRole("button", { name: "Checked by a human", exact: true }).click();
     await checks.first().getByText("✓ Checked by Owner", { exact: true }).waitFor();
