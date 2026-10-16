@@ -79,6 +79,32 @@ def test_real_recipe_has_bounded_source_pin_without_embedded_credentials():
         validate_noether(lock)
 
 
+@pytest.mark.parametrize("repository, url", [
+    ("https://github.com/other-owner/noether", None),  # archive URL still names the recipe's owner
+    ("http://github.com/tertius-ai/noether", None),
+    ("https://github.com/tertius-ai/noether-fork", None),
+    ("https://example.org/tertius-ai/noether", None),
+    (None, "https://codeload.github.com/other-owner/noether/tar.gz/{commit}"),
+])
+def test_archive_url_must_come_from_the_locked_source_repository(repository, url):
+    lock = json.loads((ROOT / "images/research-cpu/inputs.json").read_bytes())
+    noether = lock["noether"]
+    if repository is not None:
+        noether["source_repository"] = repository
+    if url is not None:
+        noether["source_archive"]["url"] = url.format(commit=noether["commit"])
+    with pytest.raises(ValueError, match="bounded hash-locked"):
+        validate_noether(lock)
+
+
+def test_consistent_repository_and_archive_from_another_owner_are_accepted():
+    lock = json.loads((ROOT / "images/research-cpu/inputs.json").read_bytes())
+    noether = lock["noether"]
+    noether["source_repository"] = "https://github.com/other-owner/noether"
+    noether["source_archive"]["url"] = "https://codeload.github.com/other-owner/noether/tar.gz/" + noether["commit"]
+    assert validate_noether(lock)["commit"] == NOETHER_PUBLIC_COMMIT
+
+
 def test_git_override_exports_only_the_locked_object_not_private_working_tree(tmp_path):
     repository = tmp_path / "repository"
     repository.mkdir()

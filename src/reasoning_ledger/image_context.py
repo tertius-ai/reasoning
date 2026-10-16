@@ -24,6 +24,8 @@ MAXIMUM_ARCHIVE = 64 * 1024**2
 MAXIMUM_EXPANDED = 256 * 1024**2
 NOETHER_PUBLIC_COMMIT = "4c92c269c59da02a4d32c833c2ee093407f8e22f"
 NOETHER_VERSION = "0.3.2"
+# The image lock names the public repository; the pinned commit, not the repository name, is the trust anchor.
+NOETHER_REPOSITORY = re.compile(r"https://github\.com/([A-Za-z0-9](?:[A-Za-z0-9-]{0,38}))/noether")
 
 
 def validate_noether(lock):
@@ -36,9 +38,10 @@ def validate_noether(lock):
         raise ValueError("Noether image recipe must use the approved public release")
     archive = value.get("source_archive", {})
     url = urlsplit(archive.get("url", ""))
-    if (archive.get("transport") != "https" or url.scheme != "https" or url.netloc != "codeload.github.com"
-            or value.get("source_repository") != "https://github.com/tertius-ai/noether"
-            or url.query or url.fragment or url.path != "/tertius-ai/noether/tar.gz/" + value["commit"]
+    repository = NOETHER_REPOSITORY.fullmatch(value.get("source_repository", ""))
+    if (repository is None or archive.get("transport") != "https" or url.scheme != "https"
+            or url.netloc != "codeload.github.com" or url.query or url.fragment
+            or url.path != f"/{repository[1]}/noether/tar.gz/{value['commit']}"
             or archive.get("strip_prefix") != "noether-" + value["commit"]
             or not re.fullmatch(r"[a-f0-9]{64}", archive.get("sha256", ""))
             or type(archive.get("bytes")) is not int or not 0 < archive["bytes"] <= MAXIMUM_ARCHIVE):
