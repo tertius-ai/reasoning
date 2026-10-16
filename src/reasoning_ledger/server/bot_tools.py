@@ -16,6 +16,23 @@ from .store import StoreError
 from .workbench_tools import DESCRIPTIONS, OPERATIONS, READS, MathematicalLedger, operation_schema
 
 
+def argument_problem(error):
+    """Describe a schema violation from schema-defined facts only; argument values are never echoed."""
+    location = "/".join(str(part)[:60] for part in error.absolute_path)[:200] or "arguments"
+    value = error.validator_value
+    if error.validator == "required" and isinstance(error.instance, dict):
+        reason = "missing required " + ", ".join(str(name) for name in value if name not in error.instance)
+    elif error.validator == "additionalProperties":
+        allowed = sorted(error.schema.get("properties", {}))
+        reason = "has unsupported fields; allowed: " + ", ".join(allowed) if allowed else "accepts no fields"
+    elif error.validator in {"type", "enum", "const", "minLength", "maxLength", "minimum", "maximum",
+                             "minItems", "maxItems", "pattern"}:
+        reason = f"violates {error.validator} {json.dumps(value)[:300]}"
+    else:
+        reason = f"violates {error.validator}"
+    return f"{location} {reason}"
+
+
 class BotTools:
     def __init__(self, runtime, *, compute=None):
         self.runtime, self.store = runtime, runtime.store
@@ -190,8 +207,8 @@ class BotTools:
             self.runtime.bots._meter(credential, "write")
         try:
             Draft202012Validator(definition["input_schema"]).validate(arguments)
-        except ValidationError:
-            raise StoreError(400, "invalid mathematical tool arguments") from None
+        except ValidationError as exc:
+            raise StoreError(400, f"invalid mathematical tool arguments for {name}: {argument_problem(exc)}") from None
         scope = context["scope"]
         if name not in {"tool_search", "tool_call", "topic_context"}:
             with self.store.transaction(write=True) as db:

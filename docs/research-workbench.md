@@ -161,7 +161,7 @@ Discovery never adds permissions. Each invocation has a durable receipt.
 | Family | Main tools |
 | --- | --- |
 | Mathematical record | `ledger_status`, `ledger_search`, `ledger_read`, `ledger_graph`, `ledger_blockers`, `ledger_blast_radius` |
-| Research writes | `ledger_claim`, `ledger_refine`, `ledger_prove`, `ledger_revise_proof`, `ledger_withdraw`, `ledger_abandon`, `ledger_verify` (negative/inconclusive review evidence only) |
+| Research writes | `ledger_claim`, `ledger_refine`, `ledger_prove`, `ledger_revise_proof`, `ledger_withdraw`, `ledger_abandon`, `ledger_verify` (negative/inconclusive review evidence only; `evidence` needs a nonempty string `kind`, for example `{"kind": "proof-review", "text": "…"}`) |
 | Independent review | `ledger_request_review`, `ledger_reviews`, `ledger_cancel_review` |
 | Bibliography | `ledger_reference`, `ledger_refine_reference`, `ledger_references`, `ledger_search_references`, bibliography aliases |
 | Original context | `topic_history`, `topic_message_read`, `tool_receipt_read`, `tasks`, `goal_checkpoint` |

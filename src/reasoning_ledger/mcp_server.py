@@ -295,7 +295,9 @@ def build_server(
             "(counterexample; response includes the blast radius) against a "
             "claim revision. Positive verdicts (verified / established) are "
             "not yours to record — request an independent review with "
-            "ledger_request_review. revision_id defaults to current."
+            "ledger_request_review. revision_id defaults to current. evidence "
+            "must contain a nonempty string kind, for example "
+            '{"kind": "proof-review", "text": "the substantive report"}.'
         )
     )
     def ledger_verify(
