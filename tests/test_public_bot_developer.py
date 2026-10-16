@@ -270,7 +270,9 @@ def test_trusted_requester_approves_own_exact_issue_with_attribution_and_audit(f
     assert pending(developer, owner_id, org) == []
     [row] = pending(developer, other, org)
     assert row["id"] == approval["id"] and row["approval_role"] == "requester" and row["body"].endswith(attribution)
-    assert developer.runtime.listing(other, org, topics[1])[0]["approval_by"] == "requester"
+    # Runs created in the same second have no defined order, so select the requested run by id.
+    [listed] = [item for item in developer.runtime.listing(other, org, topics[1]) if item["id"] == run["id"]]
+    assert listed["approval_by"] == "requester"
     with pytest.raises(StoreError):
         developer.approve(owner_id, org, approval["id"], True)  # The owner delegated this decision.
     with pytest.raises(StoreError, match="changed"):
