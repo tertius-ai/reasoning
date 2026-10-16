@@ -7,7 +7,7 @@ import "./chat-feedback.css";
 const emojis = { up: "👍", down: "👎", upside_down: "🙃" } as const;
 const labels = { up: "Thumbs up", down: "Thumbs down", upside_down: "Upside-down smile" };
 type Emoji = keyof typeof emojis;
-type Feedback = { counts: Record<Emoji, number>; mine: Emoji[]; reactors?: Record<Emoji, { id: string; name: string }[]> };
+export type Feedback = { counts: Record<Emoji, number>; mine: Emoji[]; reactors?: Record<Emoji, { id: string; name: string }[]> };
 
 export function CopyOutputButton({ text }: { text: string }) {
   const [error, setError] = useState("");
@@ -114,21 +114,25 @@ export function ReactionChips({ feedback, canWrite, busy, onToggle }: {
   })}</>;
 }
 
-export function ReactionBar({ organizationId, topicId, targetKind, targetId, nodeId, canWrite = true, onAuthLost }: {
+export function ReactionBar({ organizationId, topicId, targetKind, targetId, nodeId, canWrite = true, onAuthLost, batched = false, preloaded }: {
   organizationId: string; topicId: string; targetKind: "message" | "run" | "bot" | "node"; targetId: string; nodeId?: string;
   canWrite?: boolean; onAuthLost?: () => void;
+  /** The conversation reads this target's reactions in one request for its whole message page. */
+  batched?: boolean; preloaded?: Feedback;
 }) {
-  const [feedback, setFeedback] = useState<Feedback>({ counts: { up: 0, down: 0, upside_down: 0 }, mine: [] });
+  const [feedback, setFeedback] = useState<Feedback>(preloaded ?? { counts: { up: 0, down: 0, upside_down: 0 }, mine: [] });
   const [busy, setBusy] = useState(false), [error, setError] = useState("");
   const path = topicPath(organizationId, topicId) + "/reactions/" + targetKind + "/" + encodeURIComponent(targetId)
     + (nodeId ? "?node_id=" + encodeURIComponent(nodeId) : "");
+  useEffect(() => { if (preloaded) setFeedback(preloaded); }, [preloaded]);
   useEffect(() => {
+    if (batched) return;
     const controller = new AbortController();
     void request<Feedback>(path, { signal: controller.signal }).then(setFeedback).catch(cause => {
       if (!controller.signal.aborted && cause instanceof ApiError && cause.status === 401) onAuthLost?.();
     });
     return () => controller.abort();
-  }, [path, onAuthLost]);
+  }, [path, onAuthLost, batched]);
   const toggle = (emoji: Emoji) => {
     setBusy(true); setError("");
     void request<Feedback>(path, { method: "PUT", body: { emoji, active: !feedback.mine.includes(emoji) } })
@@ -147,8 +151,9 @@ export function ReactionBar({ organizationId, topicId, targetKind, targetId, nod
   </span>;
 }
 
-export function MessageActions({ organizationId, topicId, messageId, kind, canWrite, onForked, onAuthLost, message, canEdit, onEdited, onReplyAgain, people = [] }: {
+export function MessageActions({ organizationId, topicId, messageId, kind, canWrite, onForked, onAuthLost, message, canEdit, onEdited, onReplyAgain, people = [], reactions, batchedReactions = false }: {
   organizationId: string; topicId: string; messageId: string; kind: string; canWrite: boolean;
+  reactions?: Feedback; batchedReactions?: boolean;
   onForked?: (topicId: string) => void; onAuthLost?: () => void;
   message?: Message; canEdit?: boolean; onEdited?: (message: Message) => void;
   onReplyAgain?: () => Promise<void>;
@@ -165,7 +170,8 @@ export function MessageActions({ organizationId, topicId, messageId, kind, canWr
   };
   const hasMenu = (kind === "beta" && canWrite) || canEdit || Boolean(message?.revision);
   return <div className={`chat-message-actions${hasMenu ? " chat-has-fork" : ""}${message ? " chat-has-copy" : ""}`}>
-    <ReactionBar {...{ organizationId, topicId, canWrite, onAuthLost }} targetKind="message" targetId={messageId} />
+    <ReactionBar {...{ organizationId, topicId, canWrite, onAuthLost }} targetKind="message" targetId={messageId}
+      batched={batchedReactions} preloaded={reactions} />
     {hasMenu && <ActionMenu label="Message actions" className="chat-fork-launcher" icon={<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" aria-hidden="true"><circle cx="7" cy="5" r="2"/><circle cx="17" cy="5" r="2"/><circle cx="7" cy="19" r="2"/><path d="M7 7v10m10-10v3a4 4 0 0 1-4 4H7"/></svg>}>
       {close => <>{kind === "beta" && canWrite && <button type="button" role="menuitem" onClick={() => {
         setOpen(true); if (!clientId) setClientId(crypto.randomUUID()); close();

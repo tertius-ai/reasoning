@@ -5,7 +5,7 @@ import remarkGfm from "remark-gfm";
 import remarkMath from "remark-math";
 import rehypeKatex from "rehype-katex";
 import { BetaConversation, definitiveRejection, requestModelReply } from "./BetaConversation";
-import { ForkOrigin, MessageActions } from "./ChatFeedback";
+import { Feedback, ForkOrigin, MessageActions } from "./ChatFeedback";
 import { BotApprovalDialog, useBotApprovals } from "./BotApprovals";
 import { BotConversation } from "./BotConversation";
 import { withBotModels } from "./botModels";
@@ -821,6 +821,24 @@ function Conversation({ organizationId, topic, members, user, canWrite, canManag
       viewport.current.scrollTop = viewport.current.scrollHeight;
   }, [messages]);
 
+  // One permission-scoped request reads reactions for every newly loaded message; a reaction change then
+  // updates only its own message.
+  const [reactions, setReactions] = useState<Record<string, Feedback>>({});
+  const reactionsRequested = useRef(new Set<string>());
+  useEffect(() => {
+    const pending = messages.map(message => message.id).filter(id => !reactionsRequested.current.has(id));
+    for (let start = 0; start < pending.length; start += 200) {
+      const ids = pending.slice(start, start + 200);
+      ids.forEach(id => reactionsRequested.current.add(id));
+      void request<Record<string, Feedback>>(root + "/reactions/messages?ids=" + ids.map(encodeURIComponent).join(","))
+        .then(value => { if (alive.current) setReactions(current => ({ ...current, ...value })); })
+        .catch(cause => {
+          ids.forEach(id => reactionsRequested.current.delete(id));
+          if (cause instanceof ApiError && cause.status === 401) onAuthLost();
+        });
+    }
+  }, [messages, root, onAuthLost]);
+
   useEffect(() => {
     const mark = () => {
       const sequence = messages.at(-1)?.sequence ?? 0;
@@ -920,7 +938,7 @@ function Conversation({ organizationId, topic, members, user, canWrite, canManag
         <MessageMarkdown markdown={normalizeMathDelimiters(mentionMarkdown(message.content, mentionPeople))} />
         {message.author_kind === "assistant" && <MessageUsageDetails usage={message.usage} />}
         <MessageActions organizationId={organizationId} topicId={topic.id} messageId={message.id}
-          people={mentionPeople}
+          people={mentionPeople} batchedReactions reactions={reactions[message.id]}
           message={message} canEdit={canWrite && message.author_kind !== "assistant" && message.author_kind !== "bot" && message.author_id === user.id}
           onEdited={updated => setMessages(existing => mergeMessages(existing, [updated]))}
           onReplyAgain={canReplyAgain ? async () => {
@@ -938,7 +956,7 @@ function Conversation({ organizationId, topic, members, user, canWrite, canManag
             onForked(id);
           }} onAuthLost={onAuthLost} />
       </article>)}</div></> }));
-  }, [messages, workflowRunKey, topic.kind, topic.id, mentionPeople, members, user.id, organizationId, canWrite, canReplyAgain, onAuthLost]);
+  }, [messages, reactions, workflowRunKey, topic.kind, topic.id, mentionPeople, members, user.id, organizationId, canWrite, canReplyAgain, onAuthLost]);
   return <MediaScope.Provider value={{ organizationId, topicId: topic.id }}><section className="org-conversation" aria-label="Topic conversation">
     {texOpen && <TexRequestDialog bots={botModels} names={botNames} onClose={() => setTexOpen(false)} onPrepare={(source, bot) => {
       const label = `@${botNames[bot.bot_id] ?? bot.name}`;

@@ -166,6 +166,33 @@ def test_reactions_require_current_topic_scope_and_human_write_access(installati
     assert denied.value.status in (403, 404)
 
 
+def test_message_page_reactions_are_one_scoped_read(installation):
+    _, state, client, owner, topics = prepare(installation)
+    org, topic, user = owner["organization_id"], topics[1]["id"], owner["user_id"]
+    run, answer = response(state, owner, topic, "Useful result", MODELS[1])
+    human = state.store.messages(user, org, topic)[0]
+    single = f"/api/organizations/{org}/topics/{topic}/reactions/message/"
+    assert client.put(single + answer["id"], json={"emoji": "up", "active": True}).status_code == 200
+    batch = client.get(f"/api/organizations/{org}/topics/{topic}/reactions/messages",
+                       params={"ids": ",".join([human["id"], answer["id"], "0" * 32, answer["id"]])})
+    assert batch.status_code == 200, batch.text
+    assert batch.headers["cache-control"] == "no-store"
+    assert set(batch.json()) == {human["id"], answer["id"]}, "unknown messages have no entry"
+    for message in (human, answer):
+        assert batch.json()[message["id"]] == client.get(single + message["id"]).json()
+    assert batch.json()[answer["id"]]["target_key"] == "run:" + run["id"]
+    too_many = ",".join(f"{index:032x}" for index in range(201))
+    assert client.get(f"/api/organizations/{org}/topics/{topic}/reactions/messages", params={"ids": too_many}).status_code == 400
+    private_project = state.store.create_entity(user, org, "projects", "Private", visibility="private", owner_id=user)
+    channel = state.store.create_entity(user, org, "channels", "secret", private_project["id"])
+    private = state.store.create_entity(user, org, "topics", "private", channel["id"], "alpha")
+    secret = state.store.post_message(user, org, private["id"], "Secret", "secret")
+    _, _, member = invited(installation)
+    with pytest.raises(StoreError) as denied:
+        ChatFeedback(state.store).read_messages(member["user_id"], org, private["id"], [secret["id"]])
+    assert denied.value.status in (403, 404)
+
+
 def test_private_model_feedback_is_filtered_for_each_reader(installation):
     _, state, client, owner, topics = prepare(installation)
     org, user = owner["organization_id"], owner["user_id"]

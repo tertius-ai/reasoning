@@ -6,6 +6,7 @@ import time
 from .store import StoreError, _row
 
 EMOJIS = ("up", "down", "upside_down")
+MESSAGE_BATCH = 200
 
 
 def bot_source(db, row):
@@ -29,13 +30,17 @@ class ChatFeedback:
 
     def target(self, db, user, org, topic, kind, target, node=None, *, write=False):
         self.store._topic_access(db, user, org, topic, write=write)
+        return self._resolve(db, org, topic, kind, target, node)
+
+    def _resolve(self, db, org, topic, kind, target, node=None):
+        """Canonical feedback target within a topic whose access the caller has already checked."""
         if kind == "message":
             row = _row(
                 db.execute("SELECT * FROM messages WHERE organization_id=? AND topic_id=? AND id=?", (org, topic, target)).fetchone()
             )
             # One physical model response has one feedback target, including its chat rendering.
             if row.get("inference_run_id"):
-                return self.target(db, user, org, topic, "run", row["inference_run_id"], write=write)
+                return self._resolve(db, org, topic, "run", row["inference_run_id"])
             model = row["assistant_model"] if row["sender_kind"] == "assistant" else None
             provenance = db.execute(
                 "SELECT source_model FROM fork_message_sources WHERE organization_id=? AND message_id=?", (org, target)
@@ -44,7 +49,7 @@ class ChatFeedback:
                 model = provenance[0]
             bot = bot_source(db, row)
             if bot:
-                return self.target(db, user, org, topic, "bot", bot["id"], write=write)
+                return self._resolve(db, org, topic, "bot", bot["id"])
             return "message:" + target, model
         if kind == "run":
             row = _row(
@@ -77,9 +82,9 @@ class ChatFeedback:
                 ).fetchone()
             )
             if row.get("inference_run_id"):
-                return self.target(db, user, org, topic, "run", row["inference_run_id"], write=write)
+                return self._resolve(db, org, topic, "run", row["inference_run_id"])
             if row.get("bot_run_id"):
-                return self.target(db, user, org, topic, "bot", row["bot_run_id"], write=write)
+                return self._resolve(db, org, topic, "bot", row["bot_run_id"])
             if row["status"] not in ("succeeded", "failed"):
                 raise StoreError(409, "this node has no retained result to react to")
             return f"node:{target}:{node}:{row['attempt']}", None
@@ -89,6 +94,28 @@ class ChatFeedback:
         with self.store.transaction() as db:
             key, _ = self.target(db, user, org, topic, kind, target, node)
             return self._read(db, user, org, key)
+
+    def read_messages(self, user, org, topic, message_ids):
+        """Reactions for many messages of one topic after one access check.
+
+        Messages that are absent from the topic or whose response has no retained output have no entry,
+        matching the 404/409 the single-target read returns for them.
+        """
+        ids = list(dict.fromkeys(message_ids))
+        if len(ids) > MESSAGE_BATCH:
+            raise StoreError(400, f"request reactions for at most {MESSAGE_BATCH} messages")
+        with self.store.transaction() as db:
+            self.store._topic_access(db, user, org, topic)
+            result = {}
+            for message in ids:
+                try:
+                    key, _ = self._resolve(db, org, topic, "message", message)
+                except StoreError as exc:
+                    if exc.status not in (404, 409):
+                        raise
+                    continue
+                result[message] = self._read(db, user, org, key)
+            return result
 
     @staticmethod
     def _read(db, user, org, key):
