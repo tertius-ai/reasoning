@@ -163,8 +163,12 @@ uv run --locked reasoning-bot connect --server https://chat.example.org \
 `--no-browser` prints the approval URL for another computer. This does not skip
 human approval. Local tools remain disabled unless explicitly requested.
 Keep the runner process running, then type `@` and select the bot in a granted topic. By
-default only its owner's mentions invoke it; `--allow-other-users` explicitly
-trusts other humans in those topics. Bot/assistant messages never invoke it.
+default only its owner's mentions invoke it; `make bot-run BOT_ALLOW_OTHER_USERS=1`
+(`reasoning-bot run --allow-other-users`) explicitly trusts other humans in those
+topics. Without it, another member's mention is not run: the topic shows a
+cancelled bot activity under that message saying the bot accepts requests only
+from its owner. No CLI is invoked, the request text is not retained in the bot
+run, and the bot posts no reply. Bot/assistant messages never invoke it.
 Each invocation starts with the current human request or workflow node prompt,
 the latest twenty authorized messages through its captured sequence, and the
 beta topic's system instructions. Forks use their own copied history, never the
@@ -325,7 +329,7 @@ not private reasoning text. Unknown outcomes are held, never automatically rerun
 In **My bots → Developer tools**, enable a bot and specify exact GitHub
 `owner/repository` allowlists and other permitted organization requesters.
 The owner is always permitted; other requesters also need the runner's
-`--allow-other-users` policy and current topic write access. Disabling or changing
+other-user policy (`BOT_ALLOW_OTHER_USERS=1`) and current topic write access. Disabling or changing
 developer access invalidates pending approvals. This grant is separate from local
 CAS execution and does not expose SSH, shell, deployment credentials or raw logs.
 The `server_diagnostics` tool returns sanitized counts, status buckets and

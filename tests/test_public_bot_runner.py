@@ -98,3 +98,60 @@ def test_mention_runner_model_routing_canonical_tools_and_post_receipt(fixture, 
         assert db.execute("SELECT COUNT(*) FROM bot_runs").fetchone()[0] == 1
         assert db.execute("SELECT COUNT(*) FROM llm_runs").fetchone()[0] == 0
         assert "bot/" + bot["id"] in json.dumps([dict(row) for row in db.execute("SELECT * FROM mathematical_records")])
+
+
+@pytest.mark.parametrize("server_feedback", [True, False])
+def test_owner_only_policy_records_a_visible_refusal_without_invoking_the_cli(fixture, tmp_path, server_feedback):
+    from test_public_bots import member
+
+    store, owner, topics, _, _, bots = fixture
+    org = owner["organization_id"]
+    requester = member(fixture)
+    bot = bots.create(owner["user_id"], org, "Owner bot", topics[1:], ["messages:read", "messages:write"], personal=True)
+    runtime, forwarded = BotRuntime(bots), []
+    root, workspace = tmp_path / "private", tmp_path / "workspace"
+    root.mkdir(mode=0o700)
+    workspace.mkdir(mode=0o700)
+    message = store.post_message(requester, org, topics[1], f"@[{bot['id']}] Please open an issue", "other-mention")
+
+    class Client:
+        def messages(self, after, limit):
+            return bots.messages(bot["token"], after, limit)
+
+        def _request(self, method, path, body=None):
+            if path == "/api/bot/runtime":
+                advertised = runtime.advertise(bot["token"], **body)
+                return advertised if server_feedback else {key: advertised[key] for key in ("models", "policy")}
+            if path == "/api/bot/runs/from-message":
+                forwarded.append(body["message_id"])
+                return runtime.from_message(bot["token"], body["message_id"])
+            if path == "/api/bot/runs/claim":
+                return runtime.claim(bot["token"])
+            raise AssertionError(path)
+
+    def runner(*arguments, **options):
+        raise AssertionError("a refused mention never starts the CLI")
+
+    agent = {"engine": "codex", "workspace": str(workspace), "local_tools": False, "models": ["default"]}
+    binding = {"server": "https://example.org", "bot_id": bot["id"], "owner_id": owner["user_id"], "allow_other_users": False}
+    result = runtime_step(Client(), root, {"server": binding["server"], "token": bot["token"]}, agent, binding, runner=runner)
+    assert result == {"replied": False, "cursor": message["sequence"]}
+    runs = runtime.listing(requester, org, topics[1])
+    if not server_feedback:
+        assert forwarded == [] and runs == []
+        return
+    assert forwarded == [message["id"]]
+    [declined] = runs
+    assert declined["status"] == "cancelled" and declined["error_code"] == "requester_not_permitted"
+    assert declined["requested_by"] == requester and declined["context_through_sequence"] == message["sequence"]
+    assert declined["output_text"] == ""
+    with store.transaction() as db:
+        assert db.execute("SELECT prompt FROM bot_runs WHERE id=?", (declined["id"],)).fetchone()[0] == ""
+    # A lost response is retried idempotently and never queues work.
+    assert runtime.from_message(bot["token"], message["id"])["id"] == declined["id"]
+    assert runtime.claim(bot["token"]) is None
+    # When the owner trusts other members, a new mention is admitted normally.
+    runtime.advertise(bot["token"], "codex", ["default"], True, False)
+    admitted = store.post_message(requester, org, topics[1], f"@[{bot['id']}] Now please", "other-mention-2")
+    queued = runtime.from_message(bot["token"], admitted["id"])
+    assert queued["status"] == "queued" and queued["requested_by"] == requester

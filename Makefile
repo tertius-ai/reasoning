@@ -26,6 +26,7 @@ OPERATOR_PUBLIC_KEY ?=
 RECOVERY_KIT ?= $(HOME)/reasoning-operator-recovery.rnrk
 BOT_SERVER ?=
 BOT_PAIR_ONLY ?= 0
+BOT_ALLOW_OTHER_USERS ?= 0
 BOT_STATE ?= $(if $(wildcard $(HOME)/.reasoning-bot/config.json),$(HOME)/.reasoning-bot,$(if $(XDG_DATA_HOME),$(XDG_DATA_HOME),$(HOME)/.local/share)/reasoning/bots)
 BOT_CONFIG ?= $(BOT_STATE)/config.json
 DEV_REPOSITORY ?=
@@ -52,6 +53,7 @@ help:
 		'make bot-connect Prompt for the server, pair a personal CLI bot, and keep it online' \
 		'make bot-connect BOT_PAIR_ONLY=1  Pair without starting the runner' \
 		'make bot-run    Start a paired bot with automatic reconnection; Ctrl-C to stop' \
+		'make bot-run BOT_ALLOW_OTHER_USERS=1  Also accept mentions from other members of granted topics' \
 		'make bot-status Inspect connection and retained invocation state' \
 		'make dev-bot-config DEV_REPOSITORY=owner/repository  Enable local offline test profiles' \
 		'make dev-bot-test DEV_PROFILE=smoke  Run an isolated development-box test with consent' \
@@ -109,7 +111,16 @@ bot-connect: check-uv
 		esac; \
 		$(UV) run --locked reasoning-bot connect $(if $(BOT_SERVER),--server "$(BOT_SERVER)") --state-dir "$(BOT_STATE)" $$pair_flag
 
-bot-run bot-status bot-doctor: check-uv
+bot-run: check-uv
+	@set -eu; \
+		others=''; \
+		case "$(BOT_ALLOW_OTHER_USERS)" in \
+			0) :;; 1) others='--allow-other-users';; \
+			*) printf '%s\n' 'BOT_ALLOW_OTHER_USERS must be 0 or 1' >&2; exit 2;; \
+		esac; \
+		$(UV) run --locked reasoning-bot run --state-dir "$(BOT_STATE)" --config "$(BOT_CONFIG)" $$others
+
+bot-status bot-doctor: check-uv
 	@$(UV) run --locked reasoning-bot $(patsubst bot-%,%,$@) --state-dir "$(BOT_STATE)" --config "$(BOT_CONFIG)"
 
 .PHONY: compute-images compute-setup _compute-setup compute-source-publish compute-publish

@@ -498,6 +498,22 @@ def test_make_bot_connect_passes_optional_server_and_pair_only_without_another_c
         ["--pair-only"] if pair_only == "1" else [])
 
 
+@pytest.mark.parametrize("others", ["0", "1"])
+def test_make_bot_run_passes_explicit_other_user_policy(tmp_path, others):
+    executable = tmp_path / "fixture-uv"
+    executable.write_text('#!/bin/sh\nprintf "%s\\n" "$@"\n')
+    executable.chmod(0o700)
+    state = tmp_path / "private state"
+    result = subprocess.run(["make", "--no-print-directory", "bot-run", "UV=" + str(executable), "BOT_STATE=" + str(state),
+        "BOT_ALLOW_OTHER_USERS=" + others], cwd=Path(__file__).resolve().parents[1], capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.splitlines() == ["run", "--locked", "reasoning-bot", "run", "--state-dir", str(state),
+        "--config", str(state / "config.json")] + (["--allow-other-users"] if others == "1" else [])
+    rejected = subprocess.run(["make", "--no-print-directory", "bot-run", "UV=true", "BOT_ALLOW_OTHER_USERS=yes"],
+        cwd=Path(__file__).resolve().parents[1], capture_output=True, text=True)
+    assert rejected.returncode != 0 and "BOT_ALLOW_OTHER_USERS must be 0 or 1" in rejected.stderr
+
+
 def test_make_bot_connect_rejects_invalid_pair_only_before_starting(tmp_path):
     result = subprocess.run(["make", "--no-print-directory", "bot-connect", "UV=true", "BOT_PAIR_ONLY=invalid"],
         cwd=Path(__file__).resolve().parents[1], capture_output=True, text=True)

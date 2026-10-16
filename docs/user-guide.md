@@ -36,8 +36,10 @@ ordinary beta messages do not require a goal to use the agent harness.
 
 From a source checkout, run `make bot-connect` to pair and start a local Codex or
 Claude Code runner. Run `make bot-doctor` for read-only setup diagnostics, and
-`make bot-run` to restart a saved pairing. The account menu's **My bots** controls
-access. Owner approvals appear as **!** beside the bot in **People**; click the
+`make bot-run` to restart a saved pairing. Only the bot's owner can invoke it unless
+the runner is started with `make bot-run BOT_ALLOW_OTHER_USERS=1`; another member's
+mention of an owner-only bot shows a bot activity explaining that it was not run.
+The account menu's **My bots** controls access. Owner approvals appear as **!** beside the bot in **People**; click the
 bot's name or **!** to review the exact command, computation, or GitHub issue.
 Closing the dialog leaves the request pending. Type `@` for a bot, or `@Bot-` to select one of its
 advertised models. Workspace and context boundaries are described in [Bots](bots.md).
