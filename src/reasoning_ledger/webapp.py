@@ -274,6 +274,17 @@ except ImportError as exc:  # pragma: no cover
     raise RuntimeError("the web workbench requires fastapi and uvicorn (core dependencies — reinstall with: uv pip install -e .") from exc
 
 
+# The workbench page's policy is a response header, not a <meta> tag, because
+# browsers ignore frame-ancestors in a meta policy. The built page loads only
+# same-origin module scripts (the frontend build rejects inline script); the
+# Explorer bootstrap is a non-executable JSON script.
+WORKBENCH_CONTENT_SECURITY_POLICY = (
+    "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; "
+    "img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self'; "
+    "object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'"
+)
+
+
 # Ledger activity summaries use a few structured result fields. Other MCP
 # calls expose a bounded text result in the expanded step log. The bounds keep
 # a large tool result from dominating every subsequent history load.
@@ -9160,7 +9171,10 @@ def build_app(
                 bootstrap = f'<script id="reasoning-explorer-bootstrap" type="application/json">{encoded}</script>'
                 marker = "</head>"
                 html = html.replace(marker, f"{bootstrap}{marker}", 1) if marker in html else bootstrap + html
-            return HTMLResponse(html, headers={"Cache-Control": "no-store"})
+            return HTMLResponse(
+                html,
+                headers={"Cache-Control": "no-store", "Content-Security-Policy": WORKBENCH_CONTENT_SECURITY_POLICY},
+            )
 
         @app.get("/")
         def index():

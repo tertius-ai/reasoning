@@ -36,6 +36,11 @@ from reasoning_ledger.webapp import (  # noqa: E402
 )
 
 AUTHOR = {"operator": "op", "agent": "a", "session": "s"}
+WORKBENCH_CSP = (
+    "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; "
+    "img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self'; "
+    "object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'"
+)
 FAKE = [sys.executable, str(Path(__file__).parent / "fake_appserver.py")]
 
 
@@ -78,6 +83,8 @@ def test_health_and_packaged_frontend(tmp_path, monkeypatch):
         index = client.get("/")
         assert index.text == "<h1>desktop frontend</h1>"
         assert index.headers["cache-control"] == "no-store"
+        # The policy is a header: a <meta> policy cannot carry frame-ancestors.
+        assert index.headers["content-security-policy"] == WORKBENCH_CSP
         favicon = client.get("/favicon.svg")
         assert favicon.text == "<svg></svg>"
         assert favicon.headers["content-type"] == "image/svg+xml"
@@ -826,10 +833,15 @@ class TestProjectLayoutAndRename:
         ]
 
     def test_spa_paths_serve_the_app(self, tmp_path, monkeypatch):
+        dist = tmp_path / "web"
+        (dist / "assets").mkdir(parents=True)
+        (dist / "index.html").write_text("<html><head></head><body></body></html>", encoding="utf-8")
+        monkeypatch.setenv("REASONING_WEB_DIST", str(dist))
         client = _client(tmp_path, monkeypatch)
         page = client.get("/project/some-project/chat-abc")
         assert page.status_code == 200
         assert "text/html" in page.headers["content-type"]
+        assert page.headers["content-security-policy"] == WORKBENCH_CSP
         # only the /project/ namespace belongs to the SPA
         assert client.get("/api/definitely-not-a-route").status_code == 404
         assert client.get("/some-top-level-thing").status_code == 404

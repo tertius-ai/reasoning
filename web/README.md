@@ -212,6 +212,11 @@ Explicit development-workspace chats always surface approvals because their
 selected role includes scoped repository writes; the environment setting
 controls ordinary research chats.
 
+The backend sends the workbench page with a `Content-Security-Policy` response
+header that allows only same-origin scripts and forbids framing. The entry
+pages carry no `<meta>` policy, and `npm --prefix web run build` fails if an
+emitted page contains inline script or an inline event handler.
+
 ## Development
 
 ```bash
