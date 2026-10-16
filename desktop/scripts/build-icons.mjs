@@ -17,8 +17,10 @@ const assets = path.join(desktopRoot, "assets");
 const svgPath = path.join(assets, "icon.svg");
 const pngPath = path.join(assets, "icon.png");
 const icnsPath = path.join(assets, "icon.icns");
+const icoPath = path.join(assets, "icon.ico");
+const icoSizes = [16, 24, 32, 48, 64, 128, 256];
 
-async function renderPng() {
+async function renderSvg(sizes) {
   const svgUrl = `data:image/svg+xml;base64,${readFileSync(svgPath).toString("base64")}`;
   const window = new BrowserWindow({
     width: 1024,
@@ -34,28 +36,57 @@ async function renderPng() {
     },
   });
   await window.loadURL("data:text/html,<html><body></body></html>");
+  // Each size is rasterized from the SVG directly so small icons stay crisp.
   const rendered = await window.webContents.executeJavaScript(`
     new Promise((resolve, reject) => {
-      const canvas = document.createElement("canvas");
-      canvas.width = 1024;
-      canvas.height = 1024;
       const image = new Image();
       image.onload = () => {
-        canvas.getContext("2d").drawImage(image, 0, 0, 1024, 1024);
-        resolve({
-          dataUrl: canvas.toDataURL("image/png"),
-          cornerAlpha: canvas.getContext("2d").getImageData(0, 0, 1, 1).data[3],
-        });
+        resolve(${JSON.stringify(sizes)}.map((size) => {
+          const canvas = document.createElement("canvas");
+          canvas.width = size;
+          canvas.height = size;
+          const context = canvas.getContext("2d");
+          context.drawImage(image, 0, 0, size, size);
+          return {
+            size,
+            dataUrl: canvas.toDataURL("image/png"),
+            cornerAlpha: context.getImageData(0, 0, 1, 1).data[3],
+          };
+        }));
       };
       image.onerror = () => reject(new Error("Could not render icon.svg"));
       image.src = ${JSON.stringify(svgUrl)};
     })
   `);
   window.destroy();
-  if (rendered.cornerAlpha !== 0) {
-    throw new Error("Generated icon does not have transparent corners");
+  const pngs = new Map();
+  for (const { size, dataUrl, cornerAlpha } of rendered) {
+    if (cornerAlpha !== 0) {
+      throw new Error(`Generated ${size}px icon does not have transparent corners`);
+    }
+    pngs.set(size, Buffer.from(dataUrl.split(",", 2)[1], "base64"));
   }
-  writeFileSync(pngPath, Buffer.from(rendered.dataUrl.split(",", 2)[1], "base64"));
+  return pngs;
+}
+
+function renderIco(pngs) {
+  // ICO container of PNG-encoded images; a width/height byte of 0 means 256.
+  const header = Buffer.alloc(6);
+  header.writeUInt16LE(1, 2);
+  header.writeUInt16LE(pngs.length, 4);
+  const entries = Buffer.alloc(16 * pngs.length);
+  let offset = header.length + entries.length;
+  pngs.forEach(([size, png], index) => {
+    const entry = index * 16;
+    entries.writeUInt8(size % 256, entry);
+    entries.writeUInt8(size % 256, entry + 1);
+    entries.writeUInt16LE(1, entry + 4);
+    entries.writeUInt16LE(32, entry + 6);
+    entries.writeUInt32LE(png.length, entry + 8);
+    entries.writeUInt32LE(offset, entry + 12);
+    offset += png.length;
+  });
+  writeFileSync(icoPath, Buffer.concat([header, entries, ...pngs.map(([, png]) => png)]));
 }
 
 function renderIcns() {
@@ -98,8 +129,10 @@ function renderIcns() {
 
 app.whenReady().then(async () => {
   try {
-    await renderPng();
+    const pngs = await renderSvg([1024, ...icoSizes]);
+    writeFileSync(pngPath, pngs.get(1024));
     renderIcns();
+    renderIco(icoSizes.map((size) => [size, pngs.get(size)]));
   } catch (error) {
     console.error(error);
     process.exitCode = 1;

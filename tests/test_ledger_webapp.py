@@ -75,6 +75,7 @@ def test_health_and_packaged_frontend(tmp_path, monkeypatch):
     (dist / "assets").mkdir(parents=True)
     (dist / "index.html").write_text("<h1>desktop frontend</h1>", encoding="utf-8")
     (dist / "favicon.svg").write_text("<svg></svg>", encoding="utf-8")
+    (dist / "favicon.ico").write_bytes(b"\x00\x00\x01\x00")
     monkeypatch.setenv("REASONING_WORKBENCH_ROOT", str(tmp_path / "workbench"))
     monkeypatch.setenv("REASONING_WEB_DIST", str(dist))
 
@@ -88,6 +89,9 @@ def test_health_and_packaged_frontend(tmp_path, monkeypatch):
         favicon = client.get("/favicon.svg")
         assert favicon.text == "<svg></svg>"
         assert favicon.headers["content-type"] == "image/svg+xml"
+        favicon_ico = client.get("/favicon.ico")
+        assert favicon_ico.content == b"\x00\x00\x01\x00"
+        assert favicon_ico.headers["content-type"] == "image/x-icon"
 
 
 def test_project_mutations_refresh_safe_explorer_bootstrap(tmp_path, monkeypatch):

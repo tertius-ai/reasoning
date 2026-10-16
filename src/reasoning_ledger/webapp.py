@@ -9156,6 +9156,13 @@ def build_app(
             def favicon_svg():
                 return FileResponse(favicon, media_type="image/svg+xml")
 
+        favicon_ico = dist / "favicon.ico"
+        if favicon_ico.exists():
+
+            @app.get("/favicon.ico")
+            def favicon_ico_file():
+                return FileResponse(favicon_ico, media_type="image/x-icon")
+
         def _spa_index() -> HTMLResponse:
             html = (dist / "index.html").read_text(encoding="utf-8")
             cached = explorer_index.load()
