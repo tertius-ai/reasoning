@@ -25,6 +25,16 @@ def install_feedback_routes(app, store, authenticated):
     User = Annotated[str, Depends(authenticated)]
     feedback, forks = ChatFeedback(store), TopicForks(store)
 
+    @app.get("/api/organizations/{organization_id}/topics/{topic_id}/reactions/messages")
+    def message_reactions(
+        organization_id: str,
+        topic_id: str,
+        user: User,
+        ids: Annotated[str, Query(min_length=1, max_length=200 * 129)],
+    ):
+        """Reactions for a page of messages (comma-separated IDs), keyed by message ID."""
+        return feedback.read_messages(user, organization_id, topic_id, [item for item in ids.split(",") if item])
+
     @app.get("/api/organizations/{organization_id}/topics/{topic_id}/reactions/{kind}/{target_id}")
     def reactions(
         organization_id: str,

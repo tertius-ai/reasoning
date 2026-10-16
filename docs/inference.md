@@ -178,6 +178,11 @@ three reactor initials and an overflow count. Initials expose full names on hove
 or keyboard focus; contact information is not included. The usage
 page aggregates counts under the actual recorded model, filtered by the reader's
 project access. These reactions are feedback, not mathematical verification.
+A conversation reads the reactions of its loaded messages with one request,
+`GET /api/organizations/{organization}/topics/{topic}/reactions/messages?ids=…`
+(at most 200 comma-separated message IDs, one topic access check), which returns
+the single-target result keyed by message ID; messages that are absent or have no
+retained output are omitted. Choosing a reaction updates only that message.
 
 Context is governed by the selected model's token capacity. It includes versioned
 mathematics instructions, an active user goal, explicit message pins, cited

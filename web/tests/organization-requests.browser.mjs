@@ -81,7 +81,8 @@ test("an idle beta topic bounds startup and foreground polling requests", { time
   assert.ok(count(observed.startupPaths, "/goal") <= count(observed.startupPaths, "/agents"),
     "research controls reuse the agent activity view's goal read");
   assert.equal(count(observed.startupPaths, "/compute-configuration"), 0, "compute configuration waits for the submission dialog");
-  assert.ok(observed.startup <= 60, `startup requests: ${observed.startup}`);
+  assert.equal(observed.startupPaths.filter(path => path.includes("/reactions/")).length, 1, "one batch reads every message's reactions");
+  assert.ok(observed.startup <= 46, `startup requests: ${observed.startup}`);
   // Messages keep their two-second cadence; idle activity views slow down.
   assert.ok(observed.idle.length <= 100, `idle requests in twenty seconds: ${observed.idle.length}`);
 });
