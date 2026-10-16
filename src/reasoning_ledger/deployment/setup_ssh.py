@@ -29,6 +29,12 @@ def public_identity(value):
     return " ".join(parts[:2])
 
 
+def ssh_fingerprint(public):
+    """Return the standard OpenSSH SHA-256 fingerprint, as printed by ssh-keygen -l."""
+    blob = base64.b64decode(public_identity(public).split()[1])
+    return "SHA256:" + base64.b64encode(hashlib.sha256(blob).digest()).decode("ascii").rstrip("=")
+
+
 def derive_public(identity):
     read_private(identity, 65536)
     print("Checking the SSH private key locally; enter its passphrase if requested.")
@@ -116,8 +122,7 @@ def enroll_public_key(directory, provider, identity, public, *, wait=time.sleep)
     if identifier is None:
         if journal["phase"] == "creating":
             raise InstallError("SSH upload reply is uncertain; reconcile the original account key before retrying")
-        fingerprint = hashlib.sha256(base64.b64decode(public.split()[1])).digest()
-        print("SSH public fingerprint: SHA256:" + base64.b64encode(fingerprint).decode().rstrip("="))
+        print("SSH public fingerprint: " + ssh_fingerprint(public))
         approve("Upload only this public SSH key to DigitalOcean (requires ssh_key:create)?", "upload ssh key")
         journal["phase"] = "creating"
         write_document(path, journal)

@@ -21,7 +21,8 @@ TESTS ?=
 DEV_STATE ?=
 DEV_FRONTEND_PORT ?= 5173
 DEV_BACKEND_PORT ?= 9119
-OPERATOR_HANDOFF ?= build/reasoning-operator-handoff.tar.gz
+OPERATOR_HANDOFF ?=
+OPERATOR_PUBLIC_KEY ?=
 RECOVERY_KIT ?= $(HOME)/reasoning-operator-recovery.rnrk
 BOT_SERVER ?=
 BOT_PAIR_ONLY ?= 0
@@ -68,16 +69,16 @@ help:
 		'make upgrade Preserve the installed release, build this checkout, and upgrade interactively' \
 		'make upgrade-resume Resume the exact retained upgrade without rebuilding' \
 		'make onboard Prepare this computer, receive an authorized handoff, join and verify deployment access' \
-		'make onboard ONBOARD_REPLACE_TOKEN=1  Replace this operator token privately and resume verification' \
-		'make doctor  Verify operator access, installed release, and HTTPS; close SSH afterward' \
+		'make onboard ONBOARD_REPLACE_TOKEN=1  Replace this operator token privately and resume the join or verification' \
+		'make doctor  Recheck operator access, installed release, and HTTPS; close SSH afterward' \
 		'make operator-sync  Refresh independent operator state from the verified running server' \
-		'make operator-authorize OPERATOR_PUBLIC_KEY=/path/key.pub  Authorize another deployer' \
-		'make operator-join OPERATOR_IDENTITY=/path/key DO_TOKEN_FILE=/path/token OPERATOR_HANDOFF_SHA256=…  Join as that deployer' \
+		'make operator-authorize  Authorize another deployer; asks for the received public-key file' \
+		'make operator-join OPERATOR_HANDOFF=/path/handoff.tar.gz OPERATOR_IDENTITY=/path/key DO_TOKEN_FILE=/path/token OPERATOR_HANDOFF_SHA256=…  Join as that deployer' \
 		'make operator-kit RECOVERY_KIT=/secure/recovery.rnrk  Create an encrypted offline recovery operator' \
 		'make operator-recover RECOVERY_KIT=/secure/recovery.rnrk DO_TOKEN_FILE=/secure/token  Recover on a new computer' \
 		'make inspect Verify the existing release bundle' \
 		'' \
-		'Overrides: RELEASE=path DEPLOY_STATE=path ONBOARD_STATE=path COMPUTE_BACKEND=auto|none|modal OPERATOR_HANDOFF=path RECOVERY_KIT=path'
+		'Overrides: RELEASE=path DEPLOY_STATE=path ONBOARD_STATE=path COMPUTE_BACKEND=auto|none|modal OPERATOR_PUBLIC_KEY=path OPERATOR_HANDOFF=path RECOVERY_KIT=path'
 
 check-uv:
 	@command -v $(UV) >/dev/null || { printf '%s\n' 'Missing required tool: uv (https://docs.astral.sh/uv/)' >&2; exit 2; }
@@ -248,17 +249,21 @@ onboard: check-uv check-deploy-tools
 		$(UV) run --locked reasoning-deploy onboard --state-dir "$(DEPLOY_STATE)" --onboard-dir "$(ONBOARD_STATE)" $$replace_flag
 
 operator-authorize: check-uv check-deploy-tools
-	@test -n "$(OPERATOR_PUBLIC_KEY)" || { printf '%s\n' 'Set OPERATOR_PUBLIC_KEY to the collaborator public-key file.' >&2; exit 2; }
 	@$(UV) run --locked reasoning-deploy operator-session --state-dir "$(DEPLOY_STATE)" -- \
 		$(MAKE) --no-print-directory _operator-authorize
 
+# Without OPERATOR_PUBLIC_KEY the command asks for the key file; without
+# OPERATOR_HANDOFF it writes DEPLOY_STATE/handoffs/operator-KEY-release-RELEASE.tar.gz.
 _operator-authorize:
 	@$(UV) run --locked reasoning-deploy operator-sync --state-dir "$(DEPLOY_STATE)"
-	@mkdir -p "$(dir $(OPERATOR_HANDOFF))"
-	@$(UV) run --locked reasoning-deploy operator-authorize --state-dir "$(DEPLOY_STATE)" \
-		--public-key "$(OPERATOR_PUBLIC_KEY)" --output "$(OPERATOR_HANDOFF)" --bundle "$(RELEASE)"
+	@set -eu; \
+		set -- --state-dir "$(DEPLOY_STATE)" --bundle "$(RELEASE)"; \
+		if [ -n "$(OPERATOR_PUBLIC_KEY)" ]; then set -- "$$@" --public-key "$(OPERATOR_PUBLIC_KEY)"; fi; \
+		if [ -n "$(OPERATOR_HANDOFF)" ]; then set -- "$$@" --output "$(OPERATOR_HANDOFF)"; fi; \
+		$(UV) run --locked reasoning-deploy operator-authorize "$$@"
 
 operator-join: check-uv check-deploy-tools
+	@test -n "$(OPERATOR_HANDOFF)" || { printf '%s\n' 'Set OPERATOR_HANDOFF to the received handoff archive.' >&2; exit 2; }
 	@test -n "$(OPERATOR_IDENTITY)" || { printf '%s\n' 'Set OPERATOR_IDENTITY to your authorized SSH private key.' >&2; exit 2; }
 	@test -n "$(DO_TOKEN_FILE)" || { printf '%s\n' 'Set DO_TOKEN_FILE to your own DigitalOcean token file.' >&2; exit 2; }
 	@test -n "$(OPERATOR_HANDOFF_SHA256)" || { printf '%s\n' 'Set OPERATOR_HANDOFF_SHA256 to the digest confirmed by the existing operator.' >&2; exit 2; }

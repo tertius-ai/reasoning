@@ -166,10 +166,12 @@ make onboard
 The wizard defaults to generating a dedicated Ed25519 key; `ssh-keygen` asks for
 an optional passphrase in your terminal. Selecting an existing protected private
 key is also supported. It saves preparation privately under
-`~/.reasoning-onboard`, exports `operator.pub`, and prints the full SSH SHA-256
-fingerprint. Send only that public key to the existing operator; compare its
-fingerprint through your authenticated connection. The private key stays on
-this box. This is infrastructure access, not an organization invitation/login.
+`~/.reasoning-onboard`, exports `operator.pub`, and prints its standard SSH
+fingerprint (`SHA256:…`, as `ssh-keygen -l` shows it). Send only that public key
+to the existing operator. Their review shows it as the "Collaborator SSH key
+fingerprint"; compare the two through your authenticated connection. The
+private key stays on this box. This is infrastructure access, not an
+organization invitation/login.
 
 For a passphrase-protected key, load it into an SSH agent in the same terminal
 before live verification; remote SSH commands use `BatchMode=yes`. If no agent
@@ -180,7 +182,9 @@ ssh-add -t 1h "$HOME/.reasoning-onboard/ssh/id_ed25519"
 ```
 
 Use the selected private-key path instead if importing a key or overriding the
-preparation directory. Local `ssh-keygen` checks still ask for the passphrase.
+preparation directory. The local `ssh-keygen` check that derives the public key
+asks for the passphrase once per `make onboard` run; the join reuses that
+result.
 
 If the handoff is not available yet, leave the archive-path prompt blank. The
 wizard pauses without cloud API calls or remote changes and prints the exact
@@ -202,23 +206,48 @@ later builds/upgrades, not for this join.
 
 ### 2. On the existing operator computer
 
-Save the received public key under a protected directory, open the existing
-checkout, and run:
+Save the received public key in a file, open the existing checkout, and run:
 
 ```sh
-make operator-authorize OPERATOR_PUBLIC_KEY=/secure/collaborator.pub
+make operator-authorize
 ```
 
-Send `build/reasoning-operator-handoff.tar.gz` privately and give the displayed
-SHA-256 to the collaborator through an authenticated channel. It contains the exact
+The command asks for the public-key file, or accepts the pasted single
+`ssh-ed25519 …` line. It reads the file once; the file does not need a
+permanent location. `OPERATOR_PUBLIC_KEY=/path/to/key.pub` skips the question.
+
+Before SSH opens or the key is enrolled, the command checks the handoff
+destination. By default the handoff is
+`DEPLOY_STATE/handoffs/operator-KEY-release-RELEASE.tar.gz` (normally under
+`~/.reasoning-deploy/handoffs/`, an owner-only `0700` directory). `KEY` and
+`RELEASE` are prefixes of the collaborator key's SHA-256 and the installed
+release ID, so a handoff for another person or release never overwrites this
+one. Rerunning for the same key and release reuses the existing archive without
+authorizing again. `OPERATOR_HANDOFF=/path/to/handoff.tar.gz` chooses another
+file; its directory must already exist. A missing directory, a symlink, or a
+group- or world-writable directory anywhere in the path stops the command with
+the exact path and reason.
+
+The review shows the site, the "Collaborator SSH key fingerprint" in the same
+`SHA256:…` format that `make onboard` prints, the temporary SSH address, and the
+handoff archive path. Compare the fingerprint with the collaborator, then type
+`authorize operator HOSTNAME` (for example `authorize operator chat.example.org`)
+to confirm. Authorization opens SSH temporarily and closes it again.
+
+The command then prints the "Handoff archive checksum" (SHA-256) and a
+ready-to-send message with the archive name, the checksum, the collaborator's
+key fingerprint, and the recipient's steps. Send the archive file privately.
+Send the message through a channel where the collaborator recognizes you; the
+checksum must reach them authenticated. The archive contains the exact
 installed release, cloud ownership metadata, and the server's public host key;
 it contains no provider credential, account password, operator private key, or
-host private key. Authorization opens SSH temporarily and closes it again.
+host private key.
 
 ### 3. Join from the remote box
 
-Resume `make onboard`. Supply the received handoff archive's path and its SHA-256
-received independently from the existing operator. Keep the archive owner-private
+Resume `make onboard`. Supply the received handoff archive's path and the
+handoff archive checksum (SHA-256) from the existing operator's authenticated
+message. Keep the archive owner-private
 (`chmod 600 /path/to/received-handoff.tar.gz`). The wizard checks the digest,
 authorized SSH key, installed release and public trust before retaining an exact
 private snapshot. No digest computed solely from a downloaded file substitutes
@@ -249,14 +278,42 @@ Organization onboarding does not require resource-create/delete permissions or
 
 Enter the token through the wizard's hidden prompt, or provide an existing
 protected `0600` token-file path. It is never placed in command arguments,
-output, Git, or the handoff. The token must resolve to the existing Team and the
-private key must match the authorized handoff. Type `onboard HOSTNAME`
-to confirm joining and temporary SSH access to this box's current `/32`.
+output, Git, or the handoff. Before any API call, the wizard checks the token's
+shape (`dop_v1_` followed by 64 lowercase hexadecimal characters). A token
+pasted twice, a refresh token, or a value with spaces is refused without being
+saved, and the hidden prompt asks again. The browser question and other visible
+prompts refuse an answer that looks like a token without repeating it and ask
+again. The terminal displayed that token: revoke it in DigitalOcean and create
+a new one; the same run refuses it at the hidden prompt. The token must resolve
+to the existing Team and the private key must match the authorized handoff.
+Type `onboard HOSTNAME` to confirm joining and temporary SSH access to this
+box's current `/32`.
 
 The wizard runs the existing join, live operator synchronization, and diagnostic
 checks, and closes temporary inbound SSH. It neither creates an organization/VM
 nor stops services, opens the application database, or upgrades the application.
 Success is `operator_onboarded` only after SSH/HTTPS verification and SSH closure.
+It ends with each verified check:
+
+```text
+Deployment access verified: https://chat.example.org
+
+✓ DigitalOcean access
+✓ SSH authentication and server identity
+✓ Installed release and HTTPS
+✓ Temporary SSH access closed
+
+This computer is onboarded. No application upgrade was performed.
+
+Ready to upgrade.
+Coordinate with the other operator, then run: make upgrade
+Optional later recheck: make doctor
+```
+
+Each line reflects evidence from this run: this operator's token opened SSH,
+the pinned server answered the diagnosis, every installed-release and HTTPS
+check passed, and the firewall confirmed SSH closure. The last line of standard
+output is the JSON receipt.
 Both directories remain necessary: deployment state references this computer's
 key/token preparation. A complete join with a lost receipt is observed and reused,
 not repeated. Partial/inconsistent join state stops for reconciliation rather
@@ -264,8 +321,8 @@ than being overwritten. A failed synchronization/diagnostic check retains the
 joined state so the same `make onboard` can retry verification. Every rerun
 rechecks access instead of trusting an old success receipt.
 
-To replace an expired or under-scoped token, keep the existing key, handoff, and
-both private directories, and run:
+To replace a wrong, expired, or under-scoped token, keep the existing key,
+handoff, and both private directories, and run:
 
 ```sh
 make onboard ONBOARD_REPLACE_TOKEN=1
@@ -273,9 +330,13 @@ make onboard ONBOARD_REPLACE_TOKEN=1
 
 The wizard shows the required scopes, offers the token page, and collects the
 replacement through a hidden prompt or protected file. It verifies the same
-Team, then requires the site-specific approval before changing token references
-in the joined state. Old token files remain untouched. A completed join is not
-repeated. Resume an uncertain `joining` phase without replacement first; partial
+Team, then requires the site-specific approval before changing token references.
+Old token files remain untouched. A completed join is not repeated. A join that
+failed before writing any deployment state (the state directory is absent or
+holds only its lock), for example at the first DigitalOcean call, is retried
+with the replacement; its error message prints this exact command with the
+selected directories, and so does a saved token whose shape is invalid. A join
+that wrote deployment state must be resumed without replacement first; partial
 joins still stop for reconciliation. After verified onboarding, revoke the old
 token in DigitalOcean. The direct CLI equivalent is
 `reasoning-deploy onboard --replace-token` with the same state-directory overrides.
@@ -302,10 +363,14 @@ joining. Use `DEPLOY_STATE=/new/path` on every Make command if choosing another
 directory. Joining retains the installed archive inside the state; a fresh
 checkout does not need an existing `build/reasoning-release.tar.gz`.
 
-`make doctor` opens SSH to this box's current `/32`, verifies pinned SSH trust,
-inspects the exact installed release and public HTTPS, then closes inbound SSH.
-It never stops the application, opens its database, or upgrades it. The command
-fails if a check or SSH closure is unverified.
+`make doctor` is an optional later recheck after `make onboard`, and the
+verification step after the lower-level join. It opens SSH to this box's
+current `/32`, verifies pinned SSH trust, inspects the exact installed release
+and public HTTPS, then closes inbound SSH. It never stops the application, opens
+its database, or upgrades it. It ends with the same four verified checks and
+"Ready to upgrade", followed by the JSON receipt as the last line of standard
+output. The command fails, and prints no readiness, if a check or SSH closure is
+unverified.
 
 ### 4. Upgrade from either computer
 

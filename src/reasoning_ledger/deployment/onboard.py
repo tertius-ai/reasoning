@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import base64
 import hashlib
 import re
 import secrets
@@ -16,9 +15,18 @@ from .operator_handoff import DOCUMENT_NAMES, MAX_HANDOFF, _read_handoff, _read_
 from .operator_sync import synchronize_operator
 from .private import locked_directory, protected_parent, read_document, read_private, write_document, write_private
 from .release_state import current_binding
-from .setup import OPERATOR_DIGITALOCEAN_PERMISSIONS, approve, ask, private_credential, replacement_digitalocean_token
+from .setup import (
+    OPERATOR_DIGITALOCEAN_PERMISSIONS,
+    approve,
+    ask,
+    confirm,
+    digitalocean_token,
+    private_credential,
+    replacement_digitalocean_token,
+    validate_digitalocean_token,
+)
 from .setup_auth import open_page
-from .setup_ssh import prepare_identity, public_identity
+from .setup_ssh import prepare_identity, public_identity, ssh_fingerprint
 from .ssh_host import PUBLIC_JOURNAL
 
 KEYS = {"format", "state_dir", "identity", "public_key", "handoff_sha256", "token_file", "phase"}
@@ -36,6 +44,18 @@ def _empty_target(target: Path) -> None:
         with locked_directory(target) as directory:
             if {entry.name for entry in directory.iterdir()} != {"provision.lock"}:
                 raise InstallError("onboard requires new empty deployment state; do not adopt or replace another operator's directory")
+
+
+def _untouched_target(target: Path) -> bool:
+    """True when the deployment state is absent or holds only its lock: a join wrote nothing there."""
+    if not target.exists() and not target.is_symlink():
+        return True
+    with locked_directory(target) as directory:
+        return {entry.name for entry in directory.iterdir()} == {"provision.lock"}
+
+
+def _replace_command(target: Path, state: Path) -> str:
+    return shlex.join(["make", "onboard", "ONBOARD_REPLACE_TOKEN=1", "DEPLOY_STATE=" + str(target), "ONBOARD_STATE=" + str(state)])
 
 
 def _validate(value: dict, target: Path) -> None:
@@ -68,7 +88,7 @@ def _snapshot_handoff(state: Path, config: dict, journal: Path) -> Path | None:
             return None
         body = read_private(Path(filename).expanduser().absolute(), MAX_HANDOFF)
         if config["handoff_sha256"] is None:
-            expected = ask("Handoff SHA-256 received separately from the existing operator").lower()
+            expected = ask("Handoff archive checksum (SHA-256) from the existing operator's message").lower()
             if not re.fullmatch(r"[a-f0-9]{64}", expected):
                 raise InstallError("enter the full SHA-256 received from the existing operator, not a locally inferred approval")
             config["handoff_sha256"] = expected
@@ -129,7 +149,9 @@ def run_onboard(directory: Path, onboard_directory: Path, command, *, replace_to
             config = {"format": 1, "state_dir": str(target), "identity": None, "public_key": None,
                       "handoff_sha256": None, "token_file": None, "phase": "awaiting_handoff"}
             write_document(journal, config, new=True)
-        if replace_token and config["phase"] == "joining":
+        # A join that wrote no deployment state made no change anywhere; its token may be replaced.
+        # A partial join keeps its credentials until it is resumed and reconciled.
+        if replace_token and config["phase"] == "joining" and not _untouched_target(target):
             raise InstallError("resume the existing join without --replace-token before replacing credentials; preserve both directories")
         if config["phase"] == "awaiting_handoff":
             _empty_target(target)
@@ -147,7 +169,7 @@ def run_onboard(directory: Path, onboard_directory: Path, command, *, replace_to
                 raise InstallError("exported operator public key changed; preserve it")
         else:
             write_private(public_file, encoded)
-        fingerprint = "SHA256:" + base64.b64encode(hashlib.sha256(base64.b64decode(public.split()[1])).digest()).decode().rstrip("=")
+        fingerprint = ssh_fingerprint(public)
         resume = shlex.join(["make", "onboard", "DEPLOY_STATE=" + str(target), "ONBOARD_STATE=" + str(state)])
         setup_ui.onboard_handoff(str(public_file), fingerprint, public, resume)
         handoff = _snapshot_handoff(state, config, journal)
@@ -165,12 +187,10 @@ def run_onboard(directory: Path, onboard_directory: Path, command, *, replace_to
             setup_ui.section("Your DigitalOcean Team token",
                              "Switch to the existing deployment's Team; organization roles alone do not grant infrastructure access.")
             setup_ui.digitalocean_access(OPERATOR_DIGITALOCEAN_PERMISSIONS)
-            answer = ask("Open the DigitalOcean token page? Enter yes or no", "yes").lower()
-            if answer not in {"yes", "y", "no", "n"}:
-                raise InstallError("enter yes or no; no browser was opened")
-            if answer in {"yes", "y"}:
+            if confirm("Open the DigitalOcean token page in your browser?"):
                 open_page("https://cloud.digitalocean.com/account/api/tokens")
-            token = private_credential(state, "digitalocean-token", "DigitalOcean API token", minimum=32, maximum=4096)
+            token = private_credential(state, "digitalocean-token", "DigitalOcean API token", minimum=32, maximum=4096,
+                                       validate=validate_digitalocean_token)
             config["token_file"] = str(token)
             write_document(journal, config)
             replacement = None
@@ -181,14 +201,18 @@ def run_onboard(directory: Path, onboard_directory: Path, command, *, replace_to
         else:
             replacement = None
         if config["phase"] in {"awaiting_handoff", "joining"} and replacement is None:
-            read_private(Path(config["token_file"]), 4096)
+            try:
+                digitalocean_token(read_private(Path(config["token_file"]), 4096))
+            except InstallError as exc:
+                raise InstallError(f"saved DigitalOcean token {config['token_file']} is unusable: {exc}. "
+                                   "Replace it privately with: " + _replace_command(target, state)) from None
         setup_ui.section("Join and verify", "Verify Team/key/release identity, retain private state, synchronize the installed release, "
                          "check SSH/HTTPS, and close temporary SSH.")
         print("Deployment: " + binding["public_url"])
         print("No new organization, VM, deployment, service restart, database access, or upgrade is authorized by this routine.")
         approve("Join/resume this deployment and temporarily open SSH to this box's current /32 for pinned, read-only verification?",
                 "onboard " + binding["public_url"])
-        if replacement is not None and config["phase"] == "awaiting_handoff":
+        if replacement is not None and config["phase"] in {"awaiting_handoff", "joining"}:
             config["token_file"] = str(replacement)
             write_document(journal, config)
         if config["phase"] in {"awaiting_handoff", "joining"}:
@@ -197,7 +221,20 @@ def run_onboard(directory: Path, onboard_directory: Path, command, *, replace_to
                 _empty_target(target)
                 config["phase"] = "joining"
                 write_document(journal, config)
-                join_operator(handoff, target, Path(config["token_file"]), identity, config["handoff_sha256"])
+                try:
+                    # The key was derived from this identity above; do not prompt for its passphrase again.
+                    join_operator(handoff, target, Path(config["token_file"]), identity, config["handoff_sha256"],
+                                  public_key=public)
+                except InstallError as exc:
+                    try:
+                        untouched = _untouched_target(target)
+                    except (InstallError, OSError):
+                        untouched = False
+                    if not untouched:
+                        raise
+                    raise InstallError(f"{exc}. The join wrote no deployment state. If the DigitalOcean token is wrong, "
+                                       "expired, from another Team, or missing a permission, create a new one and run: "
+                                       + _replace_command(target, state)) from exc
             config["phase"] = "joined"
             write_document(journal, config)
         # Recheck even a previously verified onboarding: a receipt is not current access evidence.
@@ -219,11 +256,13 @@ def run_onboard(directory: Path, onboard_directory: Path, command, *, replace_to
         synchronized = synchronize_operator(target, command)
         if synchronized.get("phase") != "operator_synchronized" or synchronized.get("ssh_closed") is not True:
             raise InstallError("onboarding synchronization is unverified; preserve state and resume the same command")
-        result = verify_operator(target, command)
-        if result.get("phase") != "operator_verified" or result.get("ssh_closed") is not True:
+        result = verify_operator(target, command, display=False)
+        checks = result.get("checks") if isinstance(result.get("checks"), dict) else {}
+        if (result.get("phase") != "operator_verified" or result.get("ssh_closed") is not True
+                or any(checks.get(name) is not True for name, _ in setup_ui.ACCESS_CHECKS)):
             raise InstallError("onboarding verification or SSH closure is unverified; preserve state and resume")
         write_document(state / "last-verification.json", result, new=not (state / "last-verification.json").exists())
         config["phase"] = "verified"
         write_document(journal, config)
-        setup_ui.onboard_success(result["public_url"], str(target), str(state))
+        setup_ui.access_verified(result, onboarded=True, state=str(target), staging=str(state))
         return {**result, "phase": "operator_onboarded", "onboard_dir": str(state), "application_modified": False}

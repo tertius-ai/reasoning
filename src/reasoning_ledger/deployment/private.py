@@ -49,15 +49,20 @@ def protected_parent(path: Path, *, writable: bool = True) -> None:
     system_owner = Path("/").stat().st_uid
     for parent in (path.parent, *path.parent.parents):
         info = parent.lstat()
-        if (
-            not stat.S_ISDIR(info.st_mode)
-            or info.st_uid not in {system_owner, os.getuid()}
-            or info.st_mode & 0o022
-            and not (parent != path.parent and info.st_uid == system_owner and info.st_mode & stat.S_ISVTX)
-        ):
-            raise InstallError("operator state parents must be protected directories, not symlinks")
+        problem = None
+        if stat.S_ISLNK(info.st_mode):
+            problem = "is a symlink; use the real directory path"
+        elif not stat.S_ISDIR(info.st_mode):
+            problem = "is not a directory"
+        elif info.st_uid not in {system_owner, os.getuid()}:
+            problem = f"belongs to another user (uid {info.st_uid})"
+        elif info.st_mode & 0o022 and not (parent != path.parent and info.st_uid == system_owner and info.st_mode & stat.S_ISVTX):
+            writers = " and ".join(name for bit, name in ((0o020, "group"), (0o002, "others")) if info.st_mode & bit)
+            problem = f"is writable by {writers} (mode {stat.S_IMODE(info.st_mode):04o}); remove that with chmod go-w"
+        if problem is not None:
+            raise InstallError(f"operator state parents must be protected directories, not symlinks: {parent} {problem}")
     if writable and path.parent.stat().st_uid != os.getuid():
-        raise InstallError("operator state parent must belong to the current user")
+        raise InstallError(f"operator state parent must belong to the current user: {path.parent}")
 
 
 def read_document(path: Path) -> dict:
