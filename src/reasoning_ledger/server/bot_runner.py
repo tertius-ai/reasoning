@@ -64,9 +64,12 @@ def runtime_step(client, directory, configuration, agent, binding, *, runner=inv
     from .reasoning_effort import cli_efforts
 
     capabilities = {"efforts": {model: cli_efforts(agent["engine"], model) for model in models}, "gateway": "topic-v2"}
-    client._request("POST", "/api/bot/runtime", {"engine": agent["engine"], "models": models,
-                    "allow_other_users": binding["allow_other_users"], "local_tools": agent["local_tools"],
-                    "capabilities": capabilities})
+    advertised = client._request("POST", "/api/bot/runtime", {"engine": agent["engine"], "models": models,
+                                 "allow_other_users": binding["allow_other_users"], "local_tools": agent["local_tools"],
+                                 "capabilities": capabilities})
+    # A server with mention feedback records a visible refusal for requesters this policy excludes.
+    # Older servers would reject those mentions, so the runner then keeps skipping them locally.
+    feedback = isinstance(advertised, dict) and advertised.get("mention_feedback") is True
     pending = state["pending"]
     if pending:
         if pending["phase"] == "approval_interrupted":
@@ -90,7 +93,7 @@ def runtime_step(client, directory, configuration, agent, binding, *, runner=inv
     # Mentions and topic-default selection use the same durable queue. The source message identity deduplicates them.
     for message in client.messages(state["cursor"], 20):
         if message["author_kind"] == "human" and mentioned_models(message["content"], binding['bot_id']) and (
-                binding["allow_other_users"] or message["author_id"] == binding["owner_id"]):
+                feedback or binding["allow_other_users"] or message["author_id"] == binding["owner_id"]):
             client._request("POST", "/api/bot/runs/from-message", {"message_id": message["id"]})
         state["cursor"] = message["sequence"]
         write_journal(journal, state, new=not journal.exists())

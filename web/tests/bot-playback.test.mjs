@@ -33,6 +33,11 @@ test("running bots pulse their real reported phase without fabricated reasoning"
   assert.match(waiting, /bot owner/); assert.doesNotMatch(waiting, /org-working/);
 });
 
+test("a mention the owner's policy excludes explains why it was not run", () => {
+  const html = renderToStaticMarkup(React.createElement(conversation.BotRunStatus, { run: { status: "cancelled", error_code: "requester_not_permitted" } }));
+  assert.match(html, /Not run: this bot accepts requests only from its owner/); assert.doesNotMatch(html, /<button|org-working/);
+});
+
 test("stopped bot outcomes stay explicitly unknown without restart or per-run cancel buttons", () => {
   const html = renderToStaticMarkup(React.createElement(conversation.BotRunStatus, { run: { status: "outcome_unknown", error_code: "stop_requested" } }));
   assert.match(html, /local outcome is unknown/); assert.match(html, /before any new attempt/);

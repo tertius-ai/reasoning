@@ -21,6 +21,8 @@ AWAITING_CONSENT = (
     "(EXISTS (SELECT 1 FROM bot_execution_approvals a WHERE a.run_id=bot_runs.id AND a.status IN ('pending','approved')) "
     "OR EXISTS (SELECT 1 FROM bot_issue_approvals a WHERE a.run_id=bot_runs.id AND a.status IN ('pending','approved')))"
 )
+# A mention whose author the bot owner's runner policy excludes; recorded so the requester sees why.
+DECLINED = "requester_not_permitted"
 MENTION = re.compile(r"@\[([a-f0-9]{32})(?::([A-Za-z0-9][A-Za-z0-9._/-]{0,99})(?:!(low|medium|high|xhigh|max))?)?\]")
 
 
@@ -75,7 +77,8 @@ class BotRuntime:
                 (bot["id"], engine, json.dumps(models), allow_other_users, local_tools, int(time.time()), "topic-v1",
                  json.dumps(capabilities or {})),
             )
-            return {"models": models, "policy": "topic-v1"}
+            # mention_feedback: from_message records a visible refusal for a requester the policy excludes.
+            return {"models": models, "policy": "topic-v1", "mention_feedback": True}
 
     def models(self, user, org, topic):
         with self.store.transaction() as db:
@@ -198,7 +201,10 @@ class BotRuntime:
             previous = db.execute("SELECT * FROM bot_runs WHERE organization_id=? AND client_id=? AND bot_id=?",
                                   (bot["organization_id"], client_id, bot["id"])).fetchone()
             if previous:
-                self._run_access(db, bot, previous)
+                if previous["error_code"] == DECLINED:
+                    self.access(db, bot, previous["topic_id"])
+                else:
+                    self._run_access(db, bot, previous)
                 return self.public(previous)
             message = _row(db.execute("SELECT * FROM messages WHERE id=? AND organization_id=? AND sender_kind='human'",
                                       (message_id, bot["organization_id"])).fetchone())
@@ -207,6 +213,9 @@ class BotRuntime:
             if not selections:
                 raise StoreError(403, "this message does not mention the bot")
             runtime = _row(db.execute("SELECT * FROM bot_runtimes WHERE bot_id=?", (bot["id"],)).fetchone())
+            if message["author_id"] != bot["created_by"] and not runtime["allow_other_users"]:
+                return self._decline(db, bot, message, client_id, sorted(filter(None, selections)) or json.loads(
+                    runtime["models_json"])[:1])
             explicit = {selection for selection in selections if selection is not None}
             if len(explicit) > 1:
                 raise StoreError(400, "select one model per bot invocation")
@@ -217,6 +226,21 @@ class BotRuntime:
             return self.enqueue(message["author_id"], bot["organization_id"], message["topic_id"], f"bot/{bot['id']}/{model}",
                                 client_id, through=message["sequence"],
                                 prompt=message["content"], db=db, mention=True, effort=next(iter(efforts), None))
+
+    def _decline(self, db, bot, message, client_id, models):
+        """A terminal, visible refusal: the requester sees why, no CLI is invoked and no prompt is retained."""
+        self.access(db, bot, message["topic_id"])
+        scope = db.execute("SELECT t.channel_id,c.project_id FROM topics t JOIN channels c ON c.id=t.channel_id "
+                           "WHERE t.id=?", (message["topic_id"],)).fetchone()
+        run_id, now = _id(), int(time.time())
+        db.execute("INSERT INTO bot_runs(id,organization_id,project_id,channel_id,topic_id,bot_id,requested_by,model,client_id,"
+                   "request_json,prompt,status,phase,created_at,updated_at,context_through_sequence,error_code) "
+                   "VALUES(?,?,?,?,?,?,?,?,?,?,'','cancelled','finishing',?,?,?,?)",
+                   (run_id, bot["organization_id"], scope["project_id"], scope["channel_id"], message["topic_id"], bot["id"],
+                    message["author_id"], models[0], client_id, json.dumps({"declined": DECLINED}), now, now,
+                    message["sequence"], DECLINED))
+        self.store._audit(db, bot["organization_id"], message["author_id"], "bot.inference.decline", run_id)
+        return self.public(db.execute("SELECT * FROM bot_runs WHERE id=?", (run_id,)).fetchone())
 
     @staticmethod
     def public(row):

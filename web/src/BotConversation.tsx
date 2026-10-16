@@ -18,6 +18,7 @@ export function BotRunStatus({ run }: { run: BotRun }) {
     {run.error_code === "gateway_unavailable" || run.error_code === "gateway_not_attached"
       ? "Bot tools could not connect. Ask its owner to update the checkout, run make bot-doctor, and restart make bot-run."
       : run.error_code === "approval_transport_ended" ? "Bot transport ended before execution. Review the retained request in People, stop this invocation, and submit a new request."
+      : run.error_code === "requester_not_permitted" ? "Not run: this bot accepts requests only from its owner. Ask its owner to allow other members, or use your own bot."
       : run.status === "waiting_approval" ? "Waiting for the bot owner's approval in People."
       : run.status === "outcome_unknown" ? run.error_code === "stop_requested"
         ? "Stopped at the server; the local outcome is unknown. Ask the bot owner to inspect its retained invocation before any new attempt."
