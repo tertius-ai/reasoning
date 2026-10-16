@@ -1,27 +1,25 @@
 import { schedulePoll } from "./polling";
-import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import React, { lazy, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import ReactMarkdown, { Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import remarkMath from "remark-math";
 import rehypeKatex from "rehype-katex";
 import { BetaConversation, definitiveRejection, requestModelReply } from "./BetaConversation";
 import { ForkOrigin, MessageActions } from "./ChatFeedback";
-import { BotAdministration } from "./BotAdministration";
 import { BotApprovalDialog, useBotApprovals } from "./BotApprovals";
 import { BotConversation } from "./BotConversation";
 import { withBotModels } from "./botModels";
 import { availableEfforts } from "./ReasoningEffort";
 import { editMentions, encodeMentions, MentionBinding } from "./composerMentions";
-import { ComputeAdministration } from "./ComputeAdministration";
 import { ComputeConversation } from "./ComputeConversation";
-import { KnowledgeBrowser } from "./KnowledgeBrowser";
-import { KnowledgeLinks, KnowledgeView, KnowledgeWorkspace } from "./KnowledgeWorkspace";
+import { KnowledgeLinks, KnowledgeView } from "./KnowledgeLinks";
+import { LazyView } from "./LazyView";
 import { WorkflowConversation } from "./WorkflowConversation";
 import { TopicActivity, orderedActivity } from "./TopicActivity";
 import { WorkflowAttempt } from "./workflow-api";
 import { WorkflowExecutionAttempt } from "./workflow-run-api";
 import { ComputeAttempt } from "./compute-api";
-import { MessageUsageDetails, OrganizationModelBrowser, OrganizationUsagePanel } from "./OrganizationUsage";
+import { MessageUsageDetails } from "./MessageUsageDetails";
 import { normalizeMathDelimiters } from "./markdownMath";
 import { modelOptionGroups } from "./modelRecommendations";
 import { ModelPicker, compactTokens } from "./ModelBrowser";
@@ -32,15 +30,24 @@ import { ThemeToggle } from "./ThemeToggle";
 import { ShortcutsHelp, SlashCommandPalette, TOPIC_COMMANDS, TopicCommand, dispatchTopicCommand, useTopicCommand } from "./TopicCommands";
 import { AttachmentButton, MarkdownMedia, MediaScope } from "./TopicMedia";
 import { TexRequestDialog, texRequest } from "./TexRequestDialog";
-import { HelpPage } from "./HelpPage";
 import { EmailVerification, VerifyEmailBanner } from "./EmailVerification";
 import { BatchInvitations, InvitationDeliveryProgress } from "./BatchInvitations";
 import { ProviderKeyUsage } from "./ProviderKeyUsage";
 import {
   Account, ApiError, Channel, EMPTY_HIERARCHY, Hierarchy, InferenceConfiguration, Invitation, InvitationMail, KeyMetadata, KIND_LABEL, KIND_SYMBOL, KnowledgeTool,
   BotModel, Member, MentionQuery, Message, ModelAttempt, Organization, PendingModelAttempt, OrganizationPrices, Policy, Presence, Project, ProjectMember, SearchResult, Session, Topic, TopicKind,
-  aborted, authorLabel, clearSharedReads, decimalBudget, errorMessage, invitationEmailLabel, mentionMarkdown, mentionQuery, mentionText, mergeMessages, organizationPath, request, sharedRequest, topicPath,
+  aborted, authorLabel, decimalBudget, errorMessage, invitationEmailLabel, mentionMarkdown, mentionQuery, mentionText, mergeMessages, organizationPath, request, sharedRequest, topicPath,
 } from "./organization-api";
+
+// Views opened by deliberate navigation load on first use.
+const loadKnowledgeWorkspace = () => import("./KnowledgeWorkspace");
+const KnowledgeWorkspace = lazy(() => loadKnowledgeWorkspace().then(module => ({ default: module.KnowledgeWorkspace })));
+const KnowledgeBrowser = lazy(() => import("./KnowledgeBrowser").then(module => ({ default: module.KnowledgeBrowser })));
+const BotAdministration = lazy(() => import("./BotAdministration").then(module => ({ default: module.BotAdministration })));
+const ComputeAdministration = lazy(() => import("./ComputeAdministration").then(module => ({ default: module.ComputeAdministration })));
+const OrganizationModelBrowser = lazy(() => import("./OrganizationUsage").then(module => ({ default: module.OrganizationModelBrowser })));
+const OrganizationUsagePanel = lazy(() => import("./OrganizationUsage").then(module => ({ default: module.OrganizationUsagePanel })));
+const HelpPage = lazy(() => import("./HelpPage").then(module => ({ default: module.HelpPage })));
 
 type Draft = { text: string; clientId: string; attempted: boolean; mentions?: MentionBinding[] };
 type Creation = "organization" | "project" | "channel" | "topic";
@@ -253,54 +260,6 @@ export function AccountMenu({ user, organization, organizations, canCreateOrgani
       <footer><a href="/licenses/Reasoning-NOTICE.txt">License notices</a></footer>
     </div>
   </details>;
-}
-
-function AuthForm({ mode, invitation, onMode, onAuthenticated }: {
-  mode: "login" | "join" | "setup"; invitation: string; onMode: (mode: "login" | "join") => void;
-  onAuthenticated: (session: Session) => Promise<void>;
-}) {
-  const [email, setEmail] = useState("");
-  const [name, setName] = useState("");
-  const [password, setPassword] = useState("");
-  const [token, setToken] = useState(invitation);
-  const [organization, setOrganization] = useState("");
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState("");
-  const title = mode === "setup" ? "Create your organization" : mode === "join" ? "Join an organization" : "Sign in to Reasoning";
-  const submit = async (event: React.FormEvent) => {
-    event.preventDefault(); setBusy(true); setError("");
-    try {
-      const session = await request<Session>(mode === "login" ? "/auth/login" : mode === "join" ? "/invitations/accept" : "/setup", {
-        method: "POST", body: mode === "login" ? { email, password } : mode === "join" ? { token, name, password }
-          : { email, name, password, organization_name: organization, setup_token: token },
-      });
-      await onAuthenticated(session);
-    } catch (cause) { setError(errorMessage(cause)); }
-    finally { setPassword(""); setBusy(false); }
-  };
-  return <main className="org-auth"><div className="org-auth-card">
-    <div className="org-wordmark"><img src="/reasoning.svg" alt="" />Reasoning</div>
-    <h1>{title}</h1>
-    <form onSubmit={submit}>
-      {mode !== "login" && <label>{mode === "setup" ? "Setup credential" : "Invitation token"}<input name="token" type="password"
-        required value={token} autoComplete="off" onChange={(event) => setToken(event.target.value)} /></label>}
-      {mode !== "join" && <label>Email<input name="email" type="email" required autoComplete="username" value={email}
-        onChange={(event) => setEmail(event.target.value)} autoFocus /></label>}
-      {mode !== "login" && <label>Your name<input name="name" required maxLength={200} value={name} autoComplete="name"
-        onChange={(event) => setName(event.target.value)} /></label>}
-      <label>Password<input name="password" type="password" required minLength={mode === "login" ? undefined : 12} maxLength={1024}
-        autoComplete={mode === "login" ? "current-password" : "new-password"} value={password}
-        onChange={(event) => setPassword(event.target.value)} /></label>
-      {mode === "setup" && <label>Organization name<input name="organization" required maxLength={200} value={organization}
-        onChange={(event) => setOrganization(event.target.value)} /></label>}
-      {error && <p role="alert" className="org-error">{error}</p>}
-      <button className="org-primary" disabled={busy}>{busy ? "Working…" : mode === "login" ? "Sign in" : mode === "join" ? "Accept invitation" : "Create organization"}</button>
-    </form>
-    {mode === "join" && <p className="org-help">Your invitation determines your email address. Already registered? <button onClick={() => onMode("login")}>Sign in first</button>.</p>}
-    {mode === "login" && <div className="org-help"><button onClick={() => onMode("join")}>Have an invitation?</button><p>For account recovery, contact your server administrator.</p></div>}
-    {mode === "setup" && <p className="org-help">The host administrator can read the private setup-token file or complete setup with the server CLI.</p>}
-    <footer>© Benjamin Antieau and Deven Manam · <a href="/licenses/Reasoning-Apache-2.0.txt">Apache-2.0</a></footer>
-  </div></main>;
 }
 
 function CreationDialog({ kind, hierarchy, organizationId, parentId, members, userId, canCreatePrivate, onClose, onCreate }: {
@@ -1140,8 +1099,8 @@ function Administration({ organization, onClose, onRefresh, onAuthLost }: { orga
     <nav className="org-admin-tabs" aria-label="Administration">{(["members", "invitations", "ai", "bots", "compute"] as const).map((value) =>
       <button key={value} aria-pressed={tab === value} onClick={() => { setTab(value); setError(""); }}>{value === "ai" ? "Inference" : value[0].toUpperCase() + value.slice(1)}</button>)}</nav>
     {error && <p role="alert" className="org-error">{error}</p>}
-    {tab === "bots" && <BotAdministration key={organization.id} organizationId={organization.id} />}
-    {tab === "compute" && <ComputeAdministration key={organization.id} organizationId={organization.id} onAuthLost={onAuthLost} />}
+    {tab === "bots" && <LazyView label="Bot administration"><BotAdministration key={organization.id} organizationId={organization.id} /></LazyView>}
+    {tab === "compute" && <LazyView label="Compute administration"><ComputeAdministration key={organization.id} organizationId={organization.id} onAuthLost={onAuthLost} /></LazyView>}
     {tab === "members" && <ul className="org-admin-list">{members.map((member) => <li key={member.id}><div><strong>{member.name}</strong><small>{member.email}</small></div>
       {organization.role === "owner" || !["owner", "admin"].includes(member.role) ? <>
         <select aria-label={"Role for " + member.name} value={member.role} disabled={busy} onChange={(event) => void action(() => request(root + "/members/" + member.id, { method: "PATCH", body: { role: event.target.value } }))}>
@@ -1208,20 +1167,20 @@ function Administration({ organization, onClose, onRefresh, onAuthLost }: { orga
   </Dialog>;
 }
 
-export function OrganizationApp() {
+/** The signed-in workspace; the shell owns the session check, sign-in, and pending invitation/verification links. */
+export function OrganizationApp({ user, onAccount, onAuthenticated, onSignedOut, invitation, onInvitation: setInvitation,
+  verificationToken, onVerificationToken: setVerificationToken, sessionOrganization = null }: {
+  user: Account; onAccount: (account: Account) => void; onAuthenticated: (session: Session) => Promise<void>; onSignedOut: () => void;
+  invitation: string; onInvitation: (token: string) => void; verificationToken: string; onVerificationToken: (token: string) => void;
+  sessionOrganization?: string | null;
+}) {
   const [pairCode, setPairCode] = useState(() => typeof window === "undefined" ? undefined : new URLSearchParams(window.location.search).get("bot_connect") ?? undefined);
-  const [user, setUser] = useState<Account | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [initialized, setInitialized] = useState(true);
-  const [invitation, setInvitation] = useState(() => typeof window === "undefined" ? "" : new URLSearchParams(window.location.hash.slice(1)).get("invite") ?? "");
-  const [verificationToken, setVerificationToken] = useState(() => typeof window === "undefined" ? "" : new URLSearchParams(window.location.hash.slice(1)).get("verify") ?? "");
-  const [mode, setMode] = useState<"login" | "join">(invitation ? "join" : "login");
   const [organizations, setOrganizations] = useState<Organization[]>([]);
   const [workspace, setWorkspace] = useState(() => {
     const query = new URLSearchParams(typeof window === "undefined" ? "" : window.location.search);
     return { organization: query.get("organization"), view: query.get("view"), topic: query.get("topic") ?? undefined, project: query.get("project") ?? undefined };
   });
-  const [organizationId, setOrganizationId] = useState<string | null>(workspace.organization);
+  const [organizationId, setOrganizationId] = useState<string | null>(workspace.organization ?? sessionOrganization);
   const [hierarchy, setHierarchy] = useState<Hierarchy>(EMPTY_HIERARCHY);
   const [navigationUsage, setNavigationUsage] = useState<NavigationUsage>();
   const [members, setMembers] = useState<Member[]>([]);
@@ -1291,13 +1250,8 @@ export function OrganizationApp() {
   const draft = drafts[draftKey] ?? { text: "", clientId: "", attempted: false };
   const preferenceRefresh = useCallback(() => setRefresh((value) => value + 1), []);
   const beginCreation = (kind: Creation, parentId?: string) => { setCreationParent(parentId); setCreation(kind); };
-  const authLost = useCallback(() => {
-    clearSharedReads();
-    setUser(null); setOrganizations([]); setOrganizationId(null); setHierarchy(EMPTY_HIERARCHY); setMembers([]);
-    setSelection(null); setDrafts({}); setModelAttempts({}); setComputeAttempts({}); setWorkflowAttempts({}); setWorkflowExecutionAttempts({}); setAdmin(false); setCreation(null); setCreationParent(undefined); setResults(null); setSearch("");
-    setInformation(null); setTool(null); setEntitySettings(null);
-    setNavigationUsage(undefined);
-  }, []);
+  // Signing out unmounts this workspace, which discards drafts, retained attempts, and shared reads.
+  const authLost = onSignedOut;
 
   useEffect(() => {
     if (![...Object.values(computeAttempts), ...Object.values(workflowAttempts), ...Object.values(workflowExecutionAttempts)].some(Boolean)) return;
@@ -1305,21 +1259,6 @@ export function OrganizationApp() {
     window.addEventListener("beforeunload", warn);
     return () => window.removeEventListener("beforeunload", warn);
   }, [computeAttempts, workflowAttempts, workflowExecutionAttempts]);
-
-  useEffect(() => {
-    if (invitation || verificationToken) window.history.replaceState(null, "", window.location.pathname + window.location.search);
-    const controller = new AbortController();
-    const failure = (cause: unknown) => {
-      if (!controller.signal.aborted && !aborted(cause) && !(cause instanceof ApiError && cause.status === 401)) setError(errorMessage(cause));
-    };
-    void Promise.all([
-      request<{ initialized: boolean }>("/health", { signal: controller.signal })
-        .then(health => { if (!controller.signal.aborted) setInitialized(health.initialized); }).catch(failure),
-      request<Account>("/auth/me", { signal: controller.signal })
-        .then(account => { if (!controller.signal.aborted) { setUser(account); setLoading(false); } }).catch(failure),
-    ]).finally(() => { if (!controller.signal.aborted) setLoading(false); });
-    return () => controller.abort();
-  }, []);
 
   useEffect(() => {
     if (!user) return;
@@ -1444,13 +1383,9 @@ export function OrganizationApp() {
   }, [hierarchy.topics, selection, creation, admin, helpOpen]);
 
   const authenticated = async (session: Session) => {
-    clearSharedReads();
-    setUser(await request<Account>("/auth/me")); setInitialized(true); setError("");
-    if (session.organization_id) { setOrganizationId(workspace.organization ?? session.organization_id); setInvitation(""); }
+    await onAuthenticated(session); setError("");
+    if (session.organization_id) setOrganizationId(workspace.organization ?? session.organization_id);
   };
-  if (loading) return <main className="org-auth"><p role="status">Opening Reasoning…</p></main>;
-  if (!user) return <><AuthForm key={initialized ? mode : "setup"} mode={!initialized ? "setup" : mode} invitation={invitation} onMode={setMode} onAuthenticated={authenticated} />
-    {error && <div className="org-startup-error" role="alert">{error} <button onClick={() => window.location.reload()}>Reconnect</button></div>}</>;
 
   const select = (id: string, anchor: number | null = null) => {
     setHelpOpen(false);
@@ -1494,7 +1429,7 @@ export function OrganizationApp() {
       <div className="org-toolbar-icons"><ThemeToggle />{organization && <button className="org-icon-button org-presence-toggle" aria-label="Show online people and bots" title="People" aria-expanded={presenceOpen}
         onClick={() => setPresenceOpen((value) => !value)}><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" aria-hidden="true"><circle cx="9" cy="7" r="3"/><path d="M3 21v-3a6 6 0 0 1 12 0v3M17 4a3 3 0 0 1 0 6M21 21v-3a6 6 0 0 0-3-5"/></svg></button>}
       {organization && topic && <TopicCopyButton key={organization.id + "/" + topic.id} organizationId={organization.id} topicId={topic.id} onAuthLost={authLost} />}
-      {organization && <KnowledgeLinks organizationId={organization.id} topicId={topic?.id} onOpen={openKnowledge} />}
+      {organization && <KnowledgeLinks organizationId={organization.id} topicId={topic?.id} onOpen={openKnowledge} onIntent={() => void loadKnowledgeWorkspace().catch(() => { /* The workspace view reports load failures. */ })} />}
       <a className="org-icon-button" href="/organization.html?view=help" aria-label="Help" title="Help" onClick={event => {
         if (event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) return;
         event.preventDefault(); setHelpOpen(value => !value);
@@ -1504,10 +1439,10 @@ export function OrganizationApp() {
     {error && <div className="org-banner" role="alert">{error}<button aria-label="Dismiss error" onClick={() => setError("")}>×</button></div>}
     {verificationToken && <VerifyEmailBanner token={verificationToken} onDone={() => {
       setVerificationToken(""); window.history.replaceState(null, "", window.location.pathname + window.location.search);
-      void request<Account>("/auth/me").then(setUser).catch(cause => setError(errorMessage(cause)));
+      void request<Account>("/auth/me").then(onAccount).catch(cause => setError(errorMessage(cause)));
     }} />}
     {invitation && <div className="org-banner">You have an invitation. <button onClick={() => void request<Session>("/invitations/accept", { method: "POST", body: { token: invitation } })
-      .then(async (session) => { await authenticated(session); setRefresh((value) => value + 1); setUser(await request<Account>("/auth/me")); })
+      .then(async (session) => { await authenticated(session); setRefresh((value) => value + 1); })
       .catch((cause) => setError(errorMessage(cause)))}>Accept invitation</button><button onClick={() => setInvitation("")}>Dismiss</button></div>}
     <div className="org-body">
       {navOpen && <button className="org-nav-backdrop" aria-label="Close project navigation" onClick={() => setNavOpen(false)} />}
@@ -1528,8 +1463,8 @@ export function OrganizationApp() {
           onSignOut={() => void request("/auth/logout", { method: "POST", body: {} }).then(authLost).catch((cause) => setError(errorMessage(cause)))} /></footer>
       </aside>
       <main className="org-main">
-        {helpOpen ? <HelpPage onClose={() => setHelpOpen(false)} /> : knowledgeView && organization ? <MediaScope.Provider value={{ organizationId: organization.id }}><KnowledgeWorkspace key={organization.id + knowledgeView} organization={organization} hierarchy={hierarchy} view={knowledgeView}
-          embedded initialTopicId={workspace.topic ?? topic?.id} initialProjectId={workspace.project} onAuthLost={authLost} /></MediaScope.Provider> : searching || results !== null ? <section className="org-search-results"><header><h1>Search messages</h1><button onClick={() => setSearch("")}>Close search</button></header>
+        {helpOpen ? <LazyView label="Help"><HelpPage onClose={() => setHelpOpen(false)} /></LazyView> : knowledgeView && organization ? <MediaScope.Provider value={{ organizationId: organization.id }}><LazyView label="Research workspace"><KnowledgeWorkspace key={organization.id + knowledgeView} organization={organization} hierarchy={hierarchy} view={knowledgeView}
+          embedded initialTopicId={workspace.topic ?? topic?.id} initialProjectId={workspace.project} onAuthLost={authLost} /></LazyView></MediaScope.Provider> : searching || results !== null ? <section className="org-search-results"><header><h1>Search messages</h1><button onClick={() => setSearch("")}>Close search</button></header>
           {searching ? <p role="status">Searching…</p> : !results?.length ? <p>No matching messages.</p> : <ol>{results.map((result) => <li key={result.id}><button onClick={() => select(result.topic_id, result.sequence)}>
             <small>{result.project_name} / #{result.channel_name} / {KIND_SYMBOL[result.topic_kind]}-{result.topic_name}</small>
             <p>{mentionText(result.content, members)}</p></button></li>)}</ol>}
@@ -1554,13 +1489,14 @@ export function OrganizationApp() {
     </div>
     {information && <Dialog title={information === "user" ? "User information" : "Organization information"} onClose={() => setInformation(null)}>
       {information === "user" ? <><dl><dt>Name</dt><dd>{user.name}</dd><dt>Email</dt><dd>{user.email}</dd></dl>
-        <EmailVerification onVerified={() => { void request<Account>("/auth/me").then(setUser).catch(cause => setError(errorMessage(cause))); }} /></>
+        <EmailVerification onVerified={() => { void request<Account>("/auth/me").then(onAccount).catch(cause => setError(errorMessage(cause))); }} /></>
         : organization && <dl><dt>Name</dt><dd>{organization.name}</dd><dt>Your role</dt><dd>{organization.role}</dd></dl>}
     </Dialog>}
     {tool && organization && <Dialog title={tool === "bots" ? "My bots" : tool === "knowledge" ? "Shared knowledge" : tool === "prices" ? "Model capabilities" : "Usage and energy"} onClose={() => setTool(null)}>
       {tool === "bots" && pairCode && <label>Approve in organization<select value={organization.id} onChange={(event) => switchOrganization(event.target.value)}>
         {organizations.map((item) => <option value={item.id} key={item.id}>{item.name}</option>)}
       </select></label>}
+      <LazyView label={tool === "bots" ? "My bots" : tool === "knowledge" ? "Shared knowledge" : tool === "prices" ? "Model capabilities" : "Usage and energy"}>
       {tool === "bots" ? <BotAdministration key={organization.id} organizationId={organization.id} personal readOnly={organization.role === "viewer"} pairCode={pairCode} onConnected={() => {
         setPairCode(undefined); setTool(null); const url = new URL(window.location.href); url.searchParams.delete("bot_connect"); window.history.replaceState(null, "", url);
       }} />
@@ -1568,6 +1504,7 @@ export function OrganizationApp() {
           canWrite={organization.role !== "viewer"} onAuthLost={authLost} />
         : tool === "prices" ? <OrganizationModelBrowser key={organization.id} organizationId={organization.id} canManage={["owner", "admin"].includes(organization.role)} onAuthLost={authLost} />
           : <OrganizationUsagePanel key={organization.id} organizationId={organization.id} canManage={["owner", "admin"].includes(organization.role)} onAuthLost={authLost} />}
+      </LazyView>
     </Dialog>}
     {shortcutsOpen && <ShortcutsHelp onClose={() => setShortcutsOpen(false)} />}
     {creation === "organization" && <OrganizationCreationDialog organizations={organizations}

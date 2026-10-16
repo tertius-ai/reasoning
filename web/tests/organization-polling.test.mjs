@@ -131,3 +131,16 @@ test("startup lists organizations once and idle views do not poll unused configu
   assert.doesNotMatch(compute.slice(compute.indexOf("export function ComputeConversation")), /Promise\.all\(\[\s*request<ComputeConfiguration>/);
   assert.match(compute, /if \(!editorOpen\) return;/);
 });
+
+test("sign-in loads only the shell; the signed-in application and rare views load on demand", async () => {
+  const [main, shell, app] = await Promise.all([source("organization-main.tsx"), source("OrganizationShell.tsx"), source("OrganizationApp.tsx")]);
+  assert.match(main, /import \{ OrganizationShell \} from "\.\/OrganizationShell"/);
+  assert.doesNotMatch(main, /OrganizationApp/);
+  assert.doesNotMatch(shell, /^import[^\n]*from "\.\/OrganizationApp"/m, "the shell imports the application only dynamically");
+  assert.match(shell, /import\("\.\/OrganizationApp"\)/);
+  assert.doesNotMatch(shell, /react-markdown|katex/);
+  for (const view of ["KnowledgeWorkspace", "KnowledgeBrowser", "BotAdministration", "ComputeAdministration", "OrganizationUsage", "HelpPage"]) {
+    assert.doesNotMatch(app, new RegExp(`^import[^\\n]*from "\\./${view}"`, "m"), view);
+    assert.match(app, new RegExp(`import\\("\\./${view}"\\)`), view);
+  }
+});

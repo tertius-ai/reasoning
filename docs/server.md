@@ -128,6 +128,14 @@ The public server serves `organization.html`, not the local-workbench entry
 point, and mounts only the build's assets, license material, and icon. It never
 exposes the installation state directory or local-workbench API. The frontend
 bundle includes Apache-2.0/NOTICE and the bundled font/KaTeX notices.
+The organization entry point is a small shell that checks the session and
+renders sign-in, setup and invitation forms. The signed-in application, with its
+Markdown/KaTeX renderer, loads after the session check succeeds (and starts
+loading when a sign-in form is submitted). The research workspaces, shared
+knowledge, help, model capabilities, usage, and bot and compute administration
+load as separate chunks when first opened, with a loading state and a reload
+action if a chunk cannot be loaded; pointing at the research workspace links
+starts loading that view.
 
 Every build file under `/assets/` is named `<name>-<content hash>.<extension>`.
 Successful responses for such names (200, or 304 on revalidation) carry
