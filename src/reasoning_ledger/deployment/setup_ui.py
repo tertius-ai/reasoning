@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from contextlib import contextmanager
 from decimal import Decimal
+from pathlib import PurePath
 from time import monotonic
 
 from rich import box
@@ -138,18 +139,20 @@ def onboard_handoff(public_file: str, fingerprint: str, public_key: str, resume:
     section("Existing operator authorization", "Send only this public key, never its private key or your token.")
     console.print()
     console.print(Text("Public key file: " + public_file))
-    console.print(Text("Public key fingerprint: " + fingerprint))
+    console.print(Text("SSH key fingerprint: " + fingerprint))
     console.print()
     console.print(Text(public_key), soft_wrap=True)
     console.print()
     console.print(Text("1. On the existing operator's computer", style="bold bright_white"))
-    console.print(Text("Save the public key in a file, then run:"))
+    console.print(Text("Save the public key in a file, then run the command below. It asks for that file and reads it once."))
     console.print()
-    console.print(Text("  make operator-authorize OPERATOR_PUBLIC_KEY=/secure/received-operator.pub", style="bright_cyan"),
-                  soft_wrap=True)
+    console.print(Text("  make operator-authorize", style="bright_cyan"), soft_wrap=True)
+    console.print()
+    console.print(Text("Its review shows a \"Collaborator SSH key fingerprint\"; it must equal the fingerprint above."))
     console.print()
     console.print(Text("2. Receive the handoff on this computer", style="bold bright_white"))
-    console.print(Text("Ask the operator to send the archive privately and confirm its SHA-256 through an authenticated connection."))
+    console.print(Text("The existing operator sends the archive privately and its handoff archive checksum "
+                       "through an authenticated connection."))
     console.print()
     console.print(Text("Protect the received archive:"))
     console.print()
@@ -162,13 +165,43 @@ def onboard_handoff(public_file: str, fingerprint: str, public_key: str, resume:
     console.print()
 
 
-def onboard_success(url: str, state: str, staging: str) -> None:
-    body = Text("This computer is onboarded\n", style="bold bright_green")
-    body.append(url + "\n", style="bold bright_white")
-    body.append("SSH and HTTPS verified; temporary inbound SSH is closed. No application upgrade was performed.\n", style="white")
-    body.append("Keep deployment state: " + state + "\nKeep key/token preparation: " + staging + "\n", style="dim")
-    body.append("Next: make doctor, or coordinate with the other operator before make upgrade.", style="white")
-    console.print(Panel.fit(body, border_style="green", padding=(1, 3)))
+ACCESS_CHECKS = (
+    ("digitalocean_access", "DigitalOcean access"),
+    ("ssh_server_identity", "SSH authentication and server identity"),
+    ("release_and_https", "Installed release and HTTPS"),
+    ("ssh_closed", "Temporary SSH access closed"),
+)
+
+
+def access_verified(result: dict, *, onboarded: bool = False, state: str | None = None, staging: str | None = None) -> bool:
+    """Print each access check; report readiness only when every check passed and SSH closed."""
+    checks = result.get("checks") if isinstance(result.get("checks"), dict) else {}
+    ready = result.get("phase") == "operator_verified" and all(checks.get(name) is True for name, _ in ACCESS_CHECKS)
+    console.print()
+    heading = Text()
+    heading.append("Deployment access verified: " if ready else "Deployment access not verified: ",
+                   style="bold bright_green" if ready else "bold yellow")
+    heading.append(str(result.get("public_url", "")), style="bold bright_white")
+    console.print(heading)
+    console.print()
+    for name, label in ACCESS_CHECKS:
+        line = Text()
+        line.append("✓ " if checks.get(name) is True else "✗ ", style="bold green" if checks.get(name) is True else "bold red")
+        line.append(label)
+        console.print(line)
+    console.print()
+    if not ready:
+        return False
+    if onboarded:
+        console.print(Text("This computer is onboarded. No application upgrade was performed.", style="white"))
+        if state is not None and staging is not None:
+            console.print(Text("Keep deployment state: " + state + "\nKeep key/token preparation: " + staging, style="dim"))
+        console.print()
+    console.print(Text("Ready to upgrade.", style="bold bright_white"))
+    console.print(Text("Coordinate with the other operator, then run: make upgrade"))
+    if onboarded:
+        console.print(Text("Optional later recheck: make doctor", style="dim"))
+    return True
 
 
 def operator_review(url: str, fingerprint: str, output: str, ssh_cidr: str) -> None:
@@ -176,23 +209,69 @@ def operator_review(url: str, fingerprint: str, output: str, ssh_cidr: str) -> N
     rows.add_column(style="bold cyan", no_wrap=True)
     rows.add_column(overflow="fold")
     rows.add_row("Site", escape(url))
-    rows.add_row("SSH key", "SHA256:" + fingerprint[:24] + "…")
+    rows.add_row("Collaborator SSH key fingerprint", escape(fingerprint))
     rows.add_row("SSH", escape(ssh_cidr) + " · temporary")
-    rows.add_row("Handoff", escape(output))
-    note = Text("The handoff contains public trust and release state—not tokens, passwords, or private keys.", style="dim")
+    rows.add_row("Handoff archive", escape(output))
+    note = Text()
+    note.append("Compare the fingerprint with the one the collaborator's make onboard displays, "
+                "through a channel where you recognize them.\n", style="white")
+    note.append("The handoff contains public trust and release state—not tokens, passwords, or private keys.", style="dim")
     console.print(Panel(Group(rows, Text(), note), title="Review collaborator access", border_style="yellow", padding=(1, 2)))
 
 
-def operator_success(url: str, detail: str, *, joined: bool = False) -> None:
+def handoff_message(url: str, fingerprint: str, archive: str, checksum: str) -> str:
+    name = PurePath(archive).name
+    return (
+        f"You are authorized as a Reasoning deployment operator for {url}.\n"
+        f"Your SSH key fingerprint: {fingerprint}\n"
+        "\n"
+        f"1. Save the handoff archive {name} that I sent separately, and protect it:\n"
+        f"   chmod 600 /path/to/{name}\n"
+        "2. In your Reasoning checkout, rerun make onboard (or the resume command it printed).\n"
+        "3. When asked, enter the archive path and this handoff archive checksum (SHA-256):\n"
+        f"   {checksum}\n"
+        "\n"
+        "Onboarding refuses an archive whose checksum differs. If this message did not reach you through a channel "
+        "where you recognize me, confirm the checksum with me directly before continuing."
+    )
+
+
+def operator_handoff_ready(url: str, fingerprint: str, archive: str, checksum: str, *, closing: bool = False) -> None:
+    rows = Table.grid(padding=(0, 2))
+    rows.add_column(style="bold cyan", no_wrap=True)
+    rows.add_column(overflow="fold")
+    rows.add_row("Site", escape(url))
+    rows.add_row("Collaborator SSH key fingerprint", escape(fingerprint))
+    rows.add_row("Handoff archive", escape(archive))
+    rows.add_row("Handoff archive checksum", "SHA-256 " + checksum)
+    console.print(Panel(rows, title="Collaborator authorized", border_style="yellow" if closing else "green", padding=(1, 2)))
+    if closing:
+        console.print(Text("DigitalOcean is still applying the SSH firewall closure. Rerun the same "
+                           "make operator-authorize command to confirm it.", style="bold yellow"))
+    console.print(Text("Send the archive file privately. Send the message below through a channel where the collaborator "
+                       "recognizes you, such as a call or an authenticated chat."))
+    console.print()
+    console.print(Rule(Text("Message to send", style="bold cyan"), style="cyan"))
+    console.print(Text(handoff_message(url, fingerprint, archive, checksum)), soft_wrap=True)
+    console.print(Rule(style="cyan"))
+
+
+def operator_joined(url: str, detail: str) -> None:
     body = Text()
     body.append("Deployment operator ready\n", style="bold bright_green")
     body.append(url + "\n", style="bold bright_white")
     body.append(detail, style="white")
-    if not joined:
-        body.append("\nSend the archive and its SHA-256 to the collaborator through authenticated channels.", style="dim")
-    else:
-        body.append("\nNext: make doctor to verify SSH and HTTPS; then make upgrade.", style="dim")
+    body.append("\nNext: make doctor to verify SSH and HTTPS; then make upgrade.", style="dim")
     console.print(Panel.fit(body, border_style="green", padding=(1, 3)))
+
+
+def exposed_secret() -> None:
+    warning(
+        "That answer looks like an API token or key, and the terminal displayed it. It was not saved, logged, or sent. "
+        "Treat it as exposed: revoke it at the provider (DigitalOcean: API > Tokens) and create a new one. "
+        "Paste secrets only at a prompt marked hidden. Answer the question again.",
+        title="Secret pasted into a visible prompt",
+    )
 
 
 def protection_choices() -> None:

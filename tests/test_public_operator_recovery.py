@@ -60,7 +60,7 @@ def test_recovery_kit_authorizes_distinct_key_and_rebuilds_operator_state(tmp_pa
     assert material["public"] == authorized[0][3]
 
     fresh_token = tmp_path / "fresh-token"
-    write_private(fresh_token, b"fresh-private-token-" + b"x" * 32)
+    write_private(fresh_token, b"dop_v1_" + b"3" * 64)
 
     class SameTeam:
         def __init__(self, token):

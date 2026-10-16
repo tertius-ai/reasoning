@@ -25,10 +25,11 @@ from .operator_handoff import (
     MAX_HANDOFF,
     _fingerprint,
     _read_handoff_body,
-    _read_public_key,
     _validate_documents,
+    default_handoff,
     grant_operator_locked,
     join_operator,
+    prompt_public_key,
 )
 from .private import (
     locked_directory,
@@ -296,11 +297,12 @@ def protect_deployment_locked(state: Path, command, *, detect_public_ipv4=None) 
     elif selected == "second_operator":
         from .setup import ask
 
-        public_file = Path(ask("Other operator's Ed25519 public-key file")).expanduser().absolute()
-        output = Path(ask("Handoff archive output", str(Path.home() / "reasoning-operator-handoff.tar.gz"))).expanduser().absolute()
+        public = prompt_public_key()
+        default = default_handoff(state, public, current_binding(state)["release_id"])
+        output = Path(ask("Handoff archive output", str(default))).expanduser().absolute()
         result = grant_operator_locked(
             state,
-            _read_public_key(public_file),
+            public,
             output,
             command,
             detect_public_ipv4=detect_public_ipv4,

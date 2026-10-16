@@ -55,7 +55,9 @@ than starting a second state directory.
 
 After HTTPS and final SSH closure, setup requires a deployment-access protection
 choice. The default creates and verifies an encrypted offline recovery kit; the
-other protected choice authorizes a second operator. Explicit deferral is for
+other protected choice authorizes a second operator the same way as
+`make operator-authorize`, offering the per-key handoff path under the state's
+`handoffs/` directory as the default. Explicit deferral is for
 disposable testing and reports the deployment as unprotected.
 
 For a disposable test, use a dedicated domain or delegated subdomain so DNS
@@ -94,7 +96,9 @@ Keep both directories.
 
 Operator tokens need `account:read`, `domain:read`, `droplet:read`, `tag:read`,
 `firewall:read`, and `firewall:update`; use `make onboard ONBOARD_REPLACE_TOKEN=1`
-to collect a replacement privately and resume the completed join.
+to collect a replacement privately and resume a completed join or a join that
+wrote no deployment state. Onboarding ends with the verified checks and the
+next step; `make doctor` is an optional later recheck.
 The lower-level `make operator-join` instead requires prepared inputs and a
 subsequent `make doctor`. Then `make upgrade` works from the new
 checkout without a preexisting local build. Each operator keeps their own key,
@@ -199,6 +203,17 @@ are Account (read), Domain (read/create), Droplet (read/create), Firewall
 (read/create/update), Sizes (read), SSH key (read/create), and Tag (read/create).
 `ssh_key:create` is unnecessary only when the exact public key is already in
 the account; include it for the default generated-key path.
+
+Enter the token at the hidden prompt or give the path of a protected `0600`
+file. Before any API call, the wizard checks its shape: `dop_v1_` (or `doo_v1_`)
+followed by 64 lowercase hexadecimal characters, or 64 hexadecimal characters
+for an older token. A token pasted twice, a refresh token, or a value with
+spaces is refused without being saved, and the hidden prompt asks again up to
+three times. Visible prompts, such as the question that offers to open the
+token page, refuse an answer that looks like a token or API key without
+repeating it and ask again. The terminal displayed that value, so revoke it in
+DigitalOcean and create a new token; the same run also refuses it at the hidden
+prompt.
 
 If a launch made with an older or incorrectly scoped token reaches final SSH
 closure without `firewall:update`, the server remains running and SSH remains

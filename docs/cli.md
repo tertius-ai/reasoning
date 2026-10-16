@@ -53,8 +53,8 @@ make onboard ONBOARD_REPLACE_TOKEN=1
 make doctor
 make operator-sync
 make inspect
-make operator-authorize OPERATOR_PUBLIC_KEY=/path/to/key.pub
-make operator-join OPERATOR_IDENTITY=/path/to/key DO_TOKEN_FILE=/path/to/token OPERATOR_HANDOFF_SHA256=…
+make operator-authorize
+make operator-join OPERATOR_HANDOFF=/path/to/handoff.tar.gz OPERATOR_IDENTITY=/path/to/key DO_TOKEN_FILE=/path/to/token OPERATOR_HANDOFF_SHA256=…
 make operator-kit RECOVERY_KIT=/secure/recovery.rnrk
 make operator-recover RECOVERY_KIT=/secure/recovery.rnrk DO_TOKEN_FILE=/secure/token
 ```
@@ -67,11 +67,17 @@ before receiving the handoff. Keep both `ONBOARD_STATE` and `DEPLOY_STATE`
 afterward; see [operator onboarding](operations.md#add-a-deployment-operator).
 Use `ONBOARD_REPLACE_TOKEN=1` (direct CLI: `reasoning-deploy onboard --replace-token`)
 to privately collect a new same-Team token and update a completed join without
-repeating it. Keep the old token files until verification, then revoke the old
-token at the provider. Operator tokens require `account:read`, `droplet:read`,
+repeating it, or to retry a join that wrote no deployment state. Keep the old
+token files until verification, then revoke the old token at the provider.
+Operator tokens require `account:read`, `domain:read`, `droplet:read`,
 `tag:read`, `firewall:read`, and `firewall:update`.
 Keep original state directories and release inputs until a verified terminal
 phase; partial/inconsistent joins stop for reconciliation instead of replay.
+`make operator-authorize` asks for the collaborator's public-key file unless
+`OPERATOR_PUBLIC_KEY` is set, and writes the handoff to
+`DEPLOY_STATE/handoffs/` unless `OPERATOR_HANDOFF` is set. `make onboard` and
+`make doctor` end with the verified checks; the last line of standard output
+is the JSON receipt.
 
 `reasoning-ledger --root /path/to/ledger organization-link --config /secure/bot.json`
 connects a workbench to the organization's canonical research ledger.

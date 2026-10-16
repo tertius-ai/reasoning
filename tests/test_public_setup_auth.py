@@ -184,7 +184,7 @@ def test_configuration_runs_real_key_matching_and_pkce_boundaries(tmp_path, ssh_
     answers = iter(["n", "", "example.org", "", str(ssh_key[0]), "upload ssh key", "", "", "",
                     "0.10", "2.50", "browser"])
     monkeypatch.setattr("builtins.input", lambda prompt: next(answers))
-    monkeypatch.setattr(setup.getpass, "getpass", lambda prompt: "x" * 40)
+    monkeypatch.setattr(setup.getpass, "getpass", lambda prompt: "dop_v1_" + "0" * 64)
     monkeypatch.setattr(setup, "DigitalOcean", lambda token: provider)
     login = setup_auth.openrouter_login
     transport = httpx.MockTransport(lambda request: httpx.Response(200, json={"key": "sk-private-wizard-key"}))

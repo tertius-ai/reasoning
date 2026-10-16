@@ -555,8 +555,11 @@ def main(argv: list[str] | None = None, *, raise_errors: bool = False) -> int:
         "operator-authorize", help="authorize a collaborator's SSH key and create a credential-free deployment handoff"
     )
     operator_authorize.add_argument("--state-dir", type=Path, default=Path.home() / ".reasoning-deploy")
-    operator_authorize.add_argument("--public-key", required=True, type=Path, help="collaborator's Ed25519 public-key file")
-    operator_authorize.add_argument("--output", required=True, type=Path, help="new private handoff archive to send to the collaborator")
+    operator_authorize.add_argument("--public-key", type=Path,
+                                    help="collaborator's Ed25519 public-key file; prompted for when omitted")
+    operator_authorize.add_argument("--output", type=Path,
+                                    help="handoff archive to send to the collaborator; defaults to a per-key, "
+                                         "per-release file under STATE_DIR/handoffs")
     operator_authorize.add_argument("--bundle", type=Path, help="installed release archive, needed only if it is not already retained")
     operator_join = commands.add_parser(
         "operator-join", help="create independent deployment state from an authorized handoff and your own credentials"

@@ -310,7 +310,7 @@ def test_missing_firewall_update_scope_replaces_token_without_relaunch(wizard, m
 def test_replacement_token_is_private_and_bound_to_the_original_account(tmp_path, monkeypatch, capsys):
     state = tmp_path / "state"
     state.mkdir(mode=0o700)
-    token = "replacement-private-" + "x" * 32
+    token = "dop_v1_" + "1" * 64
     opened = []
     closed = []
     answers = iter(["no", ""])
@@ -384,7 +384,8 @@ def test_credentials_are_prompted_privately_and_budget_inputs_are_saved_without_
     identity = tmp_path / "identity"
     write_private(identity, b"key-fixture")
     answers = iter(["n", "", "example.org", "", "", "", "", "0.10", "2.50", "manual", ""])
-    secrets = iter(["x" * 40, "secret-router-key"])
+    token = "dop_v1_" + "0" * 64
+    secrets = iter([token, "secret-router-key"])
     monkeypatch.setattr("builtins.input", lambda prompt: next(answers))
     monkeypatch.setattr(setup.getpass, "getpass", lambda prompt: next(secrets))
     monkeypatch.setattr("reasoning_ledger.deployment.setup_ssh.prepare_identity", lambda directory: (identity, "fixture-public"))
@@ -397,7 +398,7 @@ def test_credentials_are_prompted_privately_and_budget_inputs_are_saved_without_
     assert config["monthly_budget_microusd"] == 2500000
     assert config["ssh_key_id"] == 123 and config["public_url"] == "https://chat.example.org"
     assert "secret-router-key" not in json.dumps(config)
-    assert "x" * 40 not in capsys.readouterr().out
+    assert token not in capsys.readouterr().out
 
 
 @pytest.fixture
@@ -467,3 +468,110 @@ def test_later_administrator_policy_and_key_revocation_are_not_overwritten(organ
     with pytest.raises(InstallError, match="administrator edits"):
         configure()
     assert len(posts) == 1 and store.policy(initial["user_id"], initial["organization_id"])["monthly_budget_microusd"] == 0
+
+
+DO_TOKEN = "dop_v1_" + "6" * 64
+
+
+@pytest.mark.parametrize("value,message", [
+    (DO_TOKEN + DO_TOKEN, "pasted more than once"),
+    (DO_TOKEN + "\n" + DO_TOKEN, "pasted more than once"),
+    ("dop_v1_" + "6" * 63, "71 characters"),
+    ("dop_v1_" + "G" * 64, "does not look like"),
+    ("dop_v1_" + "6" * 30 + " " + "6" * 34, "spaces"),
+    ("dor_v1_" + "6" * 64, "refresh token"),
+    ("x" * 40, "does not look like"),
+    ("tökén" * 10, "non-ASCII"),
+])
+def test_digitalocean_token_shape_is_checked_locally_without_repeating_it(value, message):
+    with pytest.raises(InstallError, match=message) as error:
+        setup.digitalocean_token(value.encode("utf-8"))
+    assert "No API call was made" in str(error.value)
+    assert value not in str(error.value) and DO_TOKEN not in str(error.value)
+
+
+def test_digitalocean_token_accepts_current_and_legacy_shapes():
+    assert setup.digitalocean_token((" " + DO_TOKEN + "\n").encode()) == DO_TOKEN
+    assert setup.digitalocean_token("doo_v1_" + "a" * 64) == "doo_v1_" + "a" * 64
+    assert setup.digitalocean_token("f" * 64) == "f" * 64
+
+
+def test_hidden_token_entry_rejects_a_doubled_paste_before_saving_or_calling_the_api(tmp_path, monkeypatch, capsys):
+    secrets = iter([DO_TOKEN + DO_TOKEN, DO_TOKEN])
+    monkeypatch.setattr("builtins.input", lambda prompt: "")
+    monkeypatch.setattr(setup.getpass, "getpass", lambda prompt: next(secrets))
+    path = setup.private_credential(tmp_path, "digitalocean-token", "DigitalOcean API token", minimum=32, maximum=4096,
+                                    validate=setup.validate_digitalocean_token)
+    assert path.read_text() == DO_TOKEN and path.stat().st_mode & 0o777 == 0o600
+    output = capsys.readouterr().out
+    assert "pasted more than once" in output and "Nothing was saved" in output and DO_TOKEN not in output
+
+    other = tmp_path / "other"
+    other.mkdir(mode=0o700)
+    monkeypatch.setattr(setup.getpass, "getpass", lambda prompt: DO_TOKEN + DO_TOKEN)
+    with pytest.raises(InstallError, match="pasted more than once"):
+        setup.private_credential(other, "digitalocean-token", "DigitalOcean API token", minimum=32, maximum=4096,
+                                 validate=setup.validate_digitalocean_token)
+    assert not (other / "digitalocean-token").exists()
+
+
+def test_token_file_and_saved_token_shapes_are_checked(tmp_path, monkeypatch):
+    doubled = tmp_path / "doubled-token"
+    write_private(doubled, (DO_TOKEN + DO_TOKEN).encode())
+    monkeypatch.setattr("builtins.input", lambda prompt: str(doubled))
+    with pytest.raises(InstallError, match="pasted more than once"):
+        setup.private_credential(tmp_path, "digitalocean-token", "DigitalOcean API token", minimum=32, maximum=4096,
+                                 validate=setup.validate_digitalocean_token)
+    write_private(tmp_path / "digitalocean-token", b"x" * 40)
+    with pytest.raises(InstallError, match="saved credential .*digitalocean-token is unusable.*move it aside"):
+        setup.private_credential(tmp_path, "digitalocean-token", "DigitalOcean API token", minimum=32, maximum=4096,
+                                 validate=setup.validate_digitalocean_token)
+
+
+@pytest.mark.parametrize("pasted", [DO_TOKEN, DO_TOKEN + DO_TOKEN, "f" * 64, "sk-or-v1-" + "a" * 64])
+def test_secret_pasted_at_a_visible_prompt_is_refused_and_not_repeated(tmp_path, monkeypatch, capsys, pasted):
+    monkeypatch.setattr(setup, "_EXPOSED_SECRETS", set())
+    answers = iter([pasted, "no", ""])
+    prompts = []
+    monkeypatch.setattr("builtins.input", lambda prompt: prompts.append(prompt) or next(answers))
+    monkeypatch.setattr("reasoning_ledger.deployment.setup_auth.open_page", lambda url: pytest.fail("browser opened"))
+    fresh = "dop_v1_" + "7" * 64
+    secrets = iter([DO_TOKEN, fresh])
+    monkeypatch.setattr(setup.getpass, "getpass", lambda prompt: next(secrets))
+    accounts = []
+    monkeypatch.setattr(setup, "DigitalOcean", lambda value: accounts.append(value) or type("Account", (), {
+        "identity": lambda self: "team:original-account", "close": lambda self: None,
+    })())
+    path = setup.replacement_digitalocean_token(tmp_path, "team:original-account")
+    output = capsys.readouterr().out
+    assert "Secret pasted into a visible prompt" in output and "revoke it" in output
+    assert pasted not in output and DO_TOKEN not in output
+    assert prompts[0] == prompts[1] and "[Y/n]" in prompts[0]
+    if pasted.startswith("dop_v1_"):
+        # The exposed token is refused at the hidden prompt too; a new one is required.
+        assert "displayed in the terminal" in output
+        assert path.read_text() == fresh
+    else:
+        assert path.read_text() == DO_TOKEN
+    assert accounts == [path.read_text()]
+
+
+def test_secret_pasted_as_a_credential_file_path_is_refused(tmp_path, monkeypatch, capsys):
+    monkeypatch.setattr(setup, "_EXPOSED_SECRETS", set())
+    answers = iter([DO_TOKEN, ""])
+    monkeypatch.setattr("builtins.input", lambda prompt: next(answers))
+    monkeypatch.setattr(setup.getpass, "getpass", lambda prompt: "dop_v1_" + "8" * 64)
+    path = setup.private_credential(tmp_path, "digitalocean-token", "DigitalOcean API token", minimum=32, maximum=4096,
+                                    validate=setup.validate_digitalocean_token)
+    assert path.read_text() == "dop_v1_" + "8" * 64
+    output = capsys.readouterr().out
+    assert "Secret pasted into a visible prompt" in output and DO_TOKEN not in output
+
+
+def test_yes_no_prompt_repeats_until_answered_and_checksum_answers_are_not_secrets(monkeypatch):
+    answers = iter(["maybe", "", "N"])
+    monkeypatch.setattr("builtins.input", lambda prompt: next(answers))
+    assert setup.confirm("Open?") is True
+    assert setup.confirm("Open?") is False
+    monkeypatch.setattr("builtins.input", lambda prompt: "a" * 64)
+    assert setup.ask("Handoff archive checksum") == "a" * 64

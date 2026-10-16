@@ -51,10 +51,42 @@ DNS_DELEGATION_KEYS = {"format", "release_id", "provider", "parent_zone", "zone"
 DNS_WAIT_ATTEMPTS = 61
 DNS_WAIT_INTERVAL_SECONDS = 10
 DIGITALOCEAN_TOKEN_URL = "https://cloud.digitalocean.com/account/api/tokens"
+# Personal access and OAuth tokens carry a typed prefix; tokens created before
+# prefixes were introduced are 64 lowercase hexadecimal characters.
+DIGITALOCEAN_TOKEN = re.compile(r"(?:dop|doo)_v1_[0-9a-f]{64}|[0-9a-f]{64}")
+DIGITALOCEAN_TOKEN_LENGTH = len("dop_v1_") + 64
+# Provider-typed secret prefixes that never belong in an echoed answer.
+_SECRET_PREFIX = re.compile(r"do[por]_v1_[0-9A-Fa-f]{8}|sk-or-v1-[0-9A-Fa-f]{8}")
+# Digests of secrets this process saw in echoed answers; they are refused later in the same run.
+_EXPOSED_SECRETS: set[str] = set()
+
+
+def secret_shaped(text: str, *, strict: bool = False) -> bool:
+    """Recognize a provider secret; strict also treats one long opaque word as a secret."""
+    value = text.strip()
+    if _SECRET_PREFIX.search(value):
+        return True
+    return strict and re.fullmatch(r"[A-Za-z0-9_\-]{32,}", value) is not None
+
+
+def _secret_digest(value: str) -> str:
+    return hashlib.sha256(value.encode("utf-8", "surrogatepass")).hexdigest()
+
+
+def read_answer(prompt, *, strict=False):
+    """Read one echoed answer and refuse a pasted secret without repeating it."""
+    while True:
+        value = input(prompt).strip()
+        if not secret_shaped(value, strict=strict):
+            return value
+        _EXPOSED_SECRETS.add(_secret_digest(value))
+        for candidate in re.findall(r"do[po]_v1_[0-9a-f]{64}|[A-Za-z0-9_\-]{32,}", value):
+            _EXPOSED_SECRETS.add(_secret_digest(candidate))
+        setup_ui.exposed_secret()
 
 
 def ask(prompt, default=None):
-    value = input(prompt + (f" [{default}]" if default is not None else "") + ": ").strip()
+    value = read_answer(prompt + (f" [{default}]" if default is not None else "") + ": ")
     if not value and default is not None:
         return str(default)
     if not value:
@@ -62,11 +94,57 @@ def ask(prompt, default=None):
     return value
 
 
+def confirm(prompt, *, default=True):
+    """Ask a yes/no question; repeat until the answer is yes, no, or empty for the default."""
+    while True:
+        value = read_answer(prompt + (" [Y/n]: " if default else " [y/N]: "), strict=True).casefold()
+        if not value:
+            return default
+        if value in {"y", "yes"}:
+            return True
+        if value in {"n", "no"}:
+            return False
+        print("Enter yes or no.")
+
+
 def approve(prompt, phrase):
     phrase = phrase.replace("https://", "").replace("http://", "")
-    answer = input(prompt + f" Type '{phrase}' to confirm: ").strip().replace("https://", "").replace("http://", "")
-    if answer != phrase:
+    value = read_answer(prompt + f" Type '{phrase}' to confirm: ").replace("https://", "").replace("http://", "")
+    if value != phrase:
         raise InstallError("setup was not confirmed; preserve its directory and resume when ready")
+
+
+def digitalocean_token(body):
+    """Return a DigitalOcean API token after checking its shape locally, before any API call."""
+    try:
+        value = (body.decode("ascii") if isinstance(body, bytes) else body).strip()
+    except UnicodeError:
+        raise InstallError("the DigitalOcean token contains non-ASCII characters; "
+                           "copy it again from the DigitalOcean token page. No API call was made") from None
+    expected = f"expected dop_v1_ followed by 64 lowercase hexadecimal characters ({DIGITALOCEAN_TOKEN_LENGTH} characters)"
+    half = len(value) // 2
+    if len(re.findall(r"do[por]_v1_", value)) > 1 or (
+        len(value) % 2 == 0 and value[:half] == value[half:] and DIGITALOCEAN_TOKEN.fullmatch(value[:half])
+    ):
+        raise InstallError(f"the DigitalOcean token appears to be pasted more than once ({len(value)} characters; "
+                           f"{expected}). Enter it exactly once. No API call was made")
+    if any(character.isspace() or not character.isprintable() for character in value):
+        raise InstallError("the DigitalOcean token contains spaces, line breaks, or control characters; "
+                           f"{expected}. No API call was made")
+    if value.startswith("dor_v1_"):
+        raise InstallError("this is a DigitalOcean OAuth refresh token, not an API token; create a personal "
+                           "access token on the DigitalOcean token page. No API call was made")
+    if not DIGITALOCEAN_TOKEN.fullmatch(value):
+        raise InstallError(f"this does not look like a DigitalOcean API token ({len(value)} characters; {expected}). "
+                           "No API call was made")
+    if _secret_digest(value) in _EXPOSED_SECRETS:
+        raise InstallError("this DigitalOcean token was displayed in the terminal earlier in this run; revoke it on the "
+                           "DigitalOcean token page and create a new one. No API call was made")
+    return value
+
+
+def validate_digitalocean_token(body):
+    digitalocean_token(body)
 
 
 def dollar_budget(value):
@@ -88,19 +166,39 @@ def same_hourly_budget(first, second):
         return False
 
 
-def private_credential(directory, name, prompt, *, minimum, maximum):
+PRIVATE_ENTRY_ATTEMPTS = 3
+
+
+def private_credential(directory, name, prompt, *, minimum, maximum, validate=None):
+    """Return a private credential file; `validate` checks the secret's shape before it is saved or used."""
     path = directory / name
     if path.exists() or path.is_symlink():
-        read_private(path, maximum)
+        body = read_private(path, maximum)
+        if validate is not None:
+            try:
+                validate(body)
+            except InstallError as exc:
+                raise InstallError(f"saved credential {path} is unusable: {exc}; move it aside and rerun") from None
         return path
-    filename = input(prompt + " file path (blank to enter the secret privately): ").strip()
+    filename = read_answer(prompt + " file path (blank to enter the secret privately): ", strict=True)
     if filename:
         path = Path(filename).expanduser().absolute()
         body = read_private(path, maximum)
+        if validate is not None:
+            validate(body)
     else:
-        body = getpass.getpass(prompt + ": ").strip().encode("utf-8")
-        if not minimum <= len(body) <= maximum:
-            raise InstallError("credential length is invalid")
+        for attempt in range(1, PRIVATE_ENTRY_ATTEMPTS + 1):
+            body = getpass.getpass(prompt + " (input is hidden): ").strip().encode("utf-8")
+            try:
+                if not minimum <= len(body) <= maximum:
+                    raise InstallError("credential length is invalid")
+                if validate is not None:
+                    validate(body)
+                break
+            except InstallError as exc:
+                if attempt == PRIVATE_ENTRY_ATTEMPTS:
+                    raise
+                print(f"{exc}. Nothing was saved; paste it again.")
         write_private(path, body)
     if not minimum <= len(body.strip()) <= maximum:
         raise InstallError("credential length is invalid")
@@ -116,7 +214,7 @@ def replacement_digitalocean_token(directory, expected_account, *, permissions=N
         setup_ui.section("Replace your DigitalOcean Team token",
                          "Create a new token in the existing Team. The old token and completed join are retained.")
         setup_ui.digitalocean_access(permissions)
-    if input("Open the DigitalOcean token page? [Y/n]: ").strip().casefold() not in {"n", "no"}:
+    if confirm("Open the DigitalOcean token page in your browser?"):
         open_page(DIGITALOCEAN_TOKEN_URL)
     index = 2
     while (directory / f"digitalocean-token-{index}").exists() or (directory / f"digitalocean-token-{index}").is_symlink():
@@ -129,12 +227,9 @@ def replacement_digitalocean_token(directory, expected_account, *, permissions=N
         "Replacement DigitalOcean API token",
         minimum=32,
         maximum=4096,
+        validate=validate_digitalocean_token,
     )
-    try:
-        token = read_private(path, 4096).decode("ascii").strip()
-    except UnicodeError as exc:
-        raise InstallError("DigitalOcean token must contain ASCII characters") from exc
-    provider = DigitalOcean(token)
+    provider = DigitalOcean(digitalocean_token(read_private(path, 4096)))
     try:
         if provider.identity() != expected_account:
             raise InstallError("replacement DigitalOcean token belongs to a different account")
@@ -195,16 +290,16 @@ def collect_configuration(directory, release, *, detect_public_ipv4=None):
 
     setup_ui.section("DigitalOcean", "Reasoning provisions one server in an account you control.")
     setup_ui.digitalocean_access(DIGITALOCEAN_PERMISSIONS)
-    if (not (directory / "digitalocean-token").exists()
-            and input("Open the DigitalOcean account/token page? [Y/n]: ").strip().lower() != "n"):
+    if not (directory / "digitalocean-token").exists() and confirm("Open the DigitalOcean token page in your browser?"):
         open_page(DIGITALOCEAN_TOKEN_URL)
-    token = private_credential(directory, "digitalocean-token", "DigitalOcean API token", minimum=32, maximum=4096)
+    token = private_credential(directory, "digitalocean-token", "DigitalOcean API token", minimum=32, maximum=4096,
+                               validate=validate_digitalocean_token)
     setup_ui.section("Organization address", "Use a dedicated domain, or a subdomain reserved for Reasoning; existing DNS is not copied.")
     zone = zone_name(ask("Domain or subdomain to manage in DigitalOcean (for example reasoning.example.com)"))
     origin = public_origin("https://" + ask("Chat hostname", "chat." + zone))
     setup_ui.section("Secure Shell", "Generate a dedicated deployment key or reuse an existing private key.")
     identity, public = prepare_identity(directory)
-    provider = DigitalOcean(read_private(token, 4096).decode().strip())
+    provider = DigitalOcean(digitalocean_token(read_private(token, 4096)))
     try:
         key_id = enroll_public_key(directory, provider, identity, public)
     finally:

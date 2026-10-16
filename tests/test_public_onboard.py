@@ -20,8 +20,8 @@ from reasoning_ledger.deployment import cli, onboard, operator_handoff, setup_ui
 from reasoning_ledger.deployment.host import InstallError
 from reasoning_ledger.deployment.private import MAX_STATE, locked_directory, read_document, read_private, write_document, write_private
 
-TOKEN = "local-test-private-token-" + "x" * 40
-REPLACEMENT_TOKEN = TOKEN + "-replacement"
+TOKEN = "dop_v1_" + "4" * 64
+REPLACEMENT_TOKEN = "dop_v1_" + "5" * 64
 
 
 @pytest.fixture
@@ -53,13 +53,18 @@ def flow(tmp_path, monkeypatch, request):
     calls, approvals, opened = [], [], []
     team = {"identity": document["plan"]["account_identity"]}
     valid_tokens = {TOKEN, REPLACEMENT_TOKEN}
+    rejected_tokens = set()
 
     class Provider:
         def __init__(self, token):
             assert token in valid_tokens
+            self.token = token
             calls.append("team-read")
 
         def identity(self):
+            if self.token in rejected_tokens:
+                raise InstallError("DigitalOcean account read failed (HTTP 401); check account:read permissions, "
+                                   "token validity, Team access, and selected resources")
             return team["identity"]
 
         def close(self):
@@ -80,9 +85,9 @@ def flow(tmp_path, monkeypatch, request):
     monkeypatch.setattr(onboard, "private_credential", credential)
     real_join = operator_handoff.join_operator
 
-    def join(*args):
+    def join(*args, **kwargs):
         calls.append("join")
-        return real_join(*args)
+        return real_join(*args, **kwargs)
 
     monkeypatch.setattr(onboard, "join_operator", join)
 
@@ -91,16 +96,19 @@ def flow(tmp_path, monkeypatch, request):
         calls.append("sync")
         return {"phase": "operator_synchronized", "ssh_closed": True}
 
-    def verify(state, command):
+    def verify(state, command, *, display=True):
+        assert display is False
         calls.append("doctor")
         return {"phase": "operator_verified", "ssh_closed": True, "public_url": binding["public_url"],
-                "state_dir": str(state), "release_id": binding["release_id"], "diagnosis": {"all_checks_passed": True}}
+                "state_dir": str(state), "release_id": binding["release_id"], "diagnosis": {"all_checks_passed": True},
+                "checks": {name: True for name, _ in setup_ui.ACCESS_CHECKS}}
 
     monkeypatch.setattr(onboard, "synchronize_operator", sync)
     monkeypatch.setattr(onboard, "verify_operator", verify)
     return {"stage": stage, "target": target, "handoff": handoff, "digest": receipt["handoff_sha256"],
             "identity": identity, "public": public, "calls": calls, "approvals": approvals, "opened": opened,
-            "command": command, "team": team, "binding": binding, "join": join, "verify": verify}
+            "command": command, "team": team, "binding": binding, "join": join, "verify": verify,
+            "rejected": rejected_tokens, "credential": credential}
 
 
 def answers(monkeypatch, values):
@@ -123,8 +131,11 @@ def test_handoff_instructions_have_spaced_steps_and_copyable_literal_commands(mo
     setup_ui.onboard_handoff("/private/onboard [test]/operator.pub", "SHA256:fixture", "ssh-ed25519 fixture", resume)
     rendered = output.getvalue()
     assert "Public key file: /private/onboard [test]/operator.pub" in rendered
+    assert "SSH key fingerprint: SHA256:fixture" in rendered
     assert "\n\nssh-ed25519 fixture\n\n1. On the existing operator's computer\n" in rendered
-    assert "then run:\n\n  make operator-authorize OPERATOR_PUBLIC_KEY=/secure/received-operator.pub\n\n2. Receive" in rendered
+    assert "reads it once.\n\n  make operator-authorize\n\n" in rendered
+    assert '"Collaborator SSH key fingerprint"' in rendered
+    assert "handoff archive checksum" in rendered
     assert "Protect the received archive:\n\n  chmod 600 /path/to/received-handoff.tar.gz\n\n3. Continue" in rendered
     assert "To resume, run:\n\n  " + resume + "\n\n" in rendered
 
@@ -206,8 +217,9 @@ def test_operator_scope_table_has_all_six_scopes_and_no_key_upload_or_full_acces
     }
     assert all(scope in rendered for _, scopes in onboard.OPERATOR_DIGITALOCEAN_PERMISSIONS for scope in scopes)
     assert "ssh_key:create" not in rendered and "Full Access" not in rendered
-    for name in ("operations.md", "deployment.md"):
-        assert "`domain:read`" in (Path(__file__).resolve().parents[1] / "docs" / name).read_text()
+    for name in ("operations.md", "deployment.md", "cli.md"):
+        text = (Path(__file__).resolve().parents[1] / "docs" / name).read_text()
+        assert all("`" + scope + "`" in text for _, scopes in onboard.OPERATOR_DIGITALOCEAN_PERMISSIONS for scope in scopes), name
 
 
 def test_replace_token_resumes_completed_join_without_touching_key_archive_or_old_token(flow, monkeypatch, capsys):
@@ -272,6 +284,95 @@ def test_token_replacement_refuses_uncertain_join_before_collecting_credentials(
     with pytest.raises(InstallError, match="without --replace-token"):
         run(flow, replace_token=True)
     assert not (flow["stage"] / "digitalocean-token-2").exists()
+
+
+def test_rejected_token_in_a_join_that_wrote_nothing_can_be_replaced(flow, monkeypatch, capsys):
+    flow["rejected"].add(TOKEN)
+    ready(flow, monkeypatch)
+    with pytest.raises(InstallError, match="HTTP 401") as error:
+        run(flow)
+    assert "The join wrote no deployment state" in str(error.value)
+    assert shlex.split(str(error.value).rsplit("run: ", 1)[1]) == [
+        "make", "onboard", "ONBOARD_REPLACE_TOKEN=1", "DEPLOY_STATE=" + str(flow["target"]), "ONBOARD_STATE=" + str(flow["stage"])]
+    assert read_document(flow["stage"] / "onboarding.json")["phase"] == "joining"
+    assert not flow["target"].exists() or {entry.name for entry in flow["target"].iterdir()} == {"provision.lock"}
+    old_token = flow["stage"] / "digitalocean-token"
+    monkeypatch.setattr("getpass.getpass", lambda prompt: REPLACEMENT_TOKEN)
+    answers(monkeypatch, ["no", ""])
+    assert run(flow, replace_token=True)["phase"] == "operator_onboarded"
+    replacement = flow["stage"] / "digitalocean-token-2"
+    assert read_document(flow["target"] / "setup.json")["token_file"] == str(replacement)
+    assert read_document(flow["stage"] / "onboarding.json")["token_file"] == str(replacement)
+    assert read_private(old_token, 4096) == TOKEN.encode()
+    assert flow["calls"].count("join") == 2 and flow["approvals"] == ["onboard " + flow["binding"]["public_url"]] * 2
+    assert TOKEN not in capsys.readouterr().out
+
+
+def test_malformed_saved_token_stops_before_any_api_call_and_names_the_replacement(flow, monkeypatch):
+    def doubled(directory, name, prompt, **kwargs):
+        path = directory / name
+        write_private(path, (TOKEN + TOKEN).encode())
+        return path
+
+    monkeypatch.setattr(onboard, "private_credential", doubled)
+    ready(flow, monkeypatch)
+    with pytest.raises(InstallError, match="pasted more than once") as error:
+        run(flow)
+    assert "ONBOARD_REPLACE_TOKEN=1" in str(error.value) and TOKEN not in str(error.value)
+    assert flow["calls"] == [] and not (flow["target"] / "setup.json").exists()
+    monkeypatch.setattr("getpass.getpass", lambda prompt: REPLACEMENT_TOKEN)
+    answers(monkeypatch, ["no", ""])
+    assert run(flow, replace_token=True)["phase"] == "operator_onboarded"
+    assert read_document(flow["target"] / "setup.json")["token_file"] == str(flow["stage"] / "digitalocean-token-2")
+
+
+def test_token_pasted_at_the_browser_question_is_refused_and_cannot_be_used(flow, monkeypatch, capsys):
+    from reasoning_ledger.deployment import setup
+    from reasoning_ledger.deployment.setup import private_credential
+
+    monkeypatch.setattr(setup, "_EXPOSED_SECRETS", set())
+    monkeypatch.setattr(onboard, "private_credential", private_credential)
+    secrets = iter([TOKEN, REPLACEMENT_TOKEN])
+    monkeypatch.setattr("getpass.getpass", lambda prompt: next(secrets))
+    answers(monkeypatch, [str(flow["handoff"]), flow["digest"], TOKEN, "no", ""])
+    assert run(flow)["phase"] == "operator_onboarded"
+    assert (flow["stage"] / "digitalocean-token").read_text() == REPLACEMENT_TOKEN
+    output = capsys.readouterr().out
+    assert "Secret pasted into a visible prompt" in output and "displayed in the terminal" in output
+    assert TOKEN not in output and REPLACEMENT_TOKEN not in output
+    assert flow["opened"] == []
+
+
+def test_onboarding_checks_the_private_key_once_per_run(flow, monkeypatch):
+    monkeypatch.setattr(operator_handoff, "derive_public", lambda identity: pytest.fail("second passphrase prompt"))
+    ready(flow, monkeypatch)
+    assert run(flow)["phase"] == "operator_onboarded"
+
+
+def test_completion_lists_verified_checks_and_next_steps(flow, monkeypatch):
+    output = io.StringIO()
+    monkeypatch.setattr(setup_ui, "console", Console(file=output, force_terminal=False, color_system=None, width=200))
+    ready(flow, monkeypatch)
+    run(flow)
+    rendered = output.getvalue()
+    summary = rendered[rendered.index("Deployment access verified: " + flow["binding"]["public_url"]):]
+    for label in ("DigitalOcean access", "SSH authentication and server identity", "Installed release and HTTPS",
+                  "Temporary SSH access closed"):
+        assert "✓ " + label in summary
+    assert "Ready to upgrade.\nCoordinate with the other operator, then run: make upgrade" in summary
+    assert "Optional later recheck: make doctor" in summary
+
+
+def test_success_requires_every_verified_check(flow, monkeypatch):
+    def partial(state, command, **kwargs):
+        result = flow["verify"](state, command, **kwargs)
+        return {**result, "checks": {**result["checks"], "release_and_https": False}}
+
+    monkeypatch.setattr(onboard, "verify_operator", partial)
+    ready(flow, monkeypatch)
+    with pytest.raises(InstallError, match="unverified"):
+        run(flow)
+    assert read_document(flow["stage"] / "onboarding.json")["phase"] == "joined"
 
 
 def test_retry_recovers_active_token_pointer_after_lost_onboarding_journal_write(flow, monkeypatch):
@@ -377,7 +478,7 @@ def test_verified_state_cannot_be_rebound_to_other_deployment_on_retry(flow, mon
     ("doctor", {"phase": "operator_verified", "ssh_closed": False}),
 ])
 def test_unverified_or_deferred_receipts_cannot_report_success(flow, monkeypatch, phase, receipt):
-    monkeypatch.setattr(onboard, "synchronize_operator" if phase == "sync" else "verify_operator", lambda *args: receipt)
+    monkeypatch.setattr(onboard, "synchronize_operator" if phase == "sync" else "verify_operator", lambda *args, **kwargs: receipt)
     ready(flow, monkeypatch)
     with pytest.raises(InstallError, match="unverified"):
         run(flow)
@@ -406,8 +507,8 @@ def test_bad_handoff_or_authority_stops_before_live_verification(flow, monkeypat
 
 
 def test_lost_join_receipt_is_recovered_without_second_provider_read_or_join(flow, monkeypatch):
-    def lose_reply(*args):
-        flow["join"](*args)
+    def lose_reply(*args, **kwargs):
+        flow["join"](*args, **kwargs)
         raise InstallError("lost join receipt")
 
     monkeypatch.setattr(onboard, "join_operator", lose_reply)
@@ -421,7 +522,7 @@ def test_lost_join_receipt_is_recovered_without_second_provider_read_or_join(flo
 
 
 def test_partial_join_is_preserved_and_never_repeated_blindly(flow, monkeypatch):
-    def interrupt(handoff, target, *args):
+    def interrupt(handoff, target, *args, **kwargs):
         with locked_directory(target):
             write_document(target / "setup.json",
                            {"identity": str(flow["identity"]), "token_file": str(flow["stage"] / "digitalocean-token")}, new=True)
@@ -443,7 +544,7 @@ def test_verification_failures_keep_joined_state_and_resume_without_rejoining(fl
     name = "synchronize_operator" if phase == "sync" else "verify_operator"
     original = getattr(onboard, name)
 
-    def unavailable(*args):
+    def unavailable(*args, **kwargs):
         raise InstallError("verification unavailable; SSH closed")
 
     monkeypatch.setattr(onboard, name, unavailable)
