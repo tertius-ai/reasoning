@@ -329,7 +329,10 @@ not private reasoning text. Unknown outcomes are held, never automatically rerun
 In **My bots → Developer tools**, enable a bot and specify exact GitHub
 `owner/repository` allowlists and other permitted organization requesters.
 The owner is always permitted; other requesters also need the runner's
-other-user policy (`BOT_ALLOW_OTHER_USERS=1`) and current topic write access. Disabling or changing
+other-user policy (`BOT_ALLOW_OTHER_USERS=1`) and current topic write access.
+For any other requester the developer tools are absent, and `topic_context`
+returns a notice telling the bot to explain that the owner must add that person
+as a permitted requester; it does not disclose the repositories. Disabling or changing
 developer access invalidates pending approvals. This grant is separate from local
 CAS execution and does not expose SSH, shell, deployment credentials or raw logs.
 The `server_diagnostics` tool returns sanitized counts, status buckets and
