@@ -214,6 +214,30 @@ def test_developer_disabled_default_and_exact_owner_repo_requester_policy(fixtur
         developer.request(bot["token"], requested["id"], claim["lease"], "research/bench", "Title", "Body", "issue")
 
 
+def test_topic_context_tells_the_model_when_this_requester_lacks_developer_tools(fixture):
+    from reasoning_ledger.server.bot_tools import DEVELOPER_NOT_PERMITTED, BotTools
+
+    store, owner, topics, _, _, _ = fixture
+    runtime, bot, model, run, _ = setup(fixture, other_users=True)
+    developer, tools = BotDeveloper(runtime), BotTools(runtime)
+    other, org = member(fixture), owner["organization_id"]
+    claim = runtime.claim(bot["token"])
+    assert "notices" not in tools.invoke(bot["token"], run["id"], claim["lease"], "topic_context", {}, "owner-context")
+    runtime.finish(bot["token"], run["id"], claim["lease"], "succeeded", "Finished")
+    requested = runtime.enqueue(other, org, topics[1], model, "other-dev", prompt="file an issue")
+    claim = runtime.claim(bot["token"])
+    args = (bot["token"], requested["id"], claim["lease"])
+    # A bot without developer tools says nothing about them.
+    assert "notices" not in tools.invoke(*args, "topic_context", {}, "plain")
+    developer.configure(owner["user_id"], org, bot["id"], True, ["research/bench"], [])
+    context = tools.invoke(*args, "topic_context", {}, "excluded")
+    assert context["notices"] == [DEVELOPER_NOT_PERMITTED] and "research/bench" not in json.dumps(context)
+    assert tools.context(*args)["developer"] == {"enabled": False, "reason": "requester_not_permitted"}
+    developer.configure(owner["user_id"], org, bot["id"], True, ["research/bench"], [other])
+    assert "notices" not in tools.invoke(*args, "topic_context", {}, "permitted")
+    assert tools.context(*args)["developer"] == {"enabled": True, "repositories": ["research/bench"]}
+
+
 def test_exact_issue_approval_consume_once_and_result_receipt(fixture):
     developer, bot, run, lease = enabled(fixture)
     owner, org = bot["created_by"], bot["organization_id"]
