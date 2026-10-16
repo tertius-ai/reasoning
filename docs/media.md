@@ -19,10 +19,16 @@ Attachments are included in database backups; there is no external public bucket
 
 Only same-project attachments explicitly referenced by selected source messages are considered
 for context. Up to eight references fit the existing context allowance. A PDF
-upload extracts at most 20 pages and 8,000 characters in a browser worker, with a
-15-second extraction deadline. Scanned PDFs need OCR elsewhere. Extracted text is
-untrusted uploader-supplied reference data, not a server-verified transcription;
-the original PDF hash remains its identity. `media_read` retrieves bounded text
+upload extracts page-marked text from successive pages, up to 60,000 UTF-8 bytes,
+in a browser worker with a 15-second extraction deadline; pages read before the
+deadline or a damaged page are kept. NUL characters and unpaired surrogates are
+replaced. Scanned PDFs need OCR elsewhere. Extracted text is untrusted
+uploader-supplied reference data, not a server-verified transcription; the
+original PDF hash remains its identity. The server does not parse PDFs, and no
+model receives PDF bytes, whatever file input it advertises. For a PDF,
+`media_read` reports `text_status` (`uploader_extracted` or `unavailable`) and a
+notice naming what may be missing and the alternatives, such as arXiv source
+tools or a member pasting the passage. `media_read` retrieves bounded text
 slices and exact metadata, with optional `source_topic_id` for an explicitly
 referenced same-project topic. Bots must additionally be granted that source
 topic, and both requester and owner must still have access. It does not pretend

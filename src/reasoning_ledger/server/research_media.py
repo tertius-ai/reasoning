@@ -17,6 +17,19 @@ BEGINS_PER_MINUTE = 30
 MEDIA_READ_TOOLS = {"media_list", "media_read", "media_download_chunk"}
 MIMES = {"image/png", "image/jpeg", "image/webp", "application/pdf"}
 REFERENCE = re.compile(r"/api/organizations/([a-f0-9]{32})/topics/([a-f0-9]{32})/media/([a-f0-9]{32})/([a-f0-9]{64})/content")
+# Models never receive PDF bytes: the server does not parse PDFs, and only the
+# uploader's extracted text is readable, whatever the model's file capabilities.
+PDF_TEXT_NOTICE = (
+    "Text was extracted in the uploader's browser with [Page n] markers and is bounded to 64,000 bytes; later "
+    "pages, formulas, figures and layout can be missing. For an arXiv paper, arxiv_read or arxiv_source_read "
+    "gives the complete source."
+)
+PDF_NO_TEXT_NOTICE = (
+    "No text was extracted from this PDF when it was uploaded (for example, a scanned or image-only PDF, or "
+    "extraction failed in the uploader's browser). The server does not parse PDFs and no model receives PDF bytes. "
+    "Ask a member to paste the passage you need or attach its TeX or text source; for an arXiv paper, use "
+    "arxiv_read or arxiv_source_read."
+)
 
 
 def content_path(row):
@@ -197,7 +210,7 @@ class ResearchMedia:
         except UnicodeError:
             valid_text = False
         if not valid_text:
-            raise StoreError(400, "attachment extracted-text preview exceeds 64 KiB")
+            raise StoreError(400, "attachment extracted-text preview must be valid UTF-8 of at most 64,000 bytes without NUL")
         if not isinstance(vision_base64, str):
             raise StoreError(400, "vision preview requires base64")
         try:
@@ -245,7 +258,7 @@ class ResearchMedia:
             if not isinstance(offset, int) or not isinstance(length, int) or offset < 0 or not 1 <= length <= 12000:
                 raise StoreError(400, "read a bounded extracted-text range")
             text = row["preview_text"]
-            return {
+            result = {
                 **view(row),
                 "text": text[offset : offset + length],
                 "offset": offset,
@@ -256,6 +269,10 @@ class ResearchMedia:
                 if row["mime"].startswith("image/")
                 else "PDF text preview only; layout, diagrams and unextracted pages require direct inspection",
             }
+            if row["mime"] == "application/pdf":
+                result["text_status"] = "uploader_extracted" if text else "unavailable"
+                result["notice"] = PDF_TEXT_NOTICE if text else PDF_NO_TEXT_NOTICE
+            return result
 
     def list(self, user, org, topic):
         with self.store.transaction() as db:

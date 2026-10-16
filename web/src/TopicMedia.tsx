@@ -1,6 +1,7 @@
 // Copyright Benjamin Antieau and Deven Manam. SPDX-License-Identifier: Apache-2.0
 import React, { createContext, lazy, Suspense, useContext, useRef, useState } from "react";
 import { request, topicPath } from "./organization-api";
+import { collectPdfText } from "./pdfText";
 import "./topic-media.css";
 
 export const MediaScope = createContext<{ organizationId: string; topicId?: string } | null>(null);
@@ -66,13 +67,7 @@ async function pdfText(bytes: Uint8Array): Promise<string> {
   const task = getDocument({ data: bytes.slice(), useSystemFonts: true, disableFontFace: true });
   const timer = setTimeout(() => void task.destroy(), 15000);
   try {
-    const pdf = await task.promise;
-    let text = "";
-    for (let number = 1; number <= Math.min(20, pdf.numPages) && text.length < 8000; number++) {
-      const page = await pdf.getPage(number), content = await page.getTextContent();
-      text += `\n[Page ${number}]\n` + content.items.map(item => "str" in item ? item.str : "").join(" ");
-    }
-    return text.slice(0, 8000);
+    return await collectPdfText(await task.promise);
   } finally { clearTimeout(timer); await task.destroy(); }
 }
 

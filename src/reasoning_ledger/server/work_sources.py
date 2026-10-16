@@ -12,7 +12,7 @@ from ..agents.scientific import HttpResponse, ScientificGateway
 from ..agents.tools import ToolRegistry
 from . import artifact_chunks
 from .research_context import encoded
-from .research_network import public_get, source_text
+from .research_network import WEB_MAXIMUM, SourceRefused, public_get, source_text
 from .security import digest
 from .store import StoreError, _id
 from .work_contracts import VersionReference
@@ -45,9 +45,9 @@ class WorkSources:
     async def _retrieve(self, org, project, tool, body):
         if tool == "source_search":
             return await asyncio.to_thread(self._search, org, project, body)
-        raw, headers = await public_get(body.url, maximum=1024 * 1024)
-        if len(raw) > 1024 * 1024:
-            raise ValueError("source exceeds its read limit")
+        raw, headers = await public_get(body.url, maximum=WEB_MAXIMUM)
+        if len(raw) > WEB_MAXIMUM:
+            raise SourceRefused("source_too_large", "The source exceeds this reader's 1 MiB limit.", "Use a smaller page.")
         text = source_text(raw, headers)
         media = headers.get("content-type", "").split(";", 1)[0]
         return {
@@ -198,7 +198,7 @@ class WorkSources:
             **metadata,
         }
 
-    def _finish(self, credential, job_id, tool, body, context, fetched, failed):
+    def _finish(self, credential, job_id, tool, body, context, fetched, failed, reason=None):
         refused = None
         with self.store.transaction(write=True, scope=f"work-program:{context['program']}") as db:
             db.execute("SAVEPOINT source_publication")
@@ -208,7 +208,7 @@ class WorkSources:
                 # The tool was already counted. Recheck grants without reserving another call.
                 self.tools._admit(db, job, task, root, tool, counted=True)
                 result = (
-                    {"error": "public_source_unavailable", "retry": "Use a new request ID to retry."}
+                    {"error": "public_source_unavailable", "retry": "Use a new request ID to retry.", **(reason or {})}
                     if failed
                     else self._publish(db, context, task, root, tool, body, fetched)
                 )
@@ -251,6 +251,8 @@ class WorkSources:
             return context["replay"]
         try:
             fetched = await self._retrieve(context["org"], context["project"], tool, body)
-        except Exception:
-            return await asyncio.to_thread(self._finish, credential, job_id, tool, body, context, None, True)
+        except Exception as exc:
+            # Only authored refusal reasons are retained; other exception text stays private.
+            reason = {"reason": exc.code, "message": exc.explanation()} if isinstance(exc, SourceRefused) else None
+            return await asyncio.to_thread(self._finish, credential, job_id, tool, body, context, None, True, reason)
         return await asyncio.to_thread(self._finish, credential, job_id, tool, body, context, fetched, False)
