@@ -3,21 +3,24 @@
 The public recipe is `images/research-cpu/Dockerfile`; its build inputs are locked
 in `images/research-cpu/inputs.json`. It installs the pinned SageMath distribution
 (including Python, GAP, and PARI/GP), Julia with bundled standard libraries, and
-the core Lean toolchain and Noether 0.3.1's default CPU wheel. Additional Julia
+the core Lean toolchain and Noether 0.3.2's default CPU wheel. Additional Julia
 packages and mathlib are not installed in the CPU profile. The `lean-mathlib` profile extends it with pinned
 mathlib, its pinned Lake dependencies and compiled caches. Only Linux amd64
 workers are supported. Noether requires x86-64-v3 (AVX2, FMA and BMI2) CPUs and
 excludes MPI and optional GPL subprocess bridges. Its fixed declarative worker
 is installed at `/opt/reasoning/noether_worker.py` in both profiles.
 
-Noether is built from commit `ca8fc50f3d9a902a827fbd558dba138ad7bf0f8f`, using
+Noether is built from public release `v0.3.2`, commit `4c92c269c59da02a4d32c833c2ee093407f8e22f`, using
 the upstream `make wheel` release path and locked Rust/manylinux/uv inputs.
-Build tooling fetches its checksum-pinned source asset before Docker and stages
+Build tooling anonymously fetches its checksum-pinned public GitHub commit archive before Docker and stages
 a credential-free `noether-source` context. Git metadata, tokens and SSH agents
 are not exposed to image build stages. Native source releases and the installed
 wheel's native/Rust inventories belong in the corresponding-source review.
-The source asset is an authenticated maintainer build input, not public source
-delivery. Publication requires a hash-verified public source bundle and signed
+Supplied source archives must match the public download's exact byte length and
+SHA256. Local Git overrides export only the locked object, including its original
+commit identity, rather than the index or working tree. Publication accepts this
+approved public Noether revision only and refuses other candidates before source
+upload or signing. Publication requires a hash-verified public source bundle and signed
 observed-source provenance or an explicit human review. Neither path fabricates
 complete legal or dependency-closure assurance.
 Compiler-provided Rust standard-library/runtime code is not represented by the

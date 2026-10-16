@@ -20,15 +20,16 @@
   },
   "noether": {
     "distribution": "tertius-noether",
-    "version": "0.3.1",
-    "commit": "ca8fc50f3d9a902a827fbd558dba138ad7bf0f8f",
+    "version": "0.3.2",
+    "commit": "4c92c269c59da02a4d32c833c2ee093407f8e22f",
     "source_repository": "https://github.com/tertius-ai/noether",
     "build_context": "noether-source",
     "source_archive": {
-      "url": "https://api.github.com/repos/tertius-ai/reasoning/releases/assets/644289473",
-      "sha256": "a97f7cd143401962478b454a5a5bb2c6962f57357e7ef66a1162f1ffc26cef50",
-      "bytes": 3142759,
-      "transport": "github-api"
+      "url": "https://codeload.github.com/tertius-ai/noether/tar.gz/4c92c269c59da02a4d32c833c2ee093407f8e22f",
+      "sha256": "47fcae0a4decf996f98b3840810c818716cb38defdbfa637c703e4347b5904d2",
+      "bytes": 3186852,
+      "transport": "https",
+      "strip_prefix": "noether-4c92c269c59da02a4d32c833c2ee093407f8e22f"
     },
     "rust_image": "docker.io/library/rust:1.94.0-bookworm@sha256:365468470075493dc4583f47387001854321c5a8583ea9604b297e67f01c5a4f",
     "rust_version": "1.94.0",
@@ -69,7 +70,7 @@
     "pari": "2.17.1",
     "julia": "1.10.11",
     "lean": "4.24.0",
-    "noether": "0.3.1"
+    "noether": "0.3.2"
   },
   "maximum_resources": {
     "cpu": 64,

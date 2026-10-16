@@ -275,6 +275,7 @@ class Services:
         validate_repository(run, repository)
         report, blobs = inspect_image(inputs["archive"], json_body(
             (recipe / "contracts/executor/v1alpha1/image-capabilities.schema.json").read_bytes()), inputs["repository"])
+        publication.require_public_noether(json_body(blobs["usr/share/reasoning/sbom.spdx.json"]))
         if report["image"]["id"] != profile or report["image"]["source_revision"] != handoff["source_revision"]:
             raise ValueError("retained OCI profile/recipe revision differs from the successful candidate workflow")
         allowed = {"candidate/image-evidence.json", "candidate/capabilities.json", "candidate/sbom.spdx.json",

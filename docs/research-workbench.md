@@ -213,7 +213,7 @@ exception text is not returned.
 Programs run only in separately enrolled, approved Docker/Modal workers, never
 on the application host. The approved image advertises its actual languages.
 The public CPU recipe provides Sage, Python, GAP, PARI/GP, Julia, core Lean and
-Noether 0.3.1's default CPU profile; it does not include mathlib or extra Julia packages. The Noether tools
+Noether 0.3.2's default CPU profile; it does not include mathlib or extra Julia packages. The Noether tools
 require an approved Python image containing the pinned package and the fixed
 worker at `/opt/reasoning/noether_worker.py`. Missing runtimes are failures, not
 permission to execute on the server. See [images](images.md) and [compute](compute.md).

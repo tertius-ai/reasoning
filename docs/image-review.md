@@ -5,6 +5,9 @@ Organization operators consume the resulting public catalog; they do not sign
 inventories or publish images. The guided command requires Python and GitHub CLI,
 not local Docker access. GitHub-hosted publication and catalog verification use
 Docker and Skopeo, without rebuilding the retained images.
+Candidates must contain the approved public Noether revision documented in
+[images](images.md). A different Noether source revision is refused before source
+upload or signing; build a matching image and corresponding source bundle.
 
 ```sh
 make compute-publish

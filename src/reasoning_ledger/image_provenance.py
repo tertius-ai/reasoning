@@ -146,6 +146,7 @@ def _prepare_audit(root, archive, profile, repository, bundle, source_url, draft
     revision, recipe_sha = publication.recipe_identity(root, profile)
     report, evidence = inspect_image(archive, json_body(
         (root / "contracts/executor/v1alpha1/image-capabilities.schema.json").read_bytes()), repository)
+    publication.require_public_noether(json_body(evidence["usr/share/reasoning/sbom.spdx.json"]))
     image = report["image"]
     draft = read_json(draft_path)
     sha, size = publication.hash_file(bundle)

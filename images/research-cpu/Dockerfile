@@ -20,8 +20,8 @@ RUN tar -xzf /tmp/uv.tar.gz -C /tmp \
 COPY --from=noether-source . /work/noether
 WORKDIR /work/noether
 RUN test "$SOURCE_DATE_EPOCH" -gt 0 \
-    && python -c 'import json; p=json.load(open("reasoning-source-pin.json")); assert p == {"commit":"ca8fc50f3d9a902a827fbd558dba138ad7bf0f8f","version":"0.3.1"}' \
-    && test "$(sed -n 's/^version = "\([^"]*\)"/\1/p' pyproject.toml | head -n 1)" = "0.3.1" \
+    && python -c 'import json; p=json.load(open("reasoning-source-pin.json")); assert p == {"commit":"4c92c269c59da02a4d32c833c2ee093407f8e22f","version":"0.3.2"}' \
+    && test "$(sed -n 's/^version = "\([^"]*\)"/\1/p' pyproject.toml | head -n 1)" = "0.3.2" \
     && test "$(sed -n 's/^channel = "\([^"]*\)"/\1/p' rust-toolchain.toml)" = "1.94.0" \
     && test -f Cargo.lock && test -f uv.lock \
     && uv venv --python /opt/python/cp310-cp310/bin/python .venv \
@@ -73,7 +73,7 @@ RUN wheel="$(find /tmp/noether-wheelhouse -maxdepth 1 -type f -name 'tertius_noe
     && sage -python -m pip install --no-deps --no-cache-dir "$wheel" \
     && mkdir -p /usr/share/reasoning/provenance \
     && sha256sum "$wheel" | awk '{print $1}' > /usr/share/reasoning/provenance/noether-wheel.sha256 \
-    && sage -python -c 'import noether; assert noether.__version__ == "0.3.1"; noether.capabilities()' \
+    && sage -python -c 'import noether; assert noether.__version__ == "0.3.2"; noether.capabilities()' \
     && rm -rf /tmp/noether-wheelhouse
 COPY images/research-cpu/runtime/ /opt/reasoning/bin/
 COPY src/reasoning_ledger/agents/noether_worker.py /opt/reasoning/noether_worker.py
