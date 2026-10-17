@@ -499,8 +499,12 @@ this display cache. The browser shares one copy of the catalog across topics and
 dialogs for five minutes ("Refresh catalog" fetches it again), and a model's
 detailed capabilities are built only when its row is first expanded. A model
 picker mounts its search and rows only while it is open, and composer edits do
-not re-render the reply picker. Favorites are read once for all mounted pickers
-and again when the window regains focus.
+not re-render the reply picker. Opening a picker or the capabilities browser
+mounts 40 rows at once and another 40 per tick until the list is complete, so
+no single task mounts the whole list. Lists are not windowed, so find in
+page, Tab order, radio-group arrow keys and screen readers reach every row once
+it has mounted. Favorites are read once for all mounted pickers and again when
+the window regains focus.
 
 The browser and model pickers share compact expandable rows. Topic selection
 pickers are alphabetized within **Best for math**, **Best open-weights**, and

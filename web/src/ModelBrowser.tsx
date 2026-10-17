@@ -150,11 +150,30 @@ export function ModelRows({ ids, catalog, allowedModels, selected, onSelect, nam
     try { await toggleFavorite(id, !latest.current.favoriteSet.has(id)); }
     catch (cause) { setFavoriteError(errorMessage(cause)); } finally { setSavingFavorite(false); }
   }, []);
-  return <div className="org-model-rows">{!groups.some(group => group.ids.length) && empty}{groups.map(group => group.ids.length > 0 && <section key={group.title}>
+  const count = useRowBudget(groups.reduce((total, group) => total + group.ids.length, 0));
+  let remaining = count;
+  const shown = groups.map(group => { const ids = group.ids.slice(0, Math.max(0, remaining)); remaining -= group.ids.length; return { ...group, ids }; });
+  return <div className="org-model-rows">{!count && empty}{shown.map(group => group.ids.length > 0 && <section key={group.title}>
     <h5>{group.title}</h5>{group.ids.map(id => <ModelRow key={id} id={id} catalog={catalog} allowed={allowed.has(id)} math={math.has(id)}
       selectable={!!onSelect} selected={selected === id} favorite={favoriteSet.has(id)} savingFavorite={savingFavorite} disabled={disabled}
       name={name} onSelect={select} onFavorite={favorite} />)}</section>)}
     {favoriteError && <p role="alert" className="org-error">{favoriteError}</p>}</div>;
+}
+
+/**
+ * How many rows to mount now. A long list mounts one batch at once and a batch per tick after that, so opening a picker
+ * or the capabilities browser never blocks on the whole catalog; every row is mounted shortly after (for find in page,
+ * Tab order and screen readers). A narrowed search lowers the budget, so widening it again also grows in batches.
+ */
+function useRowBudget(total: number, batch = 40) {
+  const [count, setCount] = useState(batch);
+  useEffect(() => {
+    if (count > Math.max(batch, total)) { setCount(Math.max(batch, total)); return; }
+    if (count >= total) return;
+    const timer = window.setTimeout(() => setCount(current => Math.min(current + batch, total)), 30);
+    return () => window.clearTimeout(timer);
+  }, [count, total, batch]);
+  return Math.min(count, total);
 }
 
 const ModelRow = memo(function ModelRow({ id, catalog, allowed, math, selectable, selected, favorite, savingFavorite, disabled, name, onSelect, onFavorite }: {
