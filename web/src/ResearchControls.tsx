@@ -1,10 +1,10 @@
 import { PollBackoff, schedulePoll } from "./polling";
-import React, { useEffect, useRef, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { availableEfforts } from "./ReasoningEffort";
 import { createPortal } from "react-dom";
 import { ApiError, OrganizationPrices, aborted, decimalBudget, errorMessage, request, sharedRequest, topicPath, usd } from "./organization-api";
 import { ModelPicker } from "./ModelBrowser";
-import { modelOptionGroups } from "./modelRecommendations";
+import { catalogModel, modelOptionGroups } from "./modelRecommendations";
 import { MathematicsBrowser, ResearchMarkdown } from "./MathematicsBrowser";
 import { ResearchFiles } from "./ResearchFiles";
 import "./research-controls.css";
@@ -131,8 +131,9 @@ export function ResearchControls({ organizationId, topicId, userId, selectedMode
   const objectiveField = useRef<HTMLTextAreaElement>(null);
   const acceptanceField = useRef<HTMLTextAreaElement>(null);
   const root = topicPath(organizationId, topicId);
-  const toolModels = allowedModels.filter((id) => catalog?.models.some((model) => model.id === id && model.supports_tools));
-  const goalModelGroups = modelOptionGroups(toolModels, catalog);
+  // Computed once per catalog and model list, not on every keystroke in the composer.
+  const toolModels = useMemo(() => allowedModels.filter((id) => catalogModel(catalog, id)?.supports_tools), [allowedModels, catalog]);
+  const goalModelGroups = useMemo(() => modelOptionGroups(toolModels, catalog), [toolModels, catalog]);
   useEffect(() => {
     if (goalDraft !== null) { if (!attempt) setObjective(goalDraft); setCreateOpen(true); setError(""); }
   }, [goalDraft]);
