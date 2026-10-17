@@ -254,7 +254,9 @@ for (const loss of ["network", "gateway-timeout"]) test(`shared beta responses s
       await visible(page.locator(".org-message .org-message-usage").filter({ hasText: "0.7 Wh" }).first());
       assert.ok(!(await page.locator(".org-app").innerText()).includes(key));
     }
-    assert.equal(calls.length, 3); const catalogBeforeBrowser = catalogRequests; assert.ok(catalogBeforeBrowser >= 6);
+    assert.equal(calls.length, 3); assert.ok(catalogRequests >= 6);
+    const reviewerCatalogReads = [];
+    reviewer.on("request", (sent) => { if (/\/model-(prices|benchmarks)$/.test(new URL(sent.url()).pathname)) reviewerCatalogReads.push(new URL(sent.url()).pathname); });
     await reviewer.getByRole("button", { name: "Account menu", exact: true }).click();
     await reviewer.getByRole("button", { name: "Model capabilities", exact: true }).click();
     const prices = reviewer.getByRole("dialog", { name: "Model capabilities" });
@@ -264,8 +266,12 @@ for (const loss of ["network", "gateway-timeout"]) test(`shared beta responses s
     await prices.getByLabel("Search", { exact: true }).fill("test/two");
     assert.equal(await prices.locator(".org-model-card").count(), 1);
     assert.match(await prices.locator(".org-model-card").first().innerText(), /\$1/);
+    assert.ok(!reviewerCatalogReads.some((item) => item.endsWith("/model-prices")), "opening prices reuses the topic's shared catalogue");
+    await prices.getByRole("button", { name: "Refresh catalog", exact: true }).click();
+    await until(() => reviewerCatalogReads.filter((item) => item.endsWith("/model-prices")).length === 1, "an explicit refresh fetches the catalogue");
+    await visible(prices.locator(".org-model-card").filter({ hasText: "test/two" }));
     await prices.getByRole("button", { name: "Close dialog" }).click();
-    assert.equal(calls.length, 3); assert.ok(catalogRequests >= catalogBeforeBrowser + 1, "opening prices refreshes the catalogue alongside ordinary polling");
+    assert.equal(calls.length, 3);
     await reviewer.getByRole("button", { name: "Account menu", exact: true }).click();
     await reviewer.getByRole("button", { name: "Usage and energy", exact: true }).click();
     const memberUsage = reviewer.getByRole("dialog", { name: "Usage and energy" });
