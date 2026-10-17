@@ -5,12 +5,13 @@ import { after, before, test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { createServer } from "vite";
 
-let server, api, controls;
+let server, api, controls, approvals;
 before(async () => {
   server = await createServer({ root: fileURLToPath(new URL("../", import.meta.url)),
     appType: "custom", logLevel: "silent", server: { middlewareMode: true } });
   api = await server.ssrLoadModule("/src/organization-api.ts");
   controls = await server.ssrLoadModule("/src/ResearchControls.tsx");
+  approvals = await server.ssrLoadModule("/src/BotApprovals.tsx");
 });
 after(async () => { await server?.close(); });
 
@@ -104,4 +105,46 @@ test("research controls request receipt summaries from the retained cursor", asy
   const source = await readFile(new URL("../src/ResearchControls.tsx", import.meta.url), "utf8");
   assert.match(source, /"\/research-tools\?summary=1&after=" \+ toolReceiptAfter\(toolState\.current\)/);
   assert.doesNotMatch(source, /research-tools\?after=/);
+});
+
+test("bot approvals pause in hidden tabs and back off while nothing is pending", async context => {
+  const previousDocument = Object.getOwnPropertyDescriptor(globalThis, "document"), previousFetch = globalThis.fetch;
+  const document = new EventTarget();
+  Object.assign(document, { hidden: false, cookie: "" });
+  Object.defineProperty(globalThis, "document", { configurable: true, value: document });
+  let pending = [], calls = 0;
+  globalThis.fetch = async () => { calls++; return new Response(JSON.stringify(pending), { status: 200 }); };
+  context.mock.timers.enable({ apis: ["setTimeout"] });
+  const settle = async () => { for (let index = 0; index < 5; index++) await new Promise(resolve => setImmediate(resolve)); };
+  const advance = async milliseconds => { context.mock.timers.tick(milliseconds); await settle(); };
+  const controller = new AbortController(), rows = [], errors = [];
+  try {
+    approvals.pollBotApprovals("o", controller.signal, value => rows.push(value), cause => errors.push(cause));
+    await settle();
+    assert.equal(calls, 1);
+    // Three quiet refreshes at three seconds, then six, twelve and fifteen.
+    for (const delay of [3000, 3000, 3000, 6000, 12000, 15000, 15000]) {
+      await advance(delay - 1); const before = calls; await advance(1);
+      assert.equal(calls, before + 1, `next refresh after ${delay} ms`);
+    }
+    pending = [{ id: "approval" }];
+    await advance(15000);
+    assert.deepEqual(rows.at(-1), pending);
+    for (const _ of [0, 1, 2, 3, 4]) { const before = calls; await advance(3000); assert.equal(calls, before + 1, "pending approvals refresh every three seconds"); }
+    document.hidden = true;
+    await advance(3000);
+    const hidden = calls;
+    await advance(3_600_000);
+    assert.equal(calls, hidden, "hidden tabs make no requests");
+    document.hidden = false; document.dispatchEvent(new Event("visibilitychange")); await settle();
+    assert.equal(calls, hidden + 1, "returning to the tab refreshes at once");
+    controller.abort();
+    await advance(3_600_000);
+    assert.equal(calls, hidden + 1, "closing the panel stops polling");
+    assert.deepEqual(errors, []);
+  } finally {
+    context.mock.timers.reset();
+    globalThis.fetch = previousFetch;
+    if (previousDocument) Object.defineProperty(globalThis, "document", previousDocument); else delete globalThis.document;
+  }
 });

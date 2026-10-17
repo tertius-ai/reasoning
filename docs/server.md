@@ -597,8 +597,10 @@ when work appears or the transcript gains a message: beta agent activity (runs,
 agent threads, goal) every second, then up to five seconds; research proposals,
 tool receipt summaries and reviews every 2.5 seconds, then up to ten; topic bot invocations
 every two seconds, then up to eight; topic compute jobs every two seconds, then up
-to ten; and a finished compute job's log and artifacts up to thirty. Each slows only
-after three quiet refreshes (one for a finished compute job). Compute images, policy
+to ten; a finished compute job's log and artifacts up to thirty; and, while
+**People** is open, the owner's pending bot approvals every three seconds, then up
+to fifteen while none are pending. Each slows only after three quiet refreshes (one
+for a finished compute job). Compute images, policy
 and CPU balance load only while the submission dialog is open. The composer's model
 configuration refreshes every ten seconds and topic bot models every five (beta) or
 ten seconds; the server re-checks policy, membership and admission when a request is
