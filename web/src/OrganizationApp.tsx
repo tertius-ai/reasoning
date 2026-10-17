@@ -21,7 +21,7 @@ import { WorkflowExecutionAttempt } from "./workflow-run-api";
 import { ComputeAttempt } from "./compute-api";
 import { MessageUsageDetails } from "./MessageUsageDetails";
 import { normalizeMathDelimiters } from "./markdownMath";
-import { modelOptionGroups } from "./modelRecommendations";
+import { catalogModel, modelOptionGroups } from "./modelRecommendations";
 import { ModelPicker, compactTokens } from "./ModelBrowser";
 import { ResearchControls, RESEARCH_TOOLS, ResearchTool, TOOL_LABELS, goalCommand } from "./ResearchControls";
 import { TopicCopyButton, TopicSystemPrompt } from "./TopicDiagnostics";
@@ -528,13 +528,13 @@ function OrganizationCreationDialog({ organizations, onClose, onCreate }: {
   </form></Dialog>;
 }
 
-export function BetaModelMenu({ configuration, catalog, selected, tools, disabled, error, onSelect, effort = "", onEffortChange }: {
+/** Memoized: composer edits re-render the conversation, but leave the reply picker untouched unless its props change. */
+export const BetaModelMenu = React.memo(function BetaModelMenu({ configuration, catalog, selected, tools, disabled, error, onSelect, effort = "", onEffortChange }: {
   configuration: Pick<InferenceConfiguration, "allowed_models"> | null; catalog: OrganizationPrices | null; selected: string; disabled: boolean;
   tools: KnowledgeTool[]; error: string; onSelect: (model: string) => void;
   effort?: string; onEffortChange?: (effort: string) => void;
 }) {
-  const metadata = catalog?.models.find((model) => model.id === selected);
-  const maximum = metadata?.max_completion_tokens ?? 8192;
+  const maximum = catalogModel(catalog, selected)?.max_completion_tokens ?? 8192;
   const sourceLabels = tools.map((tool) => tool === "journal" ? "journal" : tool === "workflows" ? "workflows" : tool);
   return <ModelPicker label="Choose reply model" models={configuration?.allowed_models ?? []} catalog={catalog} value={selected}
     onChange={onSelect} effort={effort} onEffortChange={onEffortChange} disabled={disabled}>
@@ -547,7 +547,7 @@ export function BetaModelMenu({ configuration, catalog, selected, tools, disable
         <details><summary>Details</summary><p>The selected model receives this topic through your new message, research memory, and granted sources. Tools can recover earlier context. Inspect context in research settings for the exact input.</p></details>
       </section>
   </ModelPicker>;
-}
+});
 
 export function peopleWithBots(presence: Presence | null) {
   return (presence?.humans ?? []).map(person => ({ ...person,
@@ -645,7 +645,7 @@ function Conversation({ organizationId, topic, members, user, canWrite, canManag
   const [effort, setEffort] = useState("");
   useEffect(() => { const initial = selectedModel === topic.default_model ? topic.default_effort ?? "" : "";
     try { setEffort(localStorage.getItem(effortKey) ?? initial); } catch { setEffort(initial); } }, [effortKey, topic.default_effort, topic.default_model]);
-  const chooseEffort = (value: string) => { setEffort(value); try { localStorage.setItem(effortKey, value); } catch { /* Optional storage. */ } };
+  const chooseEffort = useCallback((value: string) => { setEffort(value); try { localStorage.setItem(effortKey, value); } catch { /* Optional storage. */ } }, [effortKey]);
   const selectedEffort = availableEfforts(replyCatalog, selectedModel).includes(effort) ? effort : null;
   const [promptRevision, setPromptRevision] = useState(0);
   useEffect(() => { try { if (selectedModel) localStorage.setItem(modelStorageKey, selectedModel); } catch { /* Storage is optional. */ } }, [modelStorageKey, selectedModel]);
@@ -1025,8 +1025,8 @@ function Conversation({ organizationId, topic, members, user, canWrite, canManag
       <textarea id="org-message" ref={textarea} placeholder={!canWrite ? "You have read-only access" : topic.kind === "beta" && modelAttempt
         ? modelAttempt.unconfirmed ? "Retry or dismiss the unconfirmed reply request before sending another message"
           : "Sending the reply request…" : topic.kind === "beta" && selectedModel
-      ? `Message ${replyCatalog?.models.find(model => model.id === selectedModel)?.execution_source === "bot"
-        ? replyCatalog.models.find(model => model.id === selectedModel)?.name : selectedModel}…` : "Write a message…"} value={draft.text}
+      ? `Message ${catalogModel(replyCatalog, selectedModel)?.execution_source === "bot"
+        ? catalogModel(replyCatalog, selectedModel)?.name : selectedModel}…` : "Write a message…"} value={draft.text}
         disabled={!canWrite || sending || (topic.kind === "beta" && !!modelAttempt)} maxLength={16000} rows={1} onChange={(event) => {
           updateDraft({ text: event.target.value, clientId: draft.attempted || !draft.clientId ? crypto.randomUUID() : draft.clientId,
             attempted: false, mentions: editMentions(draft.text, event.target.value, draft.mentions) });

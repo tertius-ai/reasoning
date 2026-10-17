@@ -5,7 +5,7 @@ import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { createServer } from "vite";
 
-let server, controls, groups, BetaModelMenu, TopicCopyButton, ModelPicker;
+let server, controls, groups, BetaModelMenu, TopicCopyButton, ModelPicker, ModelRows;
 let runFailureMessage;
 before(async () => {
   server = await createServer({ appType: "custom", logLevel: "silent", server: { middlewareMode: true } });
@@ -14,7 +14,7 @@ before(async () => {
   ({ BetaModelMenu } = await server.ssrLoadModule("/src/OrganizationApp.tsx"));
   ({ runFailureMessage } = await server.ssrLoadModule("/src/BetaConversation.tsx"));
   ({ TopicCopyButton } = await server.ssrLoadModule("/src/TopicDiagnostics.tsx"));
-  ({ ModelPicker } = await server.ssrLoadModule("/src/ModelBrowser.tsx"));
+  ({ ModelPicker, ModelRows } = await server.ssrLoadModule("/src/ModelBrowser.tsx"));
 });
 after(async () => { await server?.close(); });
 
@@ -53,19 +53,18 @@ test("mathematics recommendations never expand the allowlist or hide other choic
     recommendations: { model_ids: ["r/private", "r/top"] }, allowed_models: ["r/top", "r/other"] };
   assert.deepEqual(groups.modelOptionGroups(["r/top", "r/other"], catalog), { recommended: ["r/top"], other: ["r/other"] });
   assert.deepEqual(groups.modelOptionGroups(["r/top", "r/other"], catalog, "OTHER"), { recommended: [], other: ["r/other"] });
-  const menu = renderToStaticMarkup(React.createElement(BetaModelMenu, { configuration: { allowed_models: ["r/top", "r/other"] }, catalog,
-    selected: "r/top", tools: [], disabled: false, error: "", onSelect: () => {} }));
-  assert.match(menu, /Best for math/); assert.match(menu, /Other models/); assert.match(menu, /Search models and routers/);
-  assert.doesNotMatch(menu, /Disallowed|50 messages/); assert.match(menu, /Cited memory/);
+  const rows = renderToStaticMarkup(React.createElement(ModelRows, { ids: ["r/top", "r/other"], catalog, allowedModels: ["r/top", "r/other"],
+    selected: "r/top", name: "reply", onSelect: () => {} }));
+  assert.match(rows, /Best for math/); assert.match(rows, /Other models/); assert.doesNotMatch(rows, /Disallowed|r\/private/);
 });
 
-test("reply menu explains provider capacity without imposing an application output cap", () => {
-  const menu = renderToStaticMarkup(React.createElement(BetaModelMenu, { configuration: { allowed_models: ["large/model"] },
-    catalog: { models: [{ id: "large/model", name: "Large", max_completion_tokens: 943718 }] },
-    selected: "large/model", tools: [], disabled: false, error: "", onSelect: () => {} }));
-  assert.match(menu, /No application output-token cap/);
-  assert.match(menu, /research continues within authorized budgets/);
-  assert.doesNotMatch(menu, /943,718 max output/);
+test("a closed reply menu shows its selection without mounting model options", () => {
+  // Opening it, its search, rows and context summary are covered by tests/model-picker.browser.mjs.
+  const menu = renderToStaticMarkup(React.createElement(BetaModelMenu, { configuration: { allowed_models: ["r/top", "r/other"] },
+    catalog: { models: [{ id: "r/top", name: "Recommended", max_completion_tokens: 943718 }, { id: "r/other", name: "Other" }] },
+    selected: "r/top", tools: [], disabled: false, error: "", onSelect: () => {} }));
+  assert.match(menu, /aria-label="Choose reply model"/); assert.match(menu, /r\/top/);
+  assert.doesNotMatch(menu, /org-model-options|org-model-card|Search models and routers|r\/other|Cited memory/);
 });
 
 test("system prompt is a chat-styled disclosure and JSON copy is a quiet header icon", () => {

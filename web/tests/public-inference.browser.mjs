@@ -231,7 +231,7 @@ for (const loss of ["network", "gateway-timeout"]) test(`shared beta responses s
     await visible(member.locator(".org-message").filter({ hasText: "One question for the default model." }));
     await member.getByRole("button", { name: "Choose reply model", exact: true }).click();
     await member.getByLabel("All chat models", { exact: true }).check();
-    await member.getByRole("radio", { name: /test\/two/ }).check();
+    await member.getByRole("radio", { name: /test\/two/ }).click();
     await member.getByRole("navigation", { name: "Projects and channels" }).getByRole("button", { name: /^alpha topic -Human notes\b/ }).click();
     await member.getByRole("navigation", { name: "Projects and channels" }).getByRole("button", { name: /^beta topic -Shared models\b/ }).click();
     await visible(member.getByRole("button", { name: "Choose reply model", exact: true }).filter({ hasText: "test/two" }));
@@ -244,7 +244,7 @@ for (const loss of ["network", "gateway-timeout"]) test(`shared beta responses s
     await visible(member.locator(".org-message").filter({ hasText: "Shared mathematics:" }).nth(1));
     await member.getByRole("button", { name: "Choose reply model", exact: true }).click();
     await member.getByLabel("All chat models", { exact: true }).check();
-    await member.getByRole("radio", { name: /test\/one/ }).check();
+    await member.getByRole("radio", { name: /test\/one/ }).click();
     await send(member, "Return to the first model.");
     await until(() => calls.length === 3, "third selected model call");
     for (const page of pages) {
@@ -284,7 +284,7 @@ for (const loss of ["network", "gateway-timeout"]) test(`shared beta responses s
     assert.match(await memberUsage.innerText(), /Energy covers 3\/3 calls, including 1 reference scenarios/);
     await memberUsage.getByRole("button", { name: "Close dialog" }).click();
     await member.getByRole("button", { name: "Choose reply model", exact: true }).click();
-    await member.getByRole("radio", { name: /test\/slow/ }).check();
+    await member.getByRole("radio", { name: /test\/slow/ }).click();
     await send(member, "Start a cancellable response.");
     await visible(member.getByLabel("Streaming response from test/slow"));
     await member.evaluate(id => window.dispatchEvent(new CustomEvent("reasoning-topic-command", { detail: { topicId: id, command: "stop" } })), topic.id);
