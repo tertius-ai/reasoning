@@ -4,6 +4,7 @@ import React, { useEffect, useState } from "react";
 import { ActivityCard, TopicActivity } from "./TopicActivity";
 import { aborted, ApiError, BotRun, errorMessage, ModelAttempt, organizationPath, request, topicPath } from "./organization-api";
 import { canStopBot, publishBotActivity } from "./BotPlayback";
+import { BotRunTiming } from "./BotRunTiming";
 import { useTopicCommand } from "./TopicCommands";
 
 export function submitModelAttempt(organizationId: string, topicId: string, attempt: ModelAttempt) {
@@ -61,6 +62,7 @@ export function BotConversation({ organizationId, topicId, names, userId, canWri
     id: "bot:" + run.id, created_at: run.created_at, after_sequence: run.context_through_sequence || undefined,
     body: <ActivityCard title={`${names[run.bot_id] ?? "Bot"} · ${run.model}`} status={run.status} createdAt={run.created_at}
       initiallyOpen={!["failed", "cancelled", "outcome_unknown", "succeeded"].includes(run.status)}>{run.status !== "succeeded" && <BotRunStatus run={run} />}
+      <BotRunTiming run={run} />
     </ActivityCard>,
   }))); }, [runs, connected, names, onActivity]);
   const stoppable = runs.filter(run => canStopBot(run, userId, canWrite, canManage));

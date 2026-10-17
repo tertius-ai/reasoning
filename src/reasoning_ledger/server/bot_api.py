@@ -94,10 +94,25 @@ class GatewayReceipt(Lease):
     tool_count: Annotated[int, Field(ge=1, le=256, strict=True)]
 
 
+Stage = Annotated[int, Field(ge=0, le=86_400_000, strict=True)]
+
+
+class RunnerTiming(Input):
+    """Content-free runner stages in milliseconds since the runner received the claim."""
+
+    cli_started_ms: Stage | None = None
+    cli_ready_ms: Stage | None = None
+    first_text_ms: Stage | None = None
+    final_text_ms: Stage | None = None
+    cli_exited_ms: Stage | None = None
+    resolved_model: Annotated[str, Field(max_length=100, pattern=r"^[A-Za-z0-9][A-Za-z0-9._/-]{0,99}$")] | None = None
+
+
 class Completion(Lease):
     status: Literal["succeeded", "failed", "outcome_unknown", "cancelled"]
     output: Annotated[str, Field(max_length=128 * 1024)] = ""
     error: Literal["cli_failed", "runner_lost", "cancelled", "gateway_unavailable", "gateway_not_attached"] | None = None
+    timing: RunnerTiming | None = None
 
 
 class ExecutionRequest(Lease):
@@ -297,7 +312,7 @@ def install_routes(app: FastAPI, state: BotStore, authenticated, *, compute=None
 
     @app.post("/api/bot/runs/{run_id}/finish")
     def run_finish(run_id: str, body: Completion, request: Request):
-        return runtime.finish(credential(request), run_id, **body.model_dump())
+        return runtime.finish(credential(request), run_id, **body.model_dump(exclude_unset=True))
 
     @app.post("/api/bot/runs/{run_id}/executions")
     def execution_request(run_id: str, body: ExecutionRequest, request: Request):

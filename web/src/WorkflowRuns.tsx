@@ -15,6 +15,7 @@ import "./workflow-conversation.css";
 import { OutputActions } from "./ChatFeedback";
 import { TransportControls, dispatchTopicCommand, useComputeActivity, useTopicCommand } from "./TopicCommands";
 import { useBotActivity } from "./BotPlayback";
+import { BotRunTiming } from "./BotRunTiming";
 import {
   WorkflowActionSpec, WorkflowExecutionAttempt, WorkflowNodeAttempt, WorkflowRun, WorkflowRunSummary,
   canApproveWorkflow, canControlWorkflow, captureWorkflowAction, captureWorkflowStart,
@@ -86,6 +87,7 @@ function ComparisonAnswer({ organizationId, topicId, node, model, canWrite, onAu
       {run?.error_code && <p className="org-error">{run.diagnostics?.message ?? runFailureMessage(run.error_code)}</p>}
       {run?.diagnostics?.action && <p className="org-help">{run.diagnostics.action}</p>}
       {botRun && ["running", "waiting_approval"].includes(status) && <p role="status" className="org-working">{botRun.phase.replaceAll("_", " ")}…</p>}
+      {botRun && <BotRunTiming run={botRun} />}
       {!output ? (!["queued", "running"].includes(status) && <p role="status">{["pending", "ready", "dispatched"].includes(status) ? "Waiting for answer…" : "No answer returned."}</p>)
         : <ReactMarkdown remarkPlugins={[remarkGfm, remarkMath]} rehypePlugins={[rehypeKatex]} components={{ img: () => null }} skipHtml>{normalizeMathDelimiters(output)}</ReactMarkdown>}
       {run && <MessageUsageDetails usage={run.usage} />}

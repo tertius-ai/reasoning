@@ -167,8 +167,15 @@ def parse_result(engine, output):
 
 
 def invoke(engine, workspace, prompt, local_tools=False, session=None, *, deadline=1800, executable=None, heartbeat=None,
-           model=None, gateway=None, progress=None, effort=None):
-    from .bot_activity import cli_activity
+           model=None, gateway=None, progress=None, effort=None, timing=None):
+    """``timing``, when given, receives monotonic times at which this runner observed CLI stages.
+
+    Keys: ``cli_started`` (process spawned), ``cli_ready`` (session start event),
+    ``first_text``/``final_text`` (first/last visible assistant text event),
+    ``cli_exited``, and ``model`` when the CLI reports it. Events are observed
+    when the runner reads CLI output, which it polls every 0.2 seconds.
+    """
+    from .bot_activity import cli_activity, cli_stage
 
     args = agent_arguments(engine, workspace, local_tools, session, model=model, gateway=gateway, effort=effort)
     if gateway is not None:
@@ -183,6 +190,8 @@ def invoke(engine, workspace, prompt, local_tools=False, session=None, *, deadli
         source.seek(0)
         process = subprocess.Popen(args, cwd=workspace, stdin=source, stdout=out, stderr=err, start_new_session=True)
         started = time.monotonic()
+        if timing is not None:
+            timing["cli_started"] = started
         last_heartbeat = started
         checked_at, active_seconds, waiting_approval = started, 0.0, False
         read_offset, partial, last_activity, last_report = 0, b"", None, 0.0
@@ -198,9 +207,19 @@ def invoke(engine, workspace, prompt, local_tools=False, session=None, *, deadli
             partial = lines.pop()
             for line in lines:
                 try:
-                    activity = cli_activity(json.loads(line))
+                    event = json.loads(line)
+                    activity = cli_activity(event)
                 except (ValueError, TypeError):
                     continue
+                if timing is not None:
+                    stage, reported = cli_stage(event)
+                    if stage == "ready":
+                        timing.setdefault("cli_ready", time.monotonic())
+                        if reported:
+                            timing.setdefault("model", reported)
+                    elif stage == "text":
+                        timing.setdefault("first_text", time.monotonic())
+                        timing["final_text"] = time.monotonic()
                 if progress is not None and activity and activity != last_activity and time.monotonic() - last_report >= 1:
                     progress(activity)
                     last_activity, last_report = activity, time.monotonic()
@@ -222,6 +241,8 @@ def invoke(engine, workspace, prompt, local_tools=False, session=None, *, deadli
                 ):
                     raise BotClientError("CLI exceeded its runtime or output allowance; reconcile the retained invocation before retrying")
                 time.sleep(0.2)
+            if timing is not None:
+                timing["cli_exited"] = time.monotonic()
             if process.returncode or os.fstat(out.fileno()).st_size > MAX_OUTPUT:
                 raise BotClientError(f"{engine} exited without a completed answer; check its login and account limits locally")
             events()

@@ -84,7 +84,12 @@ export type BotRun = { id: string; bot_id: string; bot_name?: string | null; mod
   activity?: { kind: string; label: string; at: number }[];
   context_through_sequence?: number;
   requested_by?: string; owner_user_id?: string | null; approval_by?: "owner" | "requester" | null;
-  created_at: number; updated_at: number; output_text: string; error_code: string | null };
+  created_at: number; updated_at: number; output_text: string; error_code: string | null; timing?: BotRunTiming | null };
+/** Server stamps in epoch milliseconds; runner stages in milliseconds after the runner received the claim. Null is unknown. */
+export type BotRunTiming = { enqueued_at_ms: number | null; claimed_at_ms: number | null; committed_at_ms: number | null;
+  queue_wait_ms: number | null; claim_to_commit_ms: number | null; resolved_model: string | null;
+  runner: { cli_started_ms: number | null; cli_ready_ms: number | null; first_text_ms: number | null;
+    final_text_ms: number | null; cli_exited_ms: number | null } };
 export type SearchResult = Message & { project_name: string; channel_name: string; topic_name: string; topic_kind: TopicKind };
 export type Session = { user_id: string; organization_id?: string; csrf_token?: string };
 export type KeyMetadata = { id: string; provider: string; label: string; fingerprint: string; disabled_at: number | null };
