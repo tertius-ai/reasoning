@@ -852,17 +852,23 @@ def create_app(config: Config, *, provider: OpenRouter | None = None, mail_provi
 
     @app.post("/api/organizations/{organization_id}/topics/{topic_id}/inference-runs", status_code=202)
     async def request_models(organization_id: str, topic_id: str, body: InferenceRequest, user: User):
+        from .inference_timing import Spans
+
+        spans = Spans("admission")
         parameters = inference.parameters(body.models, body.max_completion_tokens, body.context_message_limit,
                                            body.through_sequence, effort=body.effort)
-        existing = await run_in_threadpool(inference.replay, user, organization_id, topic_id, body.client_id, parameters)
+        existing = await run_in_threadpool(inference.admit, user, organization_id, topic_id, body.client_id, parameters)
         if existing is not None:
             return existing
-        await run_in_threadpool(inference.preflight, user, organization_id, topic_id, body.models)
+        spans.mark("admission_check")
         if not config.inference_enabled:
             raise StoreError(503, "inference is disabled on this installation")
         quotes = await provider.quotes(body.models)
-        await run_in_threadpool(inference.configuration, user, organization_id, models=provider.catalog_models)
-        return await run_in_threadpool(inference.enqueue, user, organization_id, topic_id, body.client_id, parameters, quotes)
+        spans.mark("catalog_quote")
+        # Later reviewer/workflow admission reads the most recent provider model list.
+        inference.store._model_catalog = list(provider.catalog_models)
+        return await run_in_threadpool(inference.enqueue, user, organization_id, topic_id, body.client_id, parameters, quotes,
+                                       spans=spans)
 
     @app.get("/api/organizations/{organization_id}/topics/{topic_id}/inference-runs")
     def model_runs(organization_id: str, topic_id: str, user: User, limit: Annotated[int, Query(ge=1, le=50)] = 20):

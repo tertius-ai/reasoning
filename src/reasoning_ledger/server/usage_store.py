@@ -64,15 +64,24 @@ class UsageStore:
         context: list[dict] | None = None,
         reserved_microusd: int | None = None,
         route: dict | None = None,
+        preparation=None,
     ) -> str:
-        """Write the immutable receipt before submission. Caller persists the ID."""
+        """Write the immutable receipt before submission. Caller persists the ID.
+
+        ``preparation`` holds the call's provider-stage spans; the submission
+        receipt retains their names and durations only.
+        """
         from .store import _id
 
         call = _id()
         messages = context if context is not None else json.loads(row["context_json"])
         digest = hashlib.sha256(json.dumps(messages, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
         reserved = row["reserved_microusd"] if reserved_microusd is None else reserved_microusd
+        if preparation is not None:
+            preparation.mark("call_ledger")
         with self.store.transaction(write=True) as db:
+            if preparation is not None:
+                preparation.mark("call_ledger_lock")
             project = db.execute(
                 "SELECT c.project_id FROM topics t JOIN channels c ON c.id=t.channel_id WHERE t.id=?", (row["topic_id"],)
             ).fetchone()[0]
@@ -110,7 +119,11 @@ class UsageStore:
                     int(time.time() * 1000),
                 ),
             )
-            self._receipt(db, row["organization_id"], call, "submission", {"status": "running", "accounting_state": "reserved"})
+            submission = {"status": "running", "accounting_state": "reserved"}
+            if preparation is not None:
+                preparation.mark("call_ledger")
+                submission["preparation_ms"] = preparation.record()
+            self._receipt(db, row["organization_id"], call, "submission", submission)
         return call
 
     def first_token(self, call_id: str) -> None:
@@ -130,8 +143,11 @@ class UsageStore:
                 "time_to_response_headers_ms": json.loads(response[0])["time_to_response_headers_ms"] if response else None,
             })
 
-    def response_headers(self, call_id: str) -> None:
-        """Record HTTP response arrival, not an invented network-only latency."""
+    def response_headers(self, call_id: str, *, dispatch: dict | None = None) -> None:
+        """Record HTTP response arrival, not an invented network-only latency.
+
+        ``dispatch`` holds content-free span durations between the call start and the request.
+        """
         with self.store.transaction(write=True) as db:
             header = db.execute("SELECT organization_id,started_at_ms FROM inference_calls WHERE id=?", (call_id,)).fetchone()
             if header is None:
@@ -139,10 +155,13 @@ class UsageStore:
             if db.execute("SELECT 1 FROM inference_call_events WHERE call_id=? AND kind IN ('response_headers','completion')",
                           (call_id,)).fetchone():
                 return
-            self._receipt(db, header[0], call_id, "response_headers", {
+            receipt = {
                 "status": "running", "accounting_state": "reserved",
                 "time_to_response_headers_ms": max(0, int(time.time() * 1000) - header[1]) if header[1] is not None else None,
-            })
+            }
+            if dispatch:
+                receipt["dispatch_ms"] = dispatch
+            self._receipt(db, header[0], call_id, "response_headers", receipt)
 
     def finish_call(
         self,
@@ -166,6 +185,12 @@ class UsageStore:
                                 (call_id,)).fetchone()
             headers = db.execute("SELECT data_json FROM inference_call_events WHERE call_id=? AND kind='response_headers'",
                                  (call_id,)).fetchone()
+            submission = db.execute("SELECT data_json FROM inference_call_events WHERE call_id=? AND kind='submission'",
+                                    (call_id,)).fetchone()
+            spans = {
+                "preparation_ms": json.loads(submission[0]).get("preparation_ms") if submission else None,
+                "dispatch_ms": json.loads(headers[0]).get("dispatch_ms") if headers else None,
+            }
             self._receipt(
                 db,
                 header[0],
@@ -188,6 +213,7 @@ class UsageStore:
                     "latency_ms": max(0, int(time.time() * 1000) - header[1]) if header[1] is not None else None,
                     "time_to_first_token_ms": json.loads(timing[0])["time_to_first_token_ms"] if timing else None,
                     "time_to_response_headers_ms": json.loads(headers[0])["time_to_response_headers_ms"] if headers else None,
+                    **{key: value for key, value in spans.items() if value is not None},
                 },
             )
 

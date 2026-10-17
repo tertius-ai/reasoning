@@ -78,12 +78,17 @@ def narrow_attachment_snapshot(snapshot, messages):
 
 def authorize_captured_media(store, row, messages=None):
     """A queued/captured image is not a permanent access grant after revocation."""
+    if messages is not None:
+        identities = referenced_media(messages)
+        projections = set().union(*(projection_hashes(message) for message in messages))
+        if not identities and not projections:
+            return  # No captured reference can match a request without media.
     with store.transaction() as db:
         snapshot = db.execute("SELECT snapshot_json FROM research_contexts WHERE request_id=?", (row["request_id"],)).fetchone()
         captured = json.loads(snapshot[0]) if snapshot else {}
-        payload = captured.get("messages", []) if messages is None else messages
-        identities = referenced_media(payload)
-        projections = set().union(*(projection_hashes(message) for message in payload))
+        if messages is None:
+            identities = referenced_media(captured.get("messages", []))
+            projections = set().union(*(projection_hashes(message) for message in captured.get("messages", [])))
         references = set()
         for reference in captured.get("attachments", []):
             identity = reference_identity(reference)

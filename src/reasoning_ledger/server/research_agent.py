@@ -40,8 +40,9 @@ def execution_error(result, finish_reason):
 
 
 class ResearchAgent:
-    def __init__(self, inference, provider, row, quote, *, compute=None, workflows=None, stopped=None, timeout=1800):
+    def __init__(self, inference, provider, row, quote, *, compute=None, workflows=None, stopped=None, timeout=1800, spans=None):
         self.inference, self.store, self.row, self.quote = inference, inference.store, row, quote
+        self.spans = spans
         self.context = ResearchContext(self.store)
         self.client = ResearchCompletion(inference, provider, row, quote)
         self.compute, self.workflows = compute, workflows
@@ -160,16 +161,25 @@ class ResearchAgent:
         return payload
 
     def execute(self):
+        from .inference_timing import Spans
+
+        # Worker spans run from the claim handoff to the first provider request.
+        spans = self.spans or Spans("worker")
+        if self.spans is not None:
+            spans.mark("dispatch")
         with self.store.transaction() as db:
             snapshot_row = db.execute(
                 "SELECT snapshot_json FROM research_contexts WHERE request_id=?", (self.row["request_id"],)
             ).fetchone()
         metadata = json.loads(snapshot_row[0]) if snapshot_row else None
         messages = json.loads(self.row["context_json"])
+        spans.mark("context_read")
         try:
             # Permission changes between enqueue and claim fail this run, not the worker.
             self.tools = ResearchTools(self.inference, self.row, compute=self.compute, workflows=self.workflows)
-            if metadata and metadata["compact_through_sequence"] > metadata["memory_through_sequence"]:
+            spans.mark("tool_permissions")
+            compacted = bool(metadata and metadata["compact_through_sequence"] > metadata["memory_through_sequence"])
+            if compacted:
                 # Completion purpose is pinned for the summarizer's individual call receipt.
                 previous = self.client.complete
                 self.client.complete = lambda payload, timeout: self._compaction_complete(payload, timeout)
@@ -183,16 +193,20 @@ class ResearchAgent:
                 self.tools.observations = RevisionObservations()
                 for record in metadata.get("ledger_revisions", []):
                     self.tools.observations.note(record["claim_id"], record["revision_id"])
-            with self.store.transaction(write=True) as db:
-                if metadata:
+                spans.mark("compaction")
+                # Only compaction changes the captured snapshot; an unchanged one is not rewritten.
+                with self.store.transaction(write=True) as db:
                     db.execute(
                         "UPDATE research_contexts SET snapshot_json=? WHERE request_id=?", (encoded(metadata), self.row["request_id"])
                     )
+                spans.mark("snapshot_write")
             available = self.tools.available() if self.quote.supports_tools and metadata is not None \
                 and not metadata.get("workflow_context_sha256") else []
             prepared_tools = self.tools.registry.prepared(available)
+            spans.mark("tool_preparation")
             with self.store.transaction() as db:
                 goal = ResearchGoals.execution_goal(db, self.row["id"])
+            spans.mark("goal_lookup")
             tool_limit = max(0, goal["max_tool_calls"] - goal["tool_calls"]) if goal else None
             if metadata:
                 self.client.prompt_version = metadata.get("prompt_version", self.client.prompt_version)
@@ -222,6 +236,9 @@ class ResearchAgent:
                 rate_limit_retry_delays=(), max_output_continuations=None,
                 continue_reasoning_only=True,
             )
+            spans.mark("executor_setup")
+            # The first provider request marks executor_start and retains these spans.
+            self.client.worker_spans = spans
 
             tool_started = {}
 

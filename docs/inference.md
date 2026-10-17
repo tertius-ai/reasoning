@@ -606,6 +606,29 @@ context preparation, provider waiting/streaming, and tool execution. Missing
 historical measurements remain null. Timing does not change routing policy or
 retry paid requests; compare identical prompts and effort under different
 routing strategies before attributing model slowness to cheapest routing.
+
+`timing.spans_ms` attributes admission and preparation to named spans, defined
+in `SPANS` in `server/inference_timing.py`. Each span is the elapsed time in
+milliseconds, on the measuring process's monotonic clock, from the previous span
+of its stage to the end of this one. Spans record names and durations only,
+never prompts, context, credentials, tool arguments or answers, and are read
+back only through that vocabulary. Four stages are retained:
+
+| Stage | Interval | Retained in |
+| --- | --- | --- |
+| `admission` | Authenticated API request: access/replay/key check, catalog quote, admission transaction and credit lock, access recheck, limits, context compilation, reservation, ledger inserts | A `timing` run event committed with the request |
+| `worker` | Claim handoff through the executor's first provider request: snapshot read, tool permissions, compaction when it runs, tool preparation, goal lookup, executor setup/start | A `timing` run event written with the first answer call |
+| `provider` | One call's preparation before its header records the call start: context transform, purpose lookup, credential check, media check, quote estimate, reservation lock and goal admission, reservation, call-ledger lock and header | The call's submission and completion receipts (`preparation_ms`) |
+| `dispatch` | After the call start: request record (round event, session, output prefix) and HTTP client setup | The call's response-arrival and completion receipts (`dispatch_ms`) |
+
+The run view reports the first call's provider and dispatch spans; inference
+call details and topic JSON carry every call's spans. The worker can claim a
+run before its HTTP response is delivered, and the request also spends time in
+authentication and response serialization outside the spans, so stage totals
+are not added to each other or to HTTP latency.
+Internally enqueued runs (agents, reviews, workflows) start their admission
+spans inside the caller's transaction. Runs or calls admitted before this
+instrumentation, and calls that fail before a stage is reached, report `null`.
 Cache, reasoning, total, and tool-token counts remain unknown when the provider
 does not report them. Accounting reconciliation appends a new receipt while
 preserving the original charge evidence. The database rejects updates and

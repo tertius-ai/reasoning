@@ -3,6 +3,8 @@
 
 def remove_collaboration_schema(db):
     """Strip collaboration migrations in foreign-key dependency order, preserving core rows."""
+    for index in ("llm_run_accounting", "llm_run_status", "llm_request_recent"):
+        db.execute("DROP INDEX IF EXISTS " + index)
     db.execute("DROP TABLE IF EXISTS email_verifications")
     db.execute("DROP TABLE IF EXISTS user_model_favorites")
     if "default_effort" in {row[1] for row in db.execute("PRAGMA table_info(topics)")}:

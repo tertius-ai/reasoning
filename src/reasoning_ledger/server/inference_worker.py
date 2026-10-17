@@ -13,6 +13,7 @@ from concurrent.futures import ThreadPoolExecutor
 from contextlib import suppress
 
 from .inference_store import MAX_OUTPUT_CHARS, InferenceStore
+from .inference_timing import Spans
 from .openrouter import OpenRouter, ProviderError, Quote
 from .security import private_file
 from .store import StoreError
@@ -93,7 +94,7 @@ class InferenceWorker:
                     row = self.state.claim()
                     if row is None:
                         break
-                    tasks.add(asyncio.create_task(self._execute(row)))
+                    tasks.add(asyncio.create_task(self._execute(row, spans=Spans("worker"))))
                 await asyncio.sleep(0.1)
         finally:
             maintenance.cancel()
@@ -116,7 +117,7 @@ class InferenceWorker:
             await ResearchGoals(self.state).dispatch(self.provider, stopped=self._stop.is_set)
             await asyncio.sleep(1)
 
-    async def _execute(self, row: dict) -> None:
+    async def _execute(self, row: dict, *, spans: Spans | None = None) -> None:
         with self.state.store.transaction() as db:
             research = db.execute("SELECT 1 FROM research_contexts WHERE request_id=?", (row["request_id"],)).fetchone()
             topic_kind = db.execute("SELECT kind FROM topics WHERE id=?", (row["topic_id"],)).fetchone()[0]
@@ -132,6 +133,7 @@ class InferenceWorker:
                 workflows=self.workflows,
                 stopped=self._stop.is_set,
                 timeout=self.timeout,
+                spans=spans,
             )
             task = asyncio.create_task(asyncio.to_thread(agent.execute))
             try:

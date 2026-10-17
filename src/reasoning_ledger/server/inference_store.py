@@ -50,8 +50,12 @@ class InferenceStore:
             result["effort"] = effort
         return result
 
-    def _preflight(self, db: sqlite3.Connection, user: str, org: str, topic: str, *, topic_kind: str = "beta") -> tuple[dict, dict]:
-        target = self.store._topic_access(db, user, org, topic, write=True)[4]
+    def _preflight(
+        self, db: sqlite3.Connection, user: str, org: str, topic: str, *, topic_kind: str = "beta", target: dict | None = None
+    ) -> tuple[dict, dict]:
+        """Topic kind, key and budget; ``target`` is the topic a caller already resolved with write access."""
+        if target is None:
+            target = self.store._topic_access(db, user, org, topic, write=True)[4]
         if target["kind"] != topic_kind:
             raise StoreError(
                 400, "model responses require a beta topic" if topic_kind == "beta" else "workflow responses require a gamma topic"
@@ -71,13 +75,17 @@ class InferenceStore:
     @staticmethod
     def _balance(db: sqlite3.Connection, org: str) -> dict:
         month = int(datetime.now(UTC).replace(day=1, hour=0, minute=0, second=0, microsecond=0).timestamp())
+        # Only holds and this month's settled charges contribute; each sum reads
+        # its accounting-index range rather than the organization's whole history.
         row = db.execute(
             """SELECT
-            COALESCE(SUM(CASE WHEN accounting_state='settled' AND settled_at>=? THEN actual_microusd ELSE 0 END),0) AS spent_microusd,
-            COALESCE(SUM(CASE WHEN accounting_state='reserved' THEN reserved_microusd ELSE 0 END),0) AS reserved_microusd,
-            COALESCE(SUM(CASE WHEN accounting_state='uncertain' THEN reserved_microusd ELSE 0 END),0) AS uncertain_microusd
-            FROM llm_runs WHERE organization_id=?""",
-            (month, org),
+            COALESCE((SELECT SUM(actual_microusd) FROM llm_runs WHERE organization_id=? AND accounting_state='settled'
+                      AND settled_at>=?),0) AS spent_microusd,
+            COALESCE((SELECT SUM(reserved_microusd) FROM llm_runs WHERE organization_id=? AND accounting_state='reserved'),0)
+                AS reserved_microusd,
+            COALESCE((SELECT SUM(reserved_microusd) FROM llm_runs WHERE organization_id=? AND accounting_state='uncertain'),0)
+                AS uncertain_microusd""",
+            (org, month, org, org),
         ).fetchone()
         result = dict(row)
         work = db.execute(
@@ -125,34 +133,54 @@ class InferenceStore:
             self.store._audit(db, org, user, "organization.routing", org)
         return policy
 
-    def replay(self, user: str, org: str, topic: str, client: str, parameters: dict) -> list[dict] | None:
+    def _replayed(self, db, user, org, topic, client, parameters):
+        request = db.execute(
+            "SELECT * FROM llm_requests WHERE organization_id=? AND requested_by=? AND client_id=?", (org, user, client)
+        ).fetchone()
+        if request is None:
+            return None
+        if request["topic_id"] != topic or json.loads(request["parameters_json"]) != parameters:
+            raise StoreError(409, "client_id was already used for a different model request")
+        return self._request_runs(db, request["id"])
+
+    def admit(self, user: str, org: str, topic: str, client: str, parameters: dict) -> list[dict] | None:
+        """Replay lookup, then admission preflight, with one access check in one read transaction."""
         with self.store.transaction() as db:
-            self.store._topic_access(db, user, org, topic, write=True)
-            request = db.execute(
-                "SELECT * FROM llm_requests WHERE organization_id=? AND requested_by=? AND client_id=?", (org, user, client)
-            ).fetchone()
-            if request is None:
-                return None
-            if request["topic_id"] != topic or json.loads(request["parameters_json"]) != parameters:
-                raise StoreError(409, "client_id was already used for a different model request")
-            return self._request_runs(db, request["id"])
+            target = self.store._topic_access(db, user, org, topic, write=True)[4]
+            existing = self._replayed(db, user, org, topic, client, parameters)
+            if existing is None:
+                self._preflight(db, user, org, topic, target=target)
+            return existing
 
     def preflight(self, user: str, org: str, topic: str, models: list[str]) -> None:
         with self.store.transaction() as db:
             self._preflight(db, user, org, topic)
 
-    def enqueue(self, user: str, org: str, topic: str, client: str, parameters: dict, quotes: list[Quote]) -> list[dict]:
+    def enqueue(
+        self, user: str, org: str, topic: str, client: str, parameters: dict, quotes: list[Quote], *, spans=None
+    ) -> list[dict]:
         with self.store.transaction(write=True) as db:
-            return self._enqueue(db, user, org, topic, client, parameters, quotes)
+            return self._enqueue(db, user, org, topic, client, parameters, quotes, spans=spans)
 
     def _enqueue(
-        self, db, user, org, topic, client, parameters, quotes, *, workflow_context=None, research_override=None, internal_agent=False
+        self, db, user, org, topic, client, parameters, quotes, *, workflow_context=None, research_override=None,
+        internal_agent=False, spans=None,
     ):
-        """Only the workflow runtime supplies gamma context and links the child atomically."""
+        """Only the workflow runtime supplies gamma context and links the child atomically.
+
+        ``spans`` continues the request's admission timing; internal callers own
+        their transaction, so their spans start after the credit lock.
+        """
+        from .inference_timing import Spans
+
         credit_lock(self.store, db, org)
+        if spans is None:
+            spans = Spans("admission")
+        else:
+            spans.mark("transaction_acquire")
         if not client or len(client) > 128 or [quote.model for quote in quotes] != parameters["models"]:
             raise StoreError(400, "invalid model request")
-        self.store._topic_access(db, user, org, topic, write=True)
+        target = self.store._topic_access(db, user, org, topic, write=True)[4]
         existing = db.execute(
             "SELECT * FROM llm_requests WHERE organization_id=? AND requested_by=? AND client_id=?", (org, user, client)
         ).fetchone()
@@ -172,7 +200,10 @@ class InferenceStore:
             ):
                 raise StoreError(409, "client_id was already used for a different model request")
             return self._request_runs(db, existing["id"])
-        policy, key = self._preflight(db, user, org, topic, topic_kind="gamma" if workflow_context is not None else "beta")
+        spans.mark("access_check")
+        policy, key = self._preflight(
+            db, user, org, topic, topic_kind="gamma" if workflow_context is not None else "beta", target=target
+        )
         quotes = [replace(quote, routing=json.loads(policy["routing_policy_json"])) for quote in quotes]
         effort = parameters.get("effort")
         if effort and any(effort not in quote.reasoning_efforts for quote in quotes):
@@ -194,6 +225,7 @@ class InferenceStore:
         ).fetchone()[0]
         if not internal_agent and count >= 20:
             raise StoreError(429, "too many model requests; try again later")
+        spans.mark("policy_check")
         if research_override is not None:
             from .research_context import ResearchContext
 
@@ -234,11 +266,14 @@ class InferenceStore:
                     "through_sequence": 0,
                     "system_prompt": workflow_context[0]["content"],
                 }
+        spans.mark("context_compile")
         reserves = [
             quote.reservation(context, self.output_capacity(quote, context, parameters["max_completion_tokens"])) for quote in quotes
         ]
         if sum(reserves) > self._balance(db, org)["available_microusd"]:
             raise StoreError(409, "organization inference budget cannot cover this reservation")
+        spans.mark("reservation")
+        runs = []
         request_id = _id()
         db.execute(
             "INSERT INTO llm_requests VALUES(?,?,?,?,?,?,?,?,?)",
@@ -258,6 +293,7 @@ class InferenceStore:
             ResearchContext(self.store).capture(db, request_id, org, topic, snapshot)
         for quote, reserve in zip(quotes, reserves, strict=True):
             run_id = _id()
+            runs.append(run_id)
             db.execute(
                 "INSERT INTO llm_runs(id,organization_id,request_id,model,key_id,quote_json,status,reserved_microusd,accounting_state) "
                 "VALUES(?,?,?,?,?,?,'queued',?,'reserved')",
@@ -272,6 +308,9 @@ class InferenceStore:
             if workflow_context is None and not internal_agent and not snapshot.get("review_id"):
                 db.execute("INSERT INTO topic_agent_threads(root_run,organization_id,topic_id) VALUES(?,?,?)", (run_id, org, topic))
         self.store._audit(db, org, user, "inference.request", request_id)
+        spans.mark("ledger_write")
+        for run_id in runs:
+            self._event(db, org, run_id, {"type": "timing", "stage": "admission", "spans_ms": spans.record()})
         return self._request_runs(db, request_id)
 
     @staticmethod
@@ -297,9 +336,11 @@ class InferenceStore:
         with self.store.transaction(write=True) as db:
             credit_lock(self.store, db, row["organization_id"])
             current = _row(db.execute(self._joined() + "WHERE r.id=?", (row["id"],)).fetchone())
-            if current["status"] != "running" or current["attempt_id"] != row["attempt_id"] or self._stop_reason(db, current):
+            balance = self._balance(db, row["organization_id"])
+            if (current["status"] != "running" or current["attempt_id"] != row["attempt_id"]
+                    or self._stop_reason(db, current, balance=balance)):
                 raise StoreError(409, "execution no longer authorized")
-            if amount > self._balance(db, row["organization_id"])["available_microusd"]:
+            if amount > balance["available_microusd"]:
                 raise StoreError(409, "organization inference budget cannot cover the next agent call")
             from .research_goals import ResearchGoals
 
@@ -313,12 +354,24 @@ class InferenceStore:
                 raise StoreError(409, "goal inference budget cannot cover the next agent call")
             db.execute("UPDATE llm_runs SET reserved_microusd=reserved_microusd+? WHERE id=?", (amount, row["id"]))
 
-    def reserve_next_call(self, row, estimate):
-        """Hold confirmed spend plus only outstanding calls, not old call estimates."""
+    def reserve_next_call(self, row, estimate, *, spans=None, admit=None):
+        """Hold confirmed spend plus only outstanding calls, not old call estimates.
+
+        ``admit(db)`` runs a caller's additional admission check in the same transaction first.
+        """
         with self.store.transaction(write=True) as db:
             credit_lock(self.store, db, row["organization_id"])
+            if spans is not None:
+                spans.mark("reservation_lock")
+            if admit is not None:
+                admit(db)
+                if spans is not None:
+                    spans.mark("goal_admission")
             current = _row(db.execute(self._joined() + "WHERE r.id=?", (row["id"],)).fetchone())
-            if current["status"] != "running" or current["attempt_id"] != row["attempt_id"] or self._stop_reason(db, current):
+            # One balance read serves the stop check and the reservation in this transaction.
+            balance = self._balance(db, row["organization_id"])
+            if (current["status"] != "running" or current["attempt_id"] != row["attempt_id"]
+                    or self._stop_reason(db, current, balance=balance)):
                 raise StoreError(409, "execution no longer authorized")
             prior = db.execute(
                 "SELECT COALESCE(SUM(CASE json_extract(e.data_json,'$.accounting_state') "
@@ -330,7 +383,7 @@ class InferenceStore:
                 (row["organization_id"], row["id"]),
             ).fetchone()[0]
             target = prior + estimate
-            if target > current["reserved_microusd"] + self._balance(db, row["organization_id"])["available_microusd"]:
+            if target > current["reserved_microusd"] + balance["available_microusd"]:
                 raise StoreError(409, "organization inference budget cannot cover the next agent call")
             db.execute("UPDATE llm_runs SET reserved_microusd=? WHERE id=?", (target, row["id"]))
 
@@ -505,7 +558,7 @@ class InferenceStore:
             db.execute("UPDATE llm_runs SET cancel_requested=1 WHERE organization_id=? AND id=?", (org, row["id"]))
             self._event(db, org, row["id"], {"type": "cancel_requested"})
 
-    def _stop_reason(self, db: sqlite3.Connection, row: dict) -> str | None:
+    def _stop_reason(self, db: sqlite3.Connection, row: dict, *, balance: dict | None = None) -> str | None:
         if row["cancel_requested"]:
             return "cancel_requested"
         from .topic_agents import TopicAgents
@@ -543,7 +596,7 @@ class InferenceStore:
         ).fetchone()
         if policy[1] <= 0:
             return "model_policy_changed"
-        balance = self._balance(db, row["organization_id"])
+        balance = balance or self._balance(db, row["organization_id"])
         if sum(balance[field] for field in ("spent_microusd", "reserved_microusd", "uncertain_microusd")) > policy[1]:
             return "budget_changed"
         if (
