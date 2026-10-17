@@ -4,11 +4,12 @@ import { after, before, test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { createServer } from "vite";
 
-let server, schedulePoll, PollBackoff, api;
+let server, schedulePoll, PollBackoff, startPolling, api, beta;
 before(async () => {
   server = await createServer({ root: fileURLToPath(new URL("../", import.meta.url)),
     appType: "custom", logLevel: "silent", server: { middlewareMode: true } });
-  ({ schedulePoll, PollBackoff } = await server.ssrLoadModule("/src/polling.ts"));
+  ({ schedulePoll, PollBackoff, startPolling } = await server.ssrLoadModule("/src/polling.ts"));
+  beta = await server.ssrLoadModule("/src/BetaConversation.tsx");
   api = await server.ssrLoadModule("/src/organization-api.ts");
 });
 after(async () => { await server?.close(); });
@@ -49,6 +50,56 @@ test("polling pauses hidden tabs, resumes on visibility, and cleans up on abort"
     else globalThis.document = previous;
     context.mock.timers.reset();
   }
+});
+
+test("woken polls run at once, never overlap, and stop on abort or a null delay", async context => {
+  const previous = globalThis.document;
+  globalThis.document = Object.assign(new EventTarget(), { hidden: false });
+  context.mock.timers.enable({ apis: ["setTimeout"] });
+  const settle = async () => { for (let index = 0; index < 5; index++) await Promise.resolve(); };
+  try {
+    let calls = 0, release = () => {}, delay = 2000;
+    const controller = new AbortController();
+    const poller = startPolling(() => { calls++; return new Promise(resolve => { release = () => resolve(delay); }); }, controller.signal);
+    assert.equal(calls, 1, "the first poll runs at once");
+    poller.wake(); poller.wake();
+    assert.equal(calls, 1, "a wake during a poll does not start a concurrent one");
+    release(); await settle();
+    context.mock.timers.tick(0);
+    assert.equal(calls, 2, "a wake during a poll runs one more poll as soon as it finishes");
+    release(); await settle();
+    context.mock.timers.tick(1999);
+    assert.equal(calls, 2);
+    poller.wake(); context.mock.timers.tick(0);
+    assert.equal(calls, 3, "a wake while waiting brings the next poll forward");
+    release(); await settle();
+    context.mock.timers.tick(2000);
+    assert.equal(calls, 4, "the woken poll replaced the earlier timer");
+    delay = null; release(); await settle();
+    context.mock.timers.tick(60000);
+    assert.equal(calls, 4, "a null delay stops polling");
+    const stopped = new AbortController();
+    const other = startPolling(() => { calls++; return Promise.resolve(1000); }, stopped.signal, 5000);
+    assert.equal(calls, 4, "a positive initial delay defers the first poll");
+    stopped.abort(); other.wake(); context.mock.timers.tick(60000);
+    assert.equal(calls, 4, "an aborted poller neither waits nor wakes");
+  } finally {
+    globalThis.document = previous;
+    if (previous === undefined) delete globalThis.document;
+    context.mock.timers.reset();
+  }
+});
+
+test("a finished run stays visible only until its reply message is loaded", () => {
+  const run = { status: "succeeded", message_id: "reply", context_through_sequence: 10 };
+  const transcript = (ids, from) => ({ ids: new Set(ids), from });
+  assert.equal(beta.awaitingReply(run, transcript(["m10"], 1)), true);
+  assert.equal(beta.awaitingReply(run, transcript(["m10", "reply"], 1)), false, "the message replaces the run");
+  assert.equal(beta.awaitingReply(run, transcript(["m50"], 50)), false, "runs before the loaded history are not awaited");
+  assert.equal(beta.awaitingReply({ ...run, status: "running" }, transcript([], 1)), false);
+  assert.equal(beta.awaitingReply({ ...run, message_id: null }, transcript([], 1)), false);
+  assert.equal(beta.awaitingReply({ ...run, context_through_sequence: 0 }, transcript([], 0)), false);
+  assert.equal(beta.awaitingReply(run, undefined), false);
 });
 
 test("idle views back off after a grace period and return to the active cadence", () => {

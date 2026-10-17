@@ -1,4 +1,4 @@
-import { schedulePoll } from "./polling";
+import { schedulePoll, startPolling } from "./polling";
 import React, { lazy, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import ReactMarkdown, { Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -790,9 +790,11 @@ function Conversation({ organizationId, topic, members, user, canWrite, canManag
     return () => { controller.abort(); clearTimeout(timer); };
   }, [root, topic.kind]);
 
+  const messagePoller = useRef<{ wake(): void } | null>(null);
+  const refreshMessages = useCallback(() => messagePoller.current?.wake(), []);
   useEffect(() => {
-    const controller = new AbortController(); let timer: ReturnType<typeof setTimeout>;
-    const poll = async () => {
+    const controller = new AbortController();
+    const poll = async (): Promise<number | null> => {
       try {
         const query = cursor.current ? `after=${cursor.current}&limit=200` : `before=${anchor === null ? Number.MAX_SAFE_INTEGER : anchor + 1}&limit=100`;
         const [incoming, updates] = await Promise.all([
@@ -804,7 +806,7 @@ function Conversation({ organizationId, topic, members, user, canWrite, canManag
           }),
           request<{ after: number; messages: Message[] }>(root + "/message-updates?after=" + editCursor.current, { signal: controller.signal }),
         ]);
-        if (controller.signal.aborted) return;
+        if (controller.signal.aborted) return null;
         if (!updates || !Array.isArray(updates.messages) || !Number.isSafeInteger(updates.after) || updates.after < editCursor.current)
           throw new Error("Invalid message update response; reconnecting.");
         if (!cursor.current) setOlder(incoming.length === 100);
@@ -817,8 +819,8 @@ function Conversation({ organizationId, topic, members, user, canWrite, canManag
           updateDraft(newDraft()); setError("");
         }
       } catch (cause) {
-        if (aborted(cause)) return;
-        if (cause instanceof ApiError && cause.status === 401) { onAuthLost(); return; }
+        if (aborted(cause)) return null;
+        if (cause instanceof ApiError && cause.status === 401) { onAuthLost(); return null; }
         // A topic that is no longer readable must not be shown again from memory.
         if (cause instanceof ApiError && (cause.status === 403 || cause.status === 404)) {
           retained.current.failed = true; if (snapshotKey) rememberTopicSnapshot(snapshotKey, null);
@@ -826,11 +828,12 @@ function Conversation({ organizationId, topic, members, user, canWrite, canManag
         }
         setOnline(false); setError(errorMessage(cause)); setLoading(false);
       }
-      if (!controller.signal.aborted) timer = schedulePoll(poll, 2000, controller.signal);
+      return 2000;
     };
-    void poll();
-    return () => { controller.abort(); clearTimeout(timer); };
+    messagePoller.current = startPolling(poll, controller.signal);
+    return () => { controller.abort(); messagePoller.current = null; };
   }, [root, anchor, user.id, onAuthLost]);
+  const transcript = useMemo(() => ({ ids: new Set(messages.map(message => message.id)), from: messages[0]?.sequence ?? Infinity }), [messages]);
 
   useEffect(() => {
     if (bottom.current && viewport.current && !document.querySelector(".chat-action-menu") && !window.getSelection()?.toString())
@@ -995,7 +998,8 @@ function Conversation({ organizationId, topic, members, user, canWrite, canManag
         .map(item => <div key={item.id} data-activity-id={item.id}>{item.body}</div>)}
       {topic.kind === "beta" && <BetaConversation organizationId={organizationId} topicId={topic.id} userId={user.id}
         canWrite={canWrite} canManage={canManage} online={online} toolbarTarget={composerTools} hidePlay={Boolean(draft.text.trim())}
-        attempt={modelAttempt} onAttempt={onModelAttempt} onAuthLost={onAuthLost} onActivity={setBetaActivity} wake={messages.at(-1)?.sequence} />}
+        attempt={modelAttempt} onAttempt={onModelAttempt} onAuthLost={onAuthLost} onActivity={setBetaActivity} wake={messages.at(-1)?.sequence}
+        transcript={transcript} onReplyPending={refreshMessages} />}
       <BotConversation organizationId={organizationId} topicId={topic.id} names={botNames} userId={user.id}
         canWrite={canWrite} canManage={canManage} onActivity={setBotActivity} onAuthLost={onAuthLost} wake={messages.at(-1)?.sequence} />
 

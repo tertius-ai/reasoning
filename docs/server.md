@@ -683,7 +683,11 @@ goal limits, exact prompt/context evidence, grants, and proposed paid executions
 Ordinary typed research writes save automatically; authors cannot self-certify.
 See [research workbench](research-workbench.md).
 Model progress polls every second and follows its triggering message in the
-transcript, including requests made in the same second. Play and stop control
+transcript, including requests made in the same second. Run output is applied as
+soon as its read returns; the agent-thread and goal reads that decide controls and
+cadence are applied separately and never delay the next run read. A finished run
+stays expanded until the transcript shows its reply message, and the transcript
+refreshes at once when such a reply is missing. Play and stop control
 retained agent continuations without a separate agent-status banner; failures
 and uncertain charges remain available in their run records. Finished and partial
 replies become topic messages labeled with their model, not their requester.

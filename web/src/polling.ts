@@ -29,3 +29,39 @@ export class PollBackoff {
     return this.quiet <= this.grace ? this.base : Math.min(this.maximum, this.base * 2 ** (this.quiet - this.grace));
   }
 }
+
+/**
+ * Poll repeatedly: `poll` returns the next delay, or null to stop. `wake` brings the next poll forward; a wake
+ * during a poll runs another as soon as it finishes, so polls never overlap. The first poll runs at once unless
+ * `initialDelay` is positive; later polls pause in hidden tabs as with schedulePoll.
+ */
+export function startPolling(poll: () => Promise<number | null>, signal: AbortSignal, initialDelay = 0): { wake(): void } {
+  let running = false, again = false, cancel: (() => void) | undefined;
+  const schedule = (delay: number) => {
+    cancel?.();
+    const local = new AbortController(), forward = () => local.abort();
+    signal.addEventListener("abort", forward, { once: true });
+    cancel = () => { signal.removeEventListener("abort", forward); local.abort(); };
+    schedulePoll(() => { signal.removeEventListener("abort", forward); cancel = undefined; void run(); }, delay, local.signal);
+  };
+  const run = async () => {
+    if (signal.aborted) return;
+    running = true; again = false;
+    let delay: number | null = null;
+    try { delay = await poll(); } finally { running = false; }
+    if (!signal.aborted && delay !== null) schedule(again ? 0 : delay);
+  };
+  if (signal.aborted) { /* Nothing to start. */ }
+  else if (initialDelay > 0) schedule(initialDelay);
+  else void run();
+  return { wake: () => { if (signal.aborted) return; if (running) again = true; else schedule(0); } };
+}
+
+/**
+ * Opt-in timing marks for live updates. A page (for example a browser test) that sets `window.__reasoningTiming`
+ * to an array receives `{ name, at }` entries with `performance.now()` times; otherwise nothing is recorded.
+ */
+export function recordTiming(name: string): void {
+  const sink = (globalThis as { __reasoningTiming?: { name: string; at: number }[] }).__reasoningTiming;
+  if (Array.isArray(sink) && sink.length < 10_000) sink.push({ name, at: performance.now() });
+}

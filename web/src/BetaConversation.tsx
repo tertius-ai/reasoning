@@ -1,4 +1,4 @@
-import { PollBackoff, schedulePoll } from "./polling";
+import { PollBackoff, recordTiming, startPolling } from "./polling";
 import React, { useEffect, useRef, useState } from "react";
 import { MessageUsageDetails } from "./MessageUsageDetails";
 import { TopicActivity } from "./TopicActivity";
@@ -116,7 +116,14 @@ function ReconcileCost({ root, run, onUpdated, onAuthLost }: {
   </details>;
 }
 
-export function BetaConversation({ organizationId, topicId, userId, canWrite, canManage, online, attempt, onAttempt, onAuthLost, onActivity, toolbarTarget, hidePlay, wake }: {
+/** Loaded transcript messages, so a finished run's card stays until its reply message is shown. */
+export type LoadedTranscript = { ids: ReadonlySet<string>; from: number };
+
+/** A run that succeeded with a reply message the loaded transcript should contain but does not yet show. */
+export const awaitingReply = (run: ModelRun, transcript?: LoadedTranscript) => run.status === "succeeded" && !!run.message_id
+  && !!transcript && !transcript.ids.has(run.message_id) && run.context_through_sequence > 0 && run.context_through_sequence >= transcript.from;
+
+export function BetaConversation({ organizationId, topicId, userId, canWrite, canManage, online, attempt, onAttempt, onAuthLost, onActivity, toolbarTarget, hidePlay, wake, transcript, onReplyPending }: {
   organizationId: string; topicId: string; userId: string; canWrite: boolean; canManage: boolean;
   online: boolean; attempt?: PendingModelAttempt; onAttempt: (attempt?: PendingModelAttempt) => void; onAuthLost: () => void;
   onActivity: (entries: TopicActivity[]) => void;
@@ -124,6 +131,9 @@ export function BetaConversation({ organizationId, topicId, userId, canWrite, ca
   hidePlay?: boolean;
   /** Changes when the transcript gains a message, so a new request is observed at the active cadence. */
   wake?: number;
+  transcript?: LoadedTranscript;
+  /** Called while a finished run's reply message is not yet in the transcript, so messages refresh at once. */
+  onReplyPending?: () => void;
 }) {
   const [runs, setRuns] = useState<ModelRun[]>([]);
   const [threads, setThreads] = useState<{ root_run: string; status: string; reason?: string | null; requested_by: string; tasks: number }[]>([]);
@@ -142,30 +152,40 @@ export function BetaConversation({ organizationId, topicId, userId, canWrite, ca
 
   useEffect(() => { alive.current = true; return () => { alive.current = false; }; }, []);
   useEffect(() => {
-    const controller = new AbortController(), backoff = new PollBackoff(1000, 5000); let timer: ReturnType<typeof setTimeout>;
-    const poll = async () => {
+    const controller = new AbortController(), backoff = new PollBackoff(1000, 5000);
+    // Runs carry the visible output; agent threads and the goal only decide controls and cadence. Each read is
+    // applied as soon as it arrives, and a slow agent or goal read is never awaited before the next run read.
+    let sideActive = false, side: Promise<void> | null = null;
+    const readFailed = (cause: unknown) => {
+      if (aborted(cause) || controller.signal.aborted) return;
+      setConnected(false);
+      if (cause instanceof ApiError && cause.status === 401) { onAuthLost(); controller.abort(); return; }
+      setPollError("Unable to refresh agent activity; reconnecting. " + errorMessage(cause));
+    };
+    const readSide = () => Promise.all([
+      request<typeof threads>(topicPath(organizationId, topicId) + "/agents", { signal: controller.signal }),
+      // Research controls read the same goal; one request serves both views.
+      sharedRequest<typeof goal>(topicPath(organizationId, topicId) + "/goal", { maxAge: 500, signal: controller.signal }),
+    ]).then(([agents, currentGoal]) => {
+      if (controller.signal.aborted) return;
+      setThreads(agents); setGoal(currentGoal);
+      sideActive = agents.some(thread => thread.status === "active") || currentGoal?.status === "active";
+    }, readFailed).finally(() => { side = null; });
+    const poll = async (): Promise<number | null> => {
+      side ??= readSide();
       let active = true;
       try {
-        const [records, agents, currentGoal] = await Promise.all([
-          request<ModelRun[]>(path, { signal: controller.signal }),
-          request<typeof threads>(topicPath(organizationId, topicId) + "/agents", { signal: controller.signal }),
-          // Research controls read the same goal; one request serves both views.
-          sharedRequest<typeof goal>(topicPath(organizationId, topicId) + "/goal", { maxAge: 500, signal: controller.signal }),
-        ]);
-        if (controller.signal.aborted) return;
-        setRuns(records); setThreads(agents); setGoal(currentGoal); setConnected(true); setPollError("");
-        active = records.some(run => ["queued", "running"].includes(run.status)) || agents.some(thread => thread.status === "active")
-          || currentGoal?.status === "active";
-      } catch (cause) {
-        if (aborted(cause)) return;
-        setConnected(false);
-        if (cause instanceof ApiError && cause.status === 401) { onAuthLost(); return; }
-        setPollError("Unable to refresh agent activity; reconnecting. " + errorMessage(cause));
-      }
-      if (!controller.signal.aborted) timer = schedulePoll(poll, backoff.next(active), controller.signal);
+        const records = await request<ModelRun[]>(path, { signal: controller.signal });
+        if (controller.signal.aborted) return null;
+        recordTiming("runs:response");
+        setRuns(records); setConnected(true); setPollError("");
+        recordTiming("runs:applied");
+        active = records.some(run => ["queued", "running"].includes(run.status)) || sideActive;
+      } catch (cause) { readFailed(cause); }
+      return controller.signal.aborted ? null : backoff.next(active);
     };
-    void poll();
-    return () => { controller.abort(); clearTimeout(timer); };
+    startPolling(poll, controller.signal);
+    return () => controller.abort();
   }, [path, refresh, onAuthLost, attempt, wake]);
 
   const failed = (cause: unknown) => {
@@ -214,13 +234,18 @@ export function BetaConversation({ organizationId, topicId, userId, canWrite, ca
     finally { if (alive.current) setBusy(false); }
   };
   useTopicCommand(topicId, command => { if (command === "play" || command === "stop") void transport(command === "play"); });
-  const visibleRuns = runs.filter((run) => (run.context_through_sequence !== 0 || run.agent) && (run.status !== "succeeded" || !run.message_id));
+  // A finished run gives way to its reply message only once the transcript shows it, so the output never disappears.
+  const visibleRuns = runs.filter((run) => (run.context_through_sequence !== 0 || run.agent)
+    && (run.status !== "succeeded" || !run.message_id || awaitingReply(run, transcript)));
+  const replyPending = runs.some(run => awaitingReply(run, transcript));
+  useEffect(() => { if (replyPending) onReplyPending?.(); }, [replyPending, onReplyPending]);
   useEffect(() => { onActivity(visibleRuns.map(run => ({ id: "run:" + run.id, created_at: run.created_at ?? run.started_at ?? 0,
     after_sequence: run.context_through_sequence || undefined,
     body: <BetaRunCard key={run.id} root={root} organizationId={organizationId} topicId={topicId} run={run} canManage={canManage}
+      awaiting={awaitingReply(run, transcript)}
       canReact={canWrite}
       onUpdated={() => setRefresh(value => value + 1)} onAuthLost={onAuthLost} />,
-  }))); }, [runs, busy, online, connected, canWrite, canManage, userId, root, organizationId, topicId, onActivity, onAuthLost]);
+  }))); }, [runs, transcript, busy, online, connected, canWrite, canManage, userId, root, organizationId, topicId, onActivity, onAuthLost]);
   return <section className="org-beta" aria-label="Agent activity">
     {toolbarTarget && createPortal(<TransportControls {...{ canPlay, canStop, hidePlay }}
       playTitle={attempt?.unconfirmed ? "Retry the unconfirmed reply request"
@@ -246,12 +271,14 @@ export function RunProgress({ run }: { run: ModelRun }) {
   return <p role="status" className="org-working" aria-label="Research progress">{progress}…</p>;
 }
 
-function BetaRunCard({ root, organizationId, topicId, run, canManage, canReact, onUpdated, onAuthLost }: {
+function BetaRunCard({ root, organizationId, topicId, run, canManage, canReact, awaiting, onUpdated, onAuthLost }: {
   root: string; organizationId: string; topicId: string; run: ModelRun; canManage: boolean; canReact: boolean;
+  /** Finished, with its reply message not yet shown: the output stays expanded until the message replaces it. */
+  awaiting?: boolean;
   onUpdated: () => void; onAuthLost: () => void;
 }) {
-  const active = ["queued", "running"].includes(run.status), [open, setOpen] = useState(active);
-  useEffect(() => { if (!active) setOpen(false); }, [active]);
+  const active = ["queued", "running"].includes(run.status), expanded = active || !!awaiting, [open, setOpen] = useState(expanded);
+  useEffect(() => { if (!expanded) setOpen(false); }, [expanded]);
   return <details data-run-id={run.id} data-status={run.status} className="org-model-run org-run-compact" open={open}
     onToggle={event => { if (event.target === event.currentTarget) setOpen(event.currentTarget.open); }}>
     <summary><strong>{run.agent ? `${run.agent.role.replaceAll("_", " ")} · ` : ""}{run.model}</strong><span role="status">{run.cancel_requested && active ? "Cancelling…" : run.status}</span>
