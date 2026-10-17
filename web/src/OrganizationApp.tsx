@@ -1,4 +1,5 @@
 import { schedulePoll, startPolling } from "./polling";
+import { LIVE_SAFETY_POLL_MS, subscribeTopicEvents } from "./topicEvents";
 import React, { lazy, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import ReactMarkdown, { Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -794,7 +795,12 @@ function Conversation({ organizationId, topic, members, user, canWrite, canManag
   const refreshMessages = useCallback(() => messagePoller.current?.wake(), []);
   useEffect(() => {
     const controller = new AbortController();
+    // While the topic event stream is live, it announces new messages and edits by their latest sequences; the
+    // poll then fetches exactly what is missing from its cursors, and otherwise runs only as a slow safety net.
+    let live = false, loaded = false, watermark = { sequence: 0, updates: 0 };
+    const behind = () => watermark.sequence > cursor.current || watermark.updates > editCursor.current;
     const poll = async (): Promise<number | null> => {
+      const before = [cursor.current, editCursor.current];
       try {
         const query = cursor.current ? `after=${cursor.current}&limit=200` : `before=${anchor === null ? Number.MAX_SAFE_INTEGER : anchor + 1}&limit=100`;
         const [incoming, updates] = await Promise.all([
@@ -814,10 +820,11 @@ function Conversation({ organizationId, topic, members, user, canWrite, canManag
         editCursor.current = updates.after;
         setMessages((existing) => mergeMessages(mergeMessages(existing, incoming), updates.messages.filter(message =>
           existing.some(prior => prior.id === message.id) || incoming.some(prior => prior.id === message.id))));
-        setOnline(true); setLoading(false); revalidated.current = true;
+        setOnline(true); setLoading(false); revalidated.current = true; loaded = true;
         if (incoming.some((message) => message.client_id === currentDraft.current.clientId && message.author_id === user.id)) {
           updateDraft(newDraft()); setError("");
         }
+        if (behind() && (cursor.current !== before[0] || editCursor.current !== before[1])) return 0;
       } catch (cause) {
         if (aborted(cause)) return null;
         if (cause instanceof ApiError && cause.status === 401) { onAuthLost(); return null; }
@@ -827,12 +834,19 @@ function Conversation({ organizationId, topic, members, user, canWrite, canManag
           if (!revalidated.current) setMessages([]);
         }
         setOnline(false); setError(errorMessage(cause)); setLoading(false);
+        return 2000;
       }
-      return 2000;
+      return live ? LIVE_SAFETY_POLL_MS : 2000;
     };
-    messagePoller.current = startPolling(poll, controller.signal);
-    return () => { controller.abort(); messagePoller.current = null; };
-  }, [root, anchor, user.id, onAuthLost]);
+    const poller = startPolling(poll, controller.signal);
+    messagePoller.current = poller;
+    const unsubscribe = subscribeTopicEvents(organizationId, topic.id, {
+      // Losing the stream resumes the ordinary cadence at once; becoming live waits for the announced sequences.
+      status: status => { const next = status === "live"; if (live && !next && loaded) poller.wake(); live = next; },
+      messages: value => { watermark = value; if (loaded && behind()) poller.wake(); },
+    });
+    return () => { unsubscribe(); controller.abort(); messagePoller.current = null; };
+  }, [root, anchor, user.id, onAuthLost, organizationId, topic.id]);
   const transcript = useMemo(() => ({ ids: new Set(messages.map(message => message.id)), from: messages[0]?.sequence ?? Infinity }), [messages]);
 
   useEffect(() => {

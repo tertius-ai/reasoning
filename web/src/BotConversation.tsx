@@ -1,4 +1,5 @@
-import { PollBackoff, schedulePoll } from "./polling";
+import { PollBackoff, startPolling } from "./polling";
+import { LIVE_SAFETY_POLL_MS, subscribeTopicEvents } from "./topicEvents";
 // Copyright Benjamin Antieau and Deven Manam. SPDX-License-Identifier: Apache-2.0
 import React, { useEffect, useState } from "react";
 import { ActivityCard, TopicActivity } from "./TopicActivity";
@@ -40,23 +41,33 @@ export function BotConversation({ organizationId, topicId, names, userId, canWri
   const [runs, setRuns] = useState<BotRun[]>([]), [connected, setConnected] = useState(false);
   const [busy, setBusy] = useState(false), [error, setError] = useState("");
   useEffect(() => {
-    const controller = new AbortController(), backoff = new PollBackoff(2000, 8000); let timer: ReturnType<typeof setTimeout>;
-    const poll = async () => {
-      let active = true;
+    const controller = new AbortController(), backoff = new PollBackoff(2000, 8000);
+    // A live topic event stream delivers invocations; polling then only runs as a slow safety net, and a poll's
+    // result is dropped if the stream delivered anything since that poll started.
+    let live = false, streamed = 0, poller: { wake(): void } | null = null;
+    const poll = async (): Promise<number | null> => {
+      let active = true, failed = false;
+      const version = streamed;
       try {
         const runs = await request<BotRun[]>(topicPath(organizationId, topicId) + "/bot-runs", { signal: controller.signal });
-        if (controller.signal.aborted) return;
-        setRuns(runs); setConnected(true);
+        if (controller.signal.aborted) return null;
+        if (version === streamed) { setRuns(runs); setConnected(true); }
         active = runs.some(run => ["queued", "running", "waiting_approval"].includes(run.status));
       } catch (cause) {
         if (!aborted(cause)) setConnected(false);
         if (!aborted(cause) && cause instanceof ApiError && cause.status === 401) onAuthLost();
         else if (!aborted(cause)) onActivity([{ id: "bot:connection", created_at: 0,
           body: <p className="org-help" role="status">Bot activity unavailable: {errorMessage(cause)}</p> }]);
+        failed = true;
       }
-      if (!controller.signal.aborted) timer = schedulePoll(poll, backoff.next(active), controller.signal);
+      return controller.signal.aborted ? null : live && !failed ? LIVE_SAFETY_POLL_MS : backoff.next(active);
     };
-    void poll(); return () => { controller.abort(); clearTimeout(timer); };
+    const unsubscribe = subscribeTopicEvents(organizationId, topicId, {
+      status: status => { const next = status === "live"; if (live && !next) poller?.wake(); live = next; },
+      bots: runs => { streamed += 1; setRuns(runs); setConnected(true); },
+    });
+    poller = startPolling(poll, controller.signal, live && streamed ? LIVE_SAFETY_POLL_MS : 0);
+    return () => { unsubscribe(); controller.abort(); };
   }, [organizationId, topicId, names, onActivity, onAuthLost, wake]);
   useEffect(() => { if (connected) onActivity(runs.filter(run => run.status !== "succeeded").map(run => ({
     id: "bot:" + run.id, created_at: run.created_at, after_sequence: run.context_through_sequence || undefined,

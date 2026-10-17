@@ -383,8 +383,10 @@ two concurrent turns and a 1,800-second execution timeout per turn. A private ex
 file lock prevents a second executor from using the same installation. Queues,
 attempt fencing, text deltas, terminal state, and assistant messages are stored
 in SQLite. Provider SSE is incrementally decoded, including split UTF-8 chunks;
-the browser polls durable state every second rather than maintaining a separate
-browser-to-provider connection. Provider input is bounded to 64 MiB per stream,
+the browser receives durable state through its
+[topic event stream](server.md#topic-event-stream), or polls it every second when
+the stream is unavailable, rather than maintaining a separate browser-to-provider
+connection. Provider input is bounded to 64 MiB per stream,
 2 MiB per event/line, and 2,000,000 accumulated output characters.
 The provider stream is the single writer of cumulative visible output, including
 progress accompanying tool calls. Final-answer events do not replace that prefix.

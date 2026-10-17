@@ -21,10 +21,22 @@ const transcript = topic => Array.from({ length: 13 }, (_, index) => ({ id: `${t
  * Run a scenario against a production build of the organization interface and a mocked API, recording every API
  * request. A production build is measured: development StrictMode deliberately runs every startup effect twice.
  */
-async function withApplication(scenario, { hold = () => null } = {}) {
+async function withApplication(scenario, { hold = () => null, stream = true } = {}) {
   const root = fileURLToPath(new URL("../", import.meta.url)), outDir = await mkdtemp(join(tmpdir(), "reasoning-requests-"));
   await build({ root, logLevel: "silent", build: { outDir, emptyOutDir: true } });
-  const server = await preview({ root, logLevel: "silent", build: { outDir }, preview: { host: "127.0.0.1", port: 0 } });
+  // Topic event streams are served by the preview server itself, because a routed response cannot stream.
+  const events = { name: "topic-events", configurePreviewServer(server) {
+    server.middlewares.use((request, response, next) => {
+      if (!/\/topics\/[a-f0-9]{32}\/events$/.test(new URL(request.url, "http://localhost").pathname)) return next();
+      if (!stream) { response.statusCode = 503; return response.end('{"detail":"topic event stream disabled"}'); }
+      response.writeHead(200, { "Content-Type": "text/event-stream", "Cache-Control": "no-store, no-transform" });
+      const send = (name, data) => response.write(`event: ${name}\ndata: ${JSON.stringify(data)}\n\n`);
+      send("ready", { heartbeat_ms: 15000 });
+      send("messages", { sequence: 13, updates: 0 });
+      for (const [name, data] of [["runs", { order: [], runs: [] }], ["agents", []], ["goal", null], ["bot-runs", []]]) send(name, data);
+    });
+  } };
+  const server = await preview({ root, logLevel: "silent", plugins: [events], build: { outDir }, preview: { host: "127.0.0.1", port: 0 } });
   const browser = await chromium.launch({ headless: true });
   try {
     const page = await browser.newPage(), errors = [], requests = [];
@@ -33,7 +45,12 @@ async function withApplication(scenario, { hold = () => null } = {}) {
       topics: topics.map((id, index) => ({ id, name: index ? "Geometry" : "Algebra", channel_id: "channel", kind: "beta",
         default_model: model.id, knowledge_tools: [] })), topic_state: [] };
     page.on("pageerror", error => errors.push(error.message));
-    await page.route("**/api/**", async route => {
+    // Routed responses are delivered whole, so event streams bypass routing and are only recorded.
+    page.on("request", request => {
+      const url = new URL(request.url());
+      if (url.pathname.endsWith("/events")) requests.push({ at: Date.now(), method: request.method(), path: url.pathname, query: url.search });
+    });
+    await page.route(url => url.pathname.startsWith("/api/") && !url.pathname.endsWith("/events"), async route => {
       const request = route.request(), url = new URL(request.url()), path = url.pathname;
       requests.push({ at: Date.now(), method: request.method(), path, query: url.search });
       await hold(path, url);
@@ -73,24 +90,42 @@ async function withApplication(scenario, { hold = () => null } = {}) {
   }
 }
 
-test("an idle beta topic bounds startup and foreground polling requests", { timeout: 60000 }, async () => {
+async function idleRequests(options) {
   const observed = await withApplication(async ({ requests, started }) => {
     await sleep(started + 3000 - Date.now());
     const startup = requests.length;
     await sleep(20000);
     const idle = requests.filter(request => request.at >= started + 3000 && request.at < started + 23000);
     return { startup, startupPaths: requests.slice(0, startup).map(request => request.path), idle: idle.map(request => request.path) };
-  });
-  const count = (paths, suffix) => paths.filter(path => path.endsWith(suffix)).length;
-  if (process.env.REASONING_REQUEST_REPORT) console.log(JSON.stringify({ startup: observed.startup, idle: observed.idle.length,
-    startupPaths: observed.startupPaths.map(path => path.replace(/[a-f0-9]{32}/g, ":id")),
+  }, options);
+  if (process.env.REASONING_REQUEST_REPORT) console.log(JSON.stringify({ stream: options.stream, startup: observed.startup,
+    idle: observed.idle.length, startupPaths: observed.startupPaths.map(path => path.replace(/[a-f0-9]{32}/g, ":id")),
     idlePaths: observed.idle.map(path => path.replace(/[a-f0-9]{32}/g, ":id")) }));
+  return observed;
+}
+const count = (paths, suffix) => paths.filter(path => path.endsWith(suffix)).length;
+
+test("an idle beta topic bounds startup and foreground polling requests", { timeout: 60000 }, async () => {
+  const observed = await idleRequests({ stream: true });
   assert.equal(observed.startupPaths.filter(path => path === "/api/organizations").length, 1, "organizations are listed once at startup");
-  assert.ok(count(observed.startupPaths, "/goal") <= count(observed.startupPaths, "/agents"),
-    "research controls reuse the agent activity view's goal read");
+  // The activity view's first goal read is shared with research controls, which then refresh it on their own.
+  assert.ok(count(observed.startupPaths, "/goal") <= 2, "research controls reuse the agent activity view's goal read");
   assert.equal(count(observed.startupPaths, "/compute-configuration"), 0, "compute configuration waits for the submission dialog");
   assert.equal(observed.startupPaths.filter(path => path.includes("/reactions/")).length, 1, "one batch reads every message's reactions");
-  assert.ok(observed.startup <= 46, `startup requests: ${observed.startup}`);
+  assert.equal(count(observed.startupPaths, "/events"), 1, "one event stream serves every view of the topic");
+  assert.ok(observed.startup <= 40, `startup requests: ${observed.startup}`);
+  // The live stream replaces message, run, agent and bot-invocation polling while the topic is idle.
+  for (const suffix of ["/messages", "/message-updates", "/inference-runs", "/agents", "/bot-runs", "/events"])
+    assert.equal(count(observed.idle, suffix), 0, `idle ${suffix} requests`);
+  assert.ok(observed.idle.length <= 55, `idle requests in twenty seconds: ${observed.idle.length}`);
+});
+
+test("without an event stream, idle views keep their bounded polling", { timeout: 60000 }, async () => {
+  const observed = await idleRequests({ stream: false });
+  assert.ok(count(observed.startupPaths, "/goal") <= count(observed.startupPaths, "/agents"),
+    "research controls reuse the agent activity view's goal read");
+  assert.ok(count(observed.idle, "/messages") >= 8, "messages keep their two-second cadence");
+  assert.ok(count(observed.idle, "/inference-runs") >= 3, "run activity keeps polling");
   // Messages keep their two-second cadence; idle activity views slow down.
   assert.ok(observed.idle.length <= 100, `idle requests in twenty seconds: ${observed.idle.length}`);
 });

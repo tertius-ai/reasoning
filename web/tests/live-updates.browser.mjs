@@ -25,7 +25,8 @@ after(async () => { if (outDir) await rm(outDir, { recursive: true, force: true 
 const median = values => [...values].sort((a, b) => a - b)[Math.floor(values.length / 2)];
 
 /** A mocked API with one running beta run. Agent and goal reads are slow; the event stream is optional. */
-function mockServer({ stream, sideDelay }) {
+function mockServer({ stream: streaming, sideDelay }) {
+  let stream = streaming;
   const message = (sequence, content, extra = {}) => ({ id: "message-" + sequence, sequence, topic_id: topic, author_id: user,
     author_kind: "human", content, client_id: "fixture-" + sequence, created_at: 1_800_000_000 + sequence, ...extra });
   const state = { messages: [message(1, "Count slowly.")], version: 0, served: [], clients: new Set(), requests: [],
@@ -111,11 +112,13 @@ function mockServer({ stream, sideDelay }) {
     state.run = { ...state.run, status: "succeeded", message_id: reply.id, accounting_state: "settled" };
     state.version += 1;
   };
-  return { plugin, state, publish, finish, close: () => clearInterval(watcher) };
+  // The stream breaks and later requests for it are refused, as when a proxy stops passing it.
+  const drop = () => { stream = false; for (const client of state.clients) client.response.destroy(); state.clients.clear(); };
+  return { plugin, state, publish, finish, drop, close: () => clearInterval(watcher) };
 }
 
 /** Publish output in steps and measure each step from availability to DOM; then finish the reply. */
-async function measure({ stream, sideDelay = 700, samples = 8 }) {
+async function measure({ stream, sideDelay = 700, samples = 8, dropAt = 0 }) {
   const mock = mockServer({ stream, sideDelay });
   const server = await preview({ root, logLevel: "silent", plugins: [mock.plugin], build: { outDir }, preview: { host: "127.0.0.1", port: 0 } });
   const browser = await chromium.launch({ headless: true });
@@ -140,6 +143,7 @@ async function measure({ stream, sideDelay = 700, samples = 8 }) {
     const published = [];
     for (let index = 1; index <= samples; index += 1) {
       await sleep(600 + Math.random() * 800);
+      if (index === dropAt) mock.drop();
       published.push(Date.now());
       mock.publish(`TOKEN${index} `);
       if (index === samples) await page.evaluate(final => { window.__final = final; }, index);
@@ -153,7 +157,7 @@ async function measure({ stream, sideDelay = 700, samples = 8 }) {
     const { seen, timing, origin, gap } = await page.evaluate(() => ({ seen: window.__seen, timing: window.__reasoningTiming,
       origin: performance.timeOrigin, gap: window.__gap }));
     const at = name => timing.filter(entry => entry.name === name).map(entry => origin + entry.at);
-    const received = at(stream ? "event:runs" : "runs:response"), applied = at("runs:applied");
+    const received = [...at("event:runs"), ...at("runs:response")].sort((a, b) => a - b), applied = at("runs:applied");
     const steps = published.map((start, index) => {
       const served = mock.state.served.find(entry => entry.tokens.includes(index + 1))?.at;
       const receipt = received.find(time => time >= served - 5), state = applied.find(time => time >= receipt);
@@ -183,4 +187,21 @@ test("polled run output is applied without waiting for slow agent and goal reads
   assert.ok(summary.state < 100, `response → state: ${summary.state} ms`);
   assert.ok(summary.total < 1300, `available → DOM: ${summary.total} ms`);
   assert.equal(result.gap, false, "the finished output stays visible until its reply message replaces it");
+});
+
+test("streamed run output reaches the DOM within one watcher interval", { timeout: 90000 }, async () => {
+  const result = await measure({ stream: true }), summary = report("stream", result);
+  assert.ok(summary.state < 100, `event → state: ${summary.state} ms`);
+  assert.ok(summary.total < 600, `available → DOM: ${summary.total} ms`);
+  assert.equal(result.gap, false, "the finished output stays visible until its reply message replaces it");
+  const idle = result.requests.filter(request => /\/(inference-runs|agents|messages|message-updates|bot-runs)$/.test(request.path));
+  assert.ok(idle.length <= 12, `polled activity requests while streaming: ${idle.length}`);
+});
+
+test("a stream that breaks falls back to polling without losing output", { timeout: 90000 }, async () => {
+  const result = await measure({ stream: true, dropAt: 4 });
+  report("stream dropped at step 4", result);
+  assert.equal(result.steps.length, 8, "every step reached the DOM");
+  assert.ok(median(result.steps.slice(4).map(step => step.total)) < 2500, "polling resumes at its active cadence");
+  assert.equal(result.gap, false);
 });

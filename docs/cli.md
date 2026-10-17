@@ -36,6 +36,8 @@ Beta-topic agents run automatically with `reasoning-server serve`; they do not
 require `reasoning-work-worker`. `serve --agent-concurrency N` selects 1–256
 simultaneous native assignments, default 8. See [topic agents](topic-agents.md)
 for delegation, steering, bot permissions, and recovery limits.
+`serve --no-topic-events` disables the browser's per-topic event stream, leaving
+polling in place; see [server](server.md#topic-event-stream).
 Its port and other startup settings are environment variables documented in the
 [web guide](../web/README.md#run).
 

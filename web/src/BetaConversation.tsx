@@ -1,4 +1,5 @@
 import { PollBackoff, recordTiming, startPolling } from "./polling";
+import { LIVE_SAFETY_POLL_MS, subscribeTopicEvents } from "./topicEvents";
 import React, { useEffect, useRef, useState } from "react";
 import { MessageUsageDetails } from "./MessageUsageDetails";
 import { TopicActivity } from "./TopicActivity";
@@ -156,36 +157,53 @@ export function BetaConversation({ organizationId, topicId, userId, canWrite, ca
     // Runs carry the visible output; agent threads and the goal only decide controls and cadence. Each read is
     // applied as soon as it arrives, and a slow agent or goal read is never awaited before the next run read.
     let sideActive = false, side: Promise<void> | null = null;
+    // While the topic event stream is live it delivers runs, threads and the goal, and polling is only a slow safety
+    // net. A poll's result is dropped if the stream delivered anything since that poll started, so it never regresses.
+    let live = false, streamed = 0, poller: { wake(): void } | null = null;
     const readFailed = (cause: unknown) => {
       if (aborted(cause) || controller.signal.aborted) return;
       setConnected(false);
       if (cause instanceof ApiError && cause.status === 401) { onAuthLost(); controller.abort(); return; }
       setPollError("Unable to refresh agent activity; reconnecting. " + errorMessage(cause));
     };
-    const readSide = () => Promise.all([
-      request<typeof threads>(topicPath(organizationId, topicId) + "/agents", { signal: controller.signal }),
-      // Research controls read the same goal; one request serves both views.
-      sharedRequest<typeof goal>(topicPath(organizationId, topicId) + "/goal", { maxAge: 500, signal: controller.signal }),
-    ]).then(([agents, currentGoal]) => {
-      if (controller.signal.aborted) return;
-      setThreads(agents); setGoal(currentGoal);
-      sideActive = agents.some(thread => thread.status === "active") || currentGoal?.status === "active";
-    }, readFailed).finally(() => { side = null; });
+    const readSide = () => {
+      const version = streamed;
+      return Promise.all([
+        request<typeof threads>(topicPath(organizationId, topicId) + "/agents", { signal: controller.signal }),
+        // Research controls read the same goal; one request serves both views.
+        sharedRequest<typeof goal>(topicPath(organizationId, topicId) + "/goal", { maxAge: 500, signal: controller.signal }),
+      ]).then(([agents, currentGoal]) => {
+        if (controller.signal.aborted || version !== streamed) return;
+        setThreads(agents); setGoal(currentGoal);
+        sideActive = agents.some(thread => thread.status === "active") || currentGoal?.status === "active";
+      }, readFailed).finally(() => { side = null; });
+    };
     const poll = async (): Promise<number | null> => {
       side ??= readSide();
-      let active = true;
+      let active = true, failed = false;
+      const version = streamed;
       try {
         const records = await request<ModelRun[]>(path, { signal: controller.signal });
         if (controller.signal.aborted) return null;
         recordTiming("runs:response");
-        setRuns(records); setConnected(true); setPollError("");
-        recordTiming("runs:applied");
+        if (version === streamed) {
+          setRuns(records); setConnected(true); setPollError("");
+          recordTiming("runs:applied");
+        }
         active = records.some(run => ["queued", "running"].includes(run.status)) || sideActive;
-      } catch (cause) { readFailed(cause); }
-      return controller.signal.aborted ? null : backoff.next(active);
+      } catch (cause) { readFailed(cause); failed = true; }
+      return controller.signal.aborted ? null : live && !failed ? LIVE_SAFETY_POLL_MS : backoff.next(active);
     };
-    startPolling(poll, controller.signal);
-    return () => controller.abort();
+    const delivered = () => { streamed += 1; setConnected(true); setPollError(""); };
+    const unsubscribe = subscribeTopicEvents(organizationId, topicId, {
+      status: status => { const next = status === "live"; if (live && !next) poller?.wake(); live = next; },
+      runs: records => { delivered(); setRuns(records); recordTiming("runs:applied"); },
+      agents: agents => { delivered(); setThreads(agents); },
+      goal: value => { delivered(); setGoal(value); },
+    });
+    // A live stream already holds the current state, so remounts and wakes do not poll at once.
+    poller = startPolling(poll, controller.signal, live && streamed ? LIVE_SAFETY_POLL_MS : 0);
+    return () => { unsubscribe(); controller.abort(); };
   }, [path, refresh, onAuthLost, attempt, wake]);
 
   const failed = (cause: unknown) => {

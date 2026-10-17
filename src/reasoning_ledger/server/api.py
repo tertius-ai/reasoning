@@ -34,6 +34,8 @@ from .openrouter import OPENROUTER_URL, OpenRouter, ProviderError, provider_orig
 from .request_input import RequestInput as Input
 from .research_api import install_routes as install_research_routes
 from .store import Store, StoreError
+from .topic_events import SAFE_METHODS, TopicEvents
+from .topic_events import install_routes as install_topic_event_routes
 from .usage_api import install_routes as install_usage_routes
 from .usage_store import UsageStore
 from .webhook_api import install_routes as install_webhook_routes
@@ -106,6 +108,7 @@ class Config:
     mail: MailConfig | None = None
     deployment_release: str | None = None
     agent_concurrency: int = DEFAULT_AGENT_CONCURRENCY
+    topic_events: bool = True
 
     def __post_init__(self) -> None:
         if type(self.agent_concurrency) is not int or not 1 <= self.agent_concurrency <= 256:
@@ -431,11 +434,13 @@ def create_app(config: Config, *, provider: OpenRouter | None = None, mail_provi
     webhooks = WebhookStore(store)
     webhook_worker = WebhookWorker(webhooks, webhook_transport)
     work_maintenance = WorkLeaseMaintenance(store, compute)
+    topic_events = TopicEvents(store, inference, enabled=config.topic_events)
 
     @asynccontextmanager
     async def lifespan(_app: FastAPI):
         mail_started = False
         webhooks_started = False
+        topic_events.chain_shutdown_signals()
         try:
             work_maintenance.start()
             if config.inference_enabled:
@@ -448,6 +453,8 @@ def create_app(config: Config, *, provider: OpenRouter | None = None, mail_provi
             webhooks_started = True
             yield
         finally:
+            topic_events.close()
+            topic_events.restore_shutdown_signals()
             try:
                 work_maintenance.stop()
             finally:
@@ -484,6 +491,7 @@ def create_app(config: Config, *, provider: OpenRouter | None = None, mail_provi
     app.state.workflow_worker = workflow_worker
     app.state.webhooks = webhooks
     app.state.webhook_worker = webhook_worker
+    app.state.topic_events = topic_events
     app.add_middleware(BodyLimit, worker_store=store)
 
     @app.middleware("http")
@@ -506,13 +514,17 @@ def create_app(config: Config, *, provider: OpenRouter | None = None, mail_provi
             and request.url.path.startswith("/assets/")
             and HASHED_ASSET.fullmatch(request.url.path.removeprefix("/assets/")) is not None
         )
-        response.headers["Cache-Control"] = IMMUTABLE_ASSET_CACHE if versioned else "no-store"
+        # no-transform keeps compressing proxies (Caddy's encode) from holding event-stream bytes back.
+        streaming = response.headers.get("content-type", "").startswith("text/event-stream")
+        response.headers["Cache-Control"] = IMMUTABLE_ASSET_CACHE if versioned else "no-store, no-transform" if streaming else "no-store"
         response.headers["X-Content-Type-Options"] = "nosniff"
         response.headers["Referrer-Policy"] = "no-referrer"
         # A route's own policy (such as sandboxed media content) is stricter than the application policy.
         response.headers.setdefault("Content-Security-Policy", APPLICATION_CSP)
         if config.secure:
             response.headers["Strict-Transport-Security"] = "max-age=31536000"
+        if request.method not in SAFE_METHODS and response.status_code < 400:
+            topic_events.nudge(request.url.path)
         return response
 
     @app.exception_handler(StoreError)
@@ -572,6 +584,7 @@ def create_app(config: Config, *, provider: OpenRouter | None = None, mail_provi
     install_usage_routes(app, usage, authenticated)
     install_feedback_routes(app, store, authenticated)
     install_navigation_routes(app, store, authenticated)
+    install_topic_event_routes(app, topic_events, credentials)
 
     def session_response(result: dict, response: Response, transport: Transport) -> dict:
         if transport == "bearer":
