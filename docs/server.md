@@ -595,7 +595,7 @@ previous request to finish before scheduling another.
 Activity views slow down while their work is idle and return to their active cadence
 when work appears or the transcript gains a message: beta agent activity (runs,
 agent threads, goal) every second, then up to five seconds; research proposals,
-tool receipts and reviews every 2.5 seconds, then up to ten; topic bot invocations
+tool receipt summaries and reviews every 2.5 seconds, then up to ten; topic bot invocations
 every two seconds, then up to eight; topic compute jobs every two seconds, then up
 to ten; and a finished compute job's log and artifacts up to thirty. Each slows only
 after three quiet refreshes (one for a finished compute job). Compute images, policy
@@ -610,11 +610,17 @@ or topic bot models use one response, and a recent response is reused within a
 short per-view window (at most a few seconds). The public model catalog
 (`model-prices`) and model benchmarks are shared for five minutes across topics and
 dialogs; "Refresh catalog" fetches them again. Any write invalidates shared reads;
-the catalog and benchmarks survive only writes within a topic. The eight most
+the catalog and benchmarks survive only writes within a topic. Read-only
+mathematics operations sent with `POST /mathematics` (for example the
+Bibliography's `ledger_references`) are not writes and invalidate nothing. The eight most
 recently viewed topics keep their loaded messages and message/edit cursors in
 memory: revisiting one shows them at once while the poll fetches only newer
 messages and edits, and a 403 or 404 discards the snapshot (and its displayed
-messages if not yet revalidated). Shared reads and topic snapshots are cleared on
+messages if not yet revalidated). The eight most recently viewed beta topics also keep,
+per account, their five newest tool receipt summaries and receipt cursor: a revisit
+shows them at once and requests only receipts created since the oldest one still
+running (or since the newest one), and a 403 or 404 discards them. A receipt's
+arguments and result are read only when it is opened. Shared reads and topic snapshots are cleared on
 sign-out and session loss, and failures are never reused. Sending, model requests
 and other spending actions are checked by the server when they are made.
 Startup loads health and session state concurrently; an authenticated session can

@@ -200,7 +200,8 @@ function abortable<T>(promise: Promise<T>, signal?: AbortSignal): Promise<T> {
 /**
  * A GET shared by every mounted view: concurrent callers share one request, and a result started less than
  * `maxAge` milliseconds ago is reused. Any write through `request` invalidates shared reads (durable catalogs
- * survive topic-scoped writes); failures are never reused. Private responses stay in memory only.
+ * survive topic-scoped writes; read-only mathematics operations are not writes); failures are never reused.
+ * Private responses stay in memory only.
  */
 export function sharedRequest<T>(path: string, options: { maxAge: number; signal?: AbortSignal; durable?: boolean }): Promise<T> {
   const now = Date.now(), existing = sharedReads.get(path);
@@ -212,8 +213,14 @@ export function sharedRequest<T>(path: string, options: { maxAge: number; signal
   return abortable(entry.promise as Promise<T>, options.signal);
 }
 
+/** `POST /mathematics` operations the server runs without writing (`READS` in server/workbench_tools.py). */
+export const MATHEMATICS_READS: ReadonlySet<string> = new Set(["ledger_status", "ledger_search", "ledger_graph", "ledger_blockers",
+  "ledger_blast_radius", "ledger_references", "ledger_search_references", "ledger_read"]);
+const readOnlyOperation = (path: string, body: unknown) => /^\/organizations\/[^/]+\/mathematics$/.test(path)
+  && MATHEMATICS_READS.has(String((body as { name?: unknown } | null)?.name));
+
 export async function request<T>(path: string, options: { method?: string; body?: unknown; signal?: AbortSignal } = {}): Promise<T> {
-  if (options.method && options.method !== "GET") {
+  if (options.method && options.method !== "GET" && !(options.method === "POST" && readOnlyOperation(path, options.body))) {
     try { return await send<T>(path, options); } finally { mutationCompleted(path); }
   }
   return send<T>(path, options);

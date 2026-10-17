@@ -360,8 +360,12 @@ Under `/api/organizations/{organization_id}/topics/{topic_id}`:
 - `PATCH /goal/{goal_id}` selects `active`, `paused` or `cancelled`.
 - `GET /research-proposals` lists proposed actions; `POST /research-proposals/{id}`
   with `approve` records the human decision and runs an approved action.
-- `GET /research-tools` and `GET /research-tools/{receipt_id}` expose authorized
-  tool receipts with exact arguments and results.
+- `GET /research-tools` lists up to 50 of the topic's newest tool receipts
+  created at or after `after` (seconds, inclusive), with exact arguments and
+  results. With `summary=1` each row is only `id`, `name`, `status`,
+  `created_at` and `finished_at`; the web interface polls this form.
+  `GET /research-tools/{receipt_id}` returns one receipt with exact arguments and
+  results. Both require read access to the topic.
 
 `GET /api/organizations/{organization_id}/inference-configuration` returns
 current catalog model choices (the compatibility field `allowed_models`),
