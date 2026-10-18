@@ -396,13 +396,27 @@ The machine-readable contract is `GET /openapi.json`. Requests with bodies use
 Validation errors omit input values and arbitrary extra-field names. Responses
 disable caching; access logging is disabled by the CLI.
 
+`GET /api/health` is public and reads no organization data. It returns `status`
+(`"ok"`), `initialized`, `mail_worker_running` (only when mail is configured),
+`release_id`, `source_revision`, `source_modified`, `schema_version` (the number
+of applied server migrations), and `uptime_seconds` (whole seconds since the
+application was created). `release_id` is the `--deployment-release` manifest
+digest, also sent as `X-Reasoning-Release`, or null without one.
+`source_revision` is the 40- or 64-character commit recorded in the release's
+`manifest.json` beside `--frontend-dir`, and `source_modified` is that manifest's
+uncommitted-changes flag; both are null unless the manifest's SHA-256 equals
+`release_id`, so a development server or an unverified manifest reports no
+commit. The server reads the manifest once at startup and never returns its
+other contents or any file path. The help page shows these fields and links the
+commit to `https://github.com/tertius-ai/reasoning/commit/<revision>`.
+
 Paths below an organization require membership and scope every resource to that
 organization. Out-of-organization IDs return 404; insufficient role returns 403.
 Use the prefix `/api/organizations/{organization_id}` for organization resources.
 
 | Path | Methods | Purpose |
 | --- | --- | --- |
-| `/api/health` | GET | Readiness and initialization state |
+| `/api/health` | GET | Public readiness, initialization, verified release identity, and uptime |
 | `/api/setup` | POST | One-time owner and organization creation |
 | `/api/auth/login`, `/api/auth/logout` | POST | Session creation and revocation |
 | `/api/auth/me` | GET | Current account, without password material |

@@ -576,15 +576,59 @@ def test_transport_timeout_kills_and_reaps_its_owned_child(monkeypatch):
     assert processes[0].stdin.closed and processes[0].stdout.closed
 
 
+UNKNOWN_SOURCE = {"source_revision": None, "source_modified": None, "schema_version": len(MIGRATIONS)}
+
+
+def health_without_uptime(response) -> dict:
+    value = response.json()
+    assert type(value.pop("uptime_seconds")) is int
+    return value
+
+
 @pytest.mark.parametrize("release", [None, "a" * 64])
 def test_public_health_exposes_only_explicit_operator_release_identity(tmp_path, release):
     with TestClient(
         create_app(Config(tmp_path / "state", ORIGIN, inference_enabled=False, deployment_release=release)), base_url=ORIGIN
     ) as client:
         response = client.get("/api/health")
-        assert response.status_code == 200 and response.json() == {"status": "ok", "initialized": False}
+        assert response.status_code == 200
+        assert health_without_uptime(response) == {"status": "ok", "initialized": False, "release_id": release, **UNKNOWN_SOURCE}
         assert response.headers.get("X-Reasoning-Release") == release
         assert response.headers["Cache-Control"] == "no-store"
+
+
+@pytest.mark.parametrize("dirty", [False, True])
+def test_public_health_reports_source_revision_only_from_the_verified_release_manifest(tmp_path, dirty):
+    frontend = tmp_path / "release" / "web"
+    frontend.mkdir(parents=True)
+    (frontend / "organization.html").write_text("<!doctype html>")
+    (frontend / "assets").mkdir()
+    document = json.dumps({"source_revision": "b" * 40, "dirty": dirty, "files": {"private/path": "c" * 64}}).encode()
+    (frontend.parent / "manifest.json").write_bytes(document)
+    release = hashlib.sha256(document).hexdigest()
+    with TestClient(create_app(Config(tmp_path / "state", ORIGIN, frontend_dir=frontend, inference_enabled=False,
+                                      deployment_release=release)), base_url=ORIGIN) as client:
+        response = client.get("/api/health")
+        assert health_without_uptime(response) == {
+            "status": "ok", "initialized": False, "release_id": release, "source_revision": "b" * 40,
+            "source_modified": dirty, "schema_version": len(MIGRATIONS),
+        }
+        assert "private" not in response.text and str(tmp_path) not in response.text
+        # The manifest is read once at startup; later changes to the file do not alter the reported identity.
+        (frontend.parent / "manifest.json").write_bytes(b"{}")
+        assert client.get("/api/health").json()["source_revision"] == "b" * 40
+
+
+def test_public_health_does_not_trust_a_manifest_that_differs_from_the_running_release(tmp_path):
+    frontend = tmp_path / "release" / "web"
+    frontend.mkdir(parents=True)
+    (frontend / "organization.html").write_text("<!doctype html>")
+    (frontend / "assets").mkdir()
+    (frontend.parent / "manifest.json").write_bytes(json.dumps({"source_revision": "b" * 40, "dirty": False}).encode())
+    with TestClient(create_app(Config(tmp_path / "state", ORIGIN, frontend_dir=frontend, inference_enabled=False,
+                                      deployment_release="d" * 64)), base_url=ORIGIN) as client:
+        assert health_without_uptime(client.get("/api/health")) == {
+            "status": "ok", "initialized": False, "release_id": "d" * 64, **UNKNOWN_SOURCE}
 
 
 @pytest.mark.parametrize("value", [True, 123, "a" * 40, "A" * 64, "a" * 64 + "\n"])

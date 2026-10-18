@@ -502,7 +502,8 @@ operation must acquire exclusive ownership and revalidate its inputs/state.
 
 New bootstrap bundles declare `server-release-identity-v1`. Their exact managed
 unit passes the manifest digest using `reasoning-server serve
---deployment-release`; `/api/health` returns it in `X-Reasoning-Release`.
+--deployment-release`; `/api/health` returns it in `X-Reasoning-Release` and as
+`release_id`.
 Readiness rejects a missing, duplicate, or different header. This is an
 operator-configured identity assertion, not a publisher signature, process
 attestation, or proof that an arbitrary HTTPS endpoint runs the selected code.
