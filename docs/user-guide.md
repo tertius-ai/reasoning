@@ -2,6 +2,14 @@
 
 Open **?** at the right of the top bar for in-app help. Outside a text input,
 type `?` for keyboard shortcuts and slash commands.
+The bottom of the help page summarizes the server when you report a problem:
+the deployed commit as a short link to its source, the release ID prefix, server
+status (initialization, the mail worker when configured, database schema, and
+uptime), and when this was checked. The page checks once when it opens and again
+on **Refresh** or when the device reconnects; it does not poll. A server without
+a verified release manifest shows the commit as **development build** or
+**unknown** rather than a guess, and **with uncommitted changes** marks a release
+built from modified source. A failed check shows **Unavailable** with the reason.
 
 ## Conversations
 
