@@ -35,6 +35,7 @@ import { TexRequestDialog, texRequest } from "./TexRequestDialog";
 import { EmailVerification, VerifyEmailBanner } from "./EmailVerification";
 import { BatchInvitations, InvitationDeliveryProgress } from "./BatchInvitations";
 import { ProviderKeyUsage } from "./ProviderKeyUsage";
+import { ReleaseNotice } from "./ReleaseNotice";
 import { ReferenceCandidate, ReferenceContext, ReferenceLink, ReferenceResolver, ReferenceText, applicationHref, followApplicationLink, matchReferences,
   referenceCandidates, referenceFromHref, referenceQuery, referenceToken, remarkReferences, topicLink } from "./references";
 import {
@@ -1643,6 +1644,7 @@ export function OrganizationApp({ user, onAccount, onAuthenticated, onSignedOut,
     </header>
     {error && <div className="org-banner" role="alert">{error}<button aria-label="Dismiss error" onClick={() => setError("")}>×</button></div>}
     {linkNotice && <div className="org-banner" role="status">{linkNotice}<button aria-label="Dismiss notice" onClick={() => setLinkNotice("")}>×</button></div>}
+    <ReleaseNotice />
     {verificationToken && <VerifyEmailBanner token={verificationToken} onDone={() => {
       setVerificationToken(""); window.history.replaceState(null, "", window.location.pathname + window.location.search);
       void request<Account>("/auth/me").then(onAccount).catch(cause => setError(errorMessage(cause)));

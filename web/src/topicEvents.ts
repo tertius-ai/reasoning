@@ -1,6 +1,7 @@
 // Copyright Benjamin Antieau and Deven Manam. SPDX-License-Identifier: Apache-2.0
 import { BotRun, ModelRun, topicPath } from "./organization-api";
 import { recordTiming } from "./polling";
+import { observeRelease } from "./release";
 
 /**
  * One authenticated server event stream per open topic, shared by the views that show it. While the stream is
@@ -177,6 +178,7 @@ class TopicConnection {
     try {
       const response = await fetch("/api" + this.path, { credentials: "same-origin", cache: "no-store", signal: controller.signal,
         headers: { Accept: "text/event-stream", "Cache-Control": "no-transform" } });
+      observeRelease(response);
       if (!response.ok || !response.body || !(response.headers.get("content-type") ?? "").startsWith("text/event-stream")) {
         await response.body?.cancel().catch(() => undefined);
         return result(response.status >= 400 && response.status < 500 || response.status === 503 ? "refused" : "failed");

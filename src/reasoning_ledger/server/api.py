@@ -10,7 +10,7 @@ from urllib.parse import urlsplit
 
 from fastapi import Depends, FastAPI, Query, Request, Response
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import AnyHttpUrl, Field, SecretStr, ValidationError, field_validator, model_validator
 from starlette.concurrency import run_in_threadpool
@@ -526,6 +526,9 @@ def create_app(config: Config, *, provider: OpenRouter | None = None, mail_provi
         response.headers.setdefault("Content-Security-Policy", APPLICATION_CSP)
         if config.secure:
             response.headers["Strict-Transport-Security"] = "max-age=31536000"
+        # Open pages compare this with the release they loaded (see `frontend`) to offer a reload after an upgrade.
+        if config.deployment_release is not None:
+            response.headers["X-Reasoning-Release"] = config.deployment_release
         if request.method not in SAFE_METHODS and response.status_code < 400:
             topic_events.nudge(request.url.path)
         return response
@@ -604,9 +607,7 @@ def create_app(config: Config, *, provider: OpenRouter | None = None, mail_provi
         return {key: value for key, value in result.items() if key != "access_token"}
 
     @app.get("/api/health")
-    def health(response: Response):
-        if config.deployment_release is not None:
-            response.headers["X-Reasoning-Release"] = config.deployment_release
+    def health():
         return {
             "status": "ok",
             "initialized": store.initialized(),
@@ -1036,7 +1037,14 @@ def create_app(config: Config, *, provider: OpenRouter | None = None, mail_provi
         @app.get("/", include_in_schema=False)
         @app.get("/organization.html", include_in_schema=False)
         def frontend():
-            return FileResponse(config.frontend_dir / "organization.html", media_type="text/html")
+            page = config.frontend_dir / "organization.html"
+            if config.deployment_release is None:
+                return FileResponse(page, media_type="text/html")
+            # The page records the release that served it; a different X-Reasoning-Release later means an upgrade.
+            html = page.read_text(encoding="utf-8")
+            marker = f'<meta name="reasoning-release" content="{config.deployment_release}" />'
+            head = html.find("</head>")
+            return HTMLResponse(html[:head] + marker + html[head:] if head >= 0 else html)
 
         @app.get("/reasoning.svg", include_in_schema=False)
         def icon():

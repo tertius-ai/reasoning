@@ -1,3 +1,4 @@
+import { observeRelease } from "./release";
 export type Account = { id: string; name: string; email: string; email_verified_at?: number | null };
 export type Role = "owner" | "admin" | "member" | "viewer";
 export type Organization = { id: string; name: string; role: Role };
@@ -249,6 +250,7 @@ async function send<T>(path: string, options: { method?: string; body?: unknown;
     method: options.method ?? "GET", headers, credentials: "same-origin", cache: "no-store", signal: options.signal,
     body: options.body === undefined ? undefined : JSON.stringify(options.body),
   });
+  observeRelease(response);
   if (!response.ok) {
     const body = await response.json().catch(() => null);
     throw new ApiError(response.status, typeof body?.detail === "string" ? body.detail : UNDESCRIBED_ERROR);

@@ -150,6 +150,15 @@ application policy. When `--frontend-dir` is a managed release directory
 is served from the `web/assets` directories of the other installed releases, so
 a page loaded before an upgrade can still import its chunks.
 
+With `--deployment-release`, every response carries the release digest as
+`X-Reasoning-Release`, and the HTML entry point embeds it as
+`<meta name="reasoning-release" content="<digest>">`. An open page compares the
+header of the API responses and event streams it already requests with the
+release that served it; when they differ, it shows a dismissible notice that
+offers a reload and never reloads by itself. It does no extra polling for this.
+Without `--deployment-release`, neither the header nor the meta element is
+sent, and pages never show the notice.
+
 `serve` binds to `127.0.0.1:8766` by default. For a public installation, set
 `--public-url https://chat.example.org` and place a same-origin HTTPS reverse
 proxy in front of this loopback listener. Public URLs must be origins without
@@ -403,7 +412,8 @@ disable caching; access logging is disabled by the CLI.
 `release_id`, `source_revision`, `source_modified`, `schema_version` (the number
 of applied server migrations), and `uptime_seconds` (whole seconds since the
 application was created). `release_id` is the `--deployment-release` manifest
-digest, also sent as `X-Reasoning-Release`, or null without one.
+digest, also sent as `X-Reasoning-Release` on every response, or null without
+one.
 `source_revision` is the 40- or 64-character commit recorded in the release's
 `manifest.json` beside `--frontend-dir`, and `source_modified` is that manifest's
 uncommitted-changes flag; both are null unless the manifest's SHA-256 equals

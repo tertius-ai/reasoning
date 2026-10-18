@@ -597,6 +597,25 @@ def test_public_health_exposes_only_explicit_operator_release_identity(tmp_path,
         assert response.headers["Cache-Control"] == "no-store"
 
 
+@pytest.mark.parametrize("release", [None, "a" * 64])
+def test_every_response_and_the_served_page_name_the_running_release(tmp_path, release):
+    frontend = tmp_path / "web"
+    (frontend / "assets").mkdir(parents=True)
+    page = '<!doctype html><html><head><title>Reasoning</title></head><body></body></html>'
+    (frontend / "organization.html").write_text(page)
+    with TestClient(create_app(Config(tmp_path / "state", ORIGIN, frontend_dir=frontend, inference_enabled=False,
+                                      deployment_release=release)), base_url=ORIGIN) as client:
+        for response in (client.get("/api/auth/me"), client.get("/api/missing"), client.get("/assets/missing-AbCd1234.js"),
+                         client.post("/api/auth/login", content="x", headers={"content-type": "text/plain"}), client.get("/")):
+            assert response.headers.get_list("X-Reasoning-Release") == ([release] if release else []), response.request.url
+        html = client.get("/").text
+        if release is None:
+            assert html == page
+        else:
+            assert html == page.replace("</head>", f'<meta name="reasoning-release" content="{release}" /></head>')
+        assert client.get("/organization.html?view=ledger").text == html
+
+
 @pytest.mark.parametrize("dirty", [False, True])
 def test_public_health_reports_source_revision_only_from_the_verified_release_manifest(tmp_path, dirty):
     frontend = tmp_path / "release" / "web"
