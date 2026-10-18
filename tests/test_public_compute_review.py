@@ -186,8 +186,9 @@ def test_retry_exports_sanitized_successful_receipt_without_private_attempt_cred
         accepted["cases"][0]["private_header"] = "fixture-private-provider-header"
         (output / "acceptance.json").write_text(canonical(accepted))
         return accepted
-    with pytest.raises(ValueError, match="interrupted"):
+    with pytest.raises(publication.PublicationStepFailure) as raised:
         complete(reviewed, monkeypatch, execute=execute)
+    assert raised.value.stage == "worker-execution"
     assert not (args[-1] / "public-acceptance.json").exists()
     assert not (args[-1] / "compute-images.json").exists()
     result = publication.publish(*args, token="fixture-secret-token", username="fixture-user")
@@ -218,8 +219,9 @@ def test_incomplete_returned_execution_receipt_cannot_create_public_completion(r
         accepted["cases"][0]["logs_digest"] = "not-a-digest"
     else:
         accepted["cases"][0]["status"] = "running"
-    with pytest.raises(ValueError, match="receipt|case"):
+    with pytest.raises(publication.PublicationStepFailure) as raised:
         complete(reviewed, monkeypatch, execute=lambda *_: accepted)
+    assert raised.value.stage == "worker-execution"
     assert not (args[-1] / "public-acceptance.json").exists()
     assert not (args[-1] / "publication.json").exists()
     assert not (args[-1] / "compute-images.json").exists()
