@@ -38,7 +38,8 @@ def test_delete_project_hides_descendants_revokes_bot_grants_and_preserves_recor
     assert plan["counts"] == {"projects": 1, "channels": 1, "topics": 3, "messages": 1, "workflows": 0, "compute_jobs": 0,
                               "knowledge_entries": 1, "model_runs": 0}
     assert client.request("DELETE", path, json=body).status_code == 204
-    assert client.get(root + "/hierarchy").json() == {"projects": [], "channels": [], "topics": [], "topic_state": []}
+    assert client.get(root + "/hierarchy").json() == {"projects": [], "channels": [], "topics": [], "topic_state": [],
+                                                       "direct_conversations": []}
     assert client.get(root + "/search", params={"q": "proof"}).json() == []
     assert client.get(root + "/knowledge").json() == []
     assert client.get(root + f"/knowledge/{knowledge['id']}").status_code == 404

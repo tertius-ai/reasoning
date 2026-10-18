@@ -223,11 +223,15 @@ const connections = new Map<string, TopicConnection>();
 
 /** Subscribe to a topic's event stream; the returned function unsubscribes. Listeners receive the latest state at once. */
 export function subscribeTopicEvents(organizationId: string, topicId: string, listener: TopicEventListener): () => void {
+  return subscribeEvents(topicPath(organizationId, topicId) + "/events", listener);
+}
+
+/** Subscribe to the event stream at an API path, such as a direct conversation's `/events`, shared like a topic's. */
+export function subscribeEvents(path: string, listener: TopicEventListener): () => void {
   if (typeof fetch !== "function" || typeof TextDecoderStream !== "function") {
     listener.status?.("unavailable");
     return () => undefined;
   }
-  const path = topicPath(organizationId, topicId) + "/events";
   let connection = connections.get(path);
   if (!connection) {
     const created: TopicConnection = new TopicConnection(path, () => { if (connections.get(path) === created) connections.delete(path); });

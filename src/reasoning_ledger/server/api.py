@@ -22,6 +22,8 @@ from .bot_store import BotStore
 from .compute_api import install_routes as install_compute_routes
 from .compute_catalog import load_catalog
 from .compute_store import ComputeStore
+from .direct_messages import DirectMessages
+from .direct_messages import install_routes as install_direct_message_routes
 from .feedback_api import install_feedback_routes
 from .inference_store import InferenceStore
 from .inference_worker import DEFAULT_AGENT_CONCURRENCY, InferenceWorker
@@ -590,6 +592,7 @@ def create_app(config: Config, *, provider: OpenRouter | None = None, mail_provi
     install_feedback_routes(app, store, authenticated)
     install_navigation_routes(app, store, authenticated)
     install_reference_routes(app, store, authenticated)
+    install_direct_message_routes(app, store, authenticated)
     install_topic_event_routes(app, topic_events, credentials)
 
     def session_response(result: dict, response: Response, transport: Transport) -> dict:
@@ -687,7 +690,9 @@ def create_app(config: Config, *, provider: OpenRouter | None = None, mail_provi
 
     @app.get("/api/organizations/{organization_id}/hierarchy")
     def hierarchy(organization_id: str, user: User):
-        return store.hierarchy(user, organization_id)
+        # The caller's own direct-conversation summaries share the navigation refresh; Store.hierarchy stays topic-only.
+        return {**store.hierarchy(user, organization_id),
+                "direct_conversations": DirectMessages(store).conversations(user, organization_id)}
 
     @app.post("/api/organizations/{organization_id}/projects", status_code=201)
     def project(organization_id: str, body: ProjectCreation, user: User):

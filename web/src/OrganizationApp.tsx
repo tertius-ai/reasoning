@@ -13,6 +13,7 @@ import { withBotModels } from "./botModels";
 import { availableEfforts } from "./ReasoningEffort";
 import { editMentions, encodeMentions, MentionBinding } from "./composerMentions";
 import { ComputeConversation } from "./ComputeConversation";
+import { DirectConversation, DirectMessageNavigation, directPath } from "./DirectMessages";
 import { KnowledgeLinks, KnowledgeView } from "./KnowledgeLinks";
 import { LazyView } from "./LazyView";
 import { WorkflowConversation } from "./WorkflowConversation";
@@ -55,6 +56,7 @@ const UNAVAILABLE_LINK = "This link is unavailable. It may point to something th
 /** The first topic of a project, which a project link opens. */
 const projectTopic = (hierarchy: Hierarchy, projectId: string) => hierarchy.topics.find(topic =>
   hierarchy.channels.some(channel => channel.id === topic.channel_id && channel.project_id === projectId))?.id;
+const DirectConversationView = lazy(() => import("./DirectConversation").then(module => ({ default: module.DirectConversationView })));
 
 type Draft = { text: string; clientId: string; attempted: boolean; mentions?: MentionBinding[] };
 type Creation = "organization" | "project" | "channel" | "topic";
@@ -569,8 +571,9 @@ export function peopleWithBots(presence: Presence | null) {
   })).filter(person => person.online || person.bots.length > 0);
 }
 
-function PresenceSidebar({ organizationId, open, onClose, onAuthLost }: {
+function PresenceSidebar({ organizationId, open, onClose, onAuthLost, userId, onMessage }: {
   organizationId: string; open: boolean; onClose: () => void; onAuthLost: () => void;
+  userId?: string; onMessage?: (userId: string) => void;
 }) {
   const [presence, setPresence] = useState<Presence | null>(null);
   const [reviewBot, setReviewBot] = useState<Presence["bots"][number] | null>(null);
@@ -593,7 +596,8 @@ function PresenceSidebar({ organizationId, open, onClose, onAuthLost }: {
     <button aria-label="Collapse online sidebar" onClick={onClose}>×</button></header>
     {!presence && <p role="status">Checking presence…</p>}
     {people.map(person => <section key={person.id} data-person-id={person.id}>
-      <div className="org-presence-row"><span className="org-presence-avatar">{person.name.slice(0, 1).toUpperCase()}</span><strong title={person.role}>{person.name}</strong><i aria-label={person.online ? "online" : "offline"} /></div>
+      <div className="org-presence-row"><span className="org-presence-avatar">{person.name.slice(0, 1).toUpperCase()}</span><strong title={person.role}>{onMessage && person.id !== userId ? <button type="button" className="org-presence-message"
+        title={`Send ${person.name} a direct message`} onClick={() => onMessage(person.id)}>{person.name}</button> : person.name}</strong><i aria-label={person.online ? "online" : "offline"} /></div>
       {person.bots.map(bot => <div className="org-presence-row org-person-bot" key={bot.id} data-bot-id={bot.id}>
         <span className="org-presence-avatar org-bot-avatar" aria-label={bot.developer ? "Developer bot" : "Bot"}>{bot.developer ? "⬡" : "◆"}</span><strong title={[bot.engine === "claude" ? "Claude Code" : bot.engine === "codex" ? "Codex" : "Bot", ...(bot.models ?? []), bot.online ? "online" : "offline", bot.developer ? "developer tools" : ""].filter(Boolean).join(" · ")}>{approvals.rows.some(row => row.bot_id === bot.id)
           ? <button type="button" className="org-bot-review-name" onClick={() => setReviewBot(bot)}>{bot.name}</button> : bot.name}</strong>
@@ -1329,6 +1333,8 @@ export function OrganizationApp({ user, onAccount, onAuthenticated, onSignedOut,
     const available = link.topic ? tree.topics.some(item => item.id === link.topic) : !link.project || tree.projects.some(item => item.id === link.project);
     setLinkNotice(available ? "" : UNAVAILABLE_LINK);
   };
+  const [direct, setDirect] = useState<string | null>(null);
+  const [directConversations, setDirectConversations] = useState<DirectConversation[]>([]);
   const [drafts, setDrafts] = useState<Record<string, Draft>>({});
   const [modelAttempts, setModelAttempts] = useState<Record<string, PendingModelAttempt | undefined>>({});
   const [computeAttempts, setComputeAttempts] = useState<Record<string, ComputeAttempt | undefined>>({});
@@ -1393,7 +1399,9 @@ export function OrganizationApp({ user, onAccount, onAuthenticated, onSignedOut,
   const organization = organizations.find((item) => item.id === organizationId);
   const canCreate = Boolean(organization && organization.role !== "viewer");
   const canCreateOrganization = organizations.some((item) => item.role === "owner");
-  const topic = hierarchy.topics.find((item) => item.id === selection?.topic);
+  // An open direct conversation replaces the selected topic in the main view.
+  const directConversation = directConversations.find(item => item.id === direct);
+  const topic = direct ? undefined : hierarchy.topics.find((item) => item.id === selection?.topic);
   const channel = hierarchy.channels.find((item) => item.id === topic?.channel_id);
   const selectedProject = hierarchy.projects.find((item) => item.id === channel?.project_id);
   const canWriteSelected = Boolean(organization && (organization.role !== "viewer" || selectedProject?.project_role === "owner"));
@@ -1435,6 +1443,7 @@ export function OrganizationApp({ user, onAccount, onAuthenticated, onSignedOut,
             if (controller.signal.aborted) return tree;
             setHierarchy(current => unchanged(current, tree));
             loadedHierarchy.current = { organization: organizationId, tree }; checkLink(organizationId, tree);
+            setDirectConversations(current => unchanged(current, tree.direct_conversations ?? []));
             setSelection((current) => {
               if (current && tree.topics.some(item => item.id === current.topic)) return current;
               const saved = workspace.topic ?? (workspace.project && !workspace.view ? projectTopic(tree, workspace.project) : undefined)
@@ -1529,7 +1538,7 @@ export function OrganizationApp({ user, onAccount, onAuthenticated, onSignedOut,
         event.preventDefault();
         const index = hierarchy.topics.findIndex((item) => item.id === selection?.topic);
         const next = (index + (event.key === "ArrowDown" ? 1 : -1) + hierarchy.topics.length) % hierarchy.topics.length;
-        setSelection({ topic: hierarchy.topics[next].id, anchor: null }); setSearch("");
+        setSelection({ topic: hierarchy.topics[next].id, anchor: null }); setDirect(null); setSearch("");
       }
     };
     window.addEventListener("keydown", keyboard); return () => window.removeEventListener("keydown", keyboard);
@@ -1552,13 +1561,25 @@ export function OrganizationApp({ user, onAccount, onAuthenticated, onSignedOut,
     setHelpOpen(false);
     if (knowledgeView) { setKnowledgeView(null); const url = new URL(window.location.href); url.searchParams.delete("view"); url.searchParams.set("topic", id); window.history.pushState(null, "", url); }
     setWorkspace(current=>({...current,topic:id,view:null,project:undefined,message:undefined}));
-    setSelection({ topic: id, anchor, message });
+    setSelection({ topic: id, anchor, message }); setDirect(null);
     if (window.innerWidth <= 700) setNavOpen(false);
     setSearch(""); setResults(null);
   };
+  const showDirect = (id: string) => {
+    setHelpOpen(false); setKnowledgeView(null); setDirect(id); setSearch(""); setResults(null);
+    if (window.innerWidth <= 700) setNavOpen(false);
+  };
+  const openDirect = (memberId: string) => {
+    const existing = directConversations.find(item => item.other_user.id === memberId);
+    if (existing) { showDirect(existing.id); return; }
+    if (!organization) return;
+    void request<DirectConversation>(directPath(organization.id), { method: "POST", body: { user_id: memberId } }).then(created => {
+      setDirectConversations(current => [created, ...current.filter(item => item.id !== created.id)]); showDirect(created.id);
+    }).catch(cause => { if (cause instanceof ApiError && cause.status === 401) authLost(); else setError(errorMessage(cause)); });
+  };
   const switchOrganization = (id: string) => {
     setHelpOpen(false);
-    setOrganizationId(id || null); setHierarchy(EMPTY_HIERARCHY); setMembers([]); setSelection(null); setSearch(""); setResults(null); setError(""); setAdmin(false); setCreation(null); setCreationParent(undefined);
+    setOrganizationId(id || null); setHierarchy(EMPTY_HIERARCHY); setMembers([]); setSelection(null); setDirect(null); setDirectConversations([]); setSearch(""); setResults(null); setError(""); setAdmin(false); setCreation(null); setCreationParent(undefined);
     setInformation(null); setTool(pairCode ? "bots" : null); setEntitySettings(null);
     setNavigationUsage(undefined);
     setKnowledgeView(null);
@@ -1573,7 +1594,8 @@ export function OrganizationApp({ user, onAccount, onAuthenticated, onSignedOut,
       title="Toggle project navigation · Ctrl/⌘B" aria-controls="org-project-navigation" aria-expanded={navOpen} onClick={() => setNavOpen(open => !open)}>
       <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2" /><path d="M9 4v16" /></svg></button>
       <div className="org-wordmark" title={organization?.name}><img src="/reasoning.svg" alt="" /><span>{organization?.name ?? "Organizations"}</span></div>
-      {knowledgeView ? <h1 className="org-workspace-title">{knowledgeView === "journal" ? "Research blog editor" : knowledgeView === "ledger" ? "Ledger" : "Bibliography"}</h1> : organization && topic && <TopicBreadcrumb channel={channel} topic={topic}
+      {knowledgeView ? <h1 className="org-workspace-title">{knowledgeView === "journal" ? "Research blog editor" : knowledgeView === "ledger" ? "Ledger" : "Bibliography"}</h1>
+        : directConversation ? <h1 className="org-workspace-title">Direct messages · {directConversation.other_user.name}</h1> : organization && topic && <TopicBreadcrumb channel={channel} topic={topic}
         subscribed={hierarchy.topic_state.find((item) => item.topic_id === topic.id)?.subscribed !== false}
         onFollow={() => void request(topicPath(organization.id, topic.id) + "/subscription", { method: "PUT", body: {
           subscribed: hierarchy.topic_state.find((item) => item.topic_id === topic.id)?.subscribed === false,
@@ -1613,12 +1635,14 @@ export function OrganizationApp({ user, onAccount, onAuthenticated, onSignedOut,
       <aside id="org-project-navigation" hidden={!navOpen} className={"org-sidebar " + (navOpen ? "org-sidebar-open" : "")}>
         <header><strong>Projects</strong><span className="org-sidebar-heading-actions"><span role="status" className={online ? "org-connected" : "org-offline"}>{online ? "" : "Offline"}</span>
           {canCreate && <button type="button" className="org-tree-add" aria-label="New project" title="New project" onClick={() => beginCreation("project")}>+</button>}</span></header>
-        <TopicNavigation key={user.id + "/" + organizationId} hierarchy={hierarchy} organizationId={organizationId ?? undefined} userId={user.id} usage={navigationUsage} selected={selection?.topic ?? null} canCreate={canCreate}
+        <TopicNavigation key={user.id + "/" + organizationId} hierarchy={hierarchy} organizationId={organizationId ?? undefined} userId={user.id} usage={navigationUsage} selected={direct ? null : selection?.topic ?? null} canCreate={canCreate}
           canManageOrganization={Boolean(organization && ["owner", "admin"].includes(organization.role))} onSelect={(id) => select(id)}
           onCreateChannel={(projectId) => beginCreation("channel", projectId)} onCreateTopic={(channelId) => beginCreation("topic", channelId)}
           onProjectSettings={(id) => setEntitySettings({ kind: "project", id })} onChannelSettings={(id) => setEntitySettings({ kind: "channel", id })}
           onTopicSettings={(id) => setEntitySettings({ kind: "topic", id })} />
         {!hierarchy.projects.length && organization && <p className="org-tree-empty">{organization.role === "viewer" ? "Projects will appear here." : "Create a project to begin."}</p>}
+        {organization && <DirectMessageNavigation conversations={directConversations} members={members} userId={user.id} selected={direct}
+          canStart={canCreate} onSelect={showDirect} onStart={openDirect} />}
         <footer><AccountMenu user={user} organization={organization} organizations={organizations} canCreateOrganization={canCreateOrganization}
           onSwitch={switchOrganization} onAccount={() => setInformation("user")} onOrganization={() => setInformation("organization")}
           onAdmin={() => setAdmin(true)} onCreate={() => beginCreation("organization")} onKnowledge={() => setTool("knowledge")} onBots={() => setTool("bots")}
@@ -1632,7 +1656,9 @@ export function OrganizationApp({ user, onAccount, onAuthenticated, onSignedOut,
           {searching ? <p role="status">Searching…</p> : !results?.length ? <p>No matching messages.</p> : <ol>{results.map((result) => <li key={result.id}><button onClick={() => select(result.topic_id, null, result.id)}>
             <small>{result.project_name} / #{result.channel_name} / {KIND_SYMBOL[result.topic_kind]}-{result.topic_name}</small>
             <p><ReferenceText text={mentionText(result.content, members)} /></p></button></li>)}</ol>}
-        </section> : organization && topic ? <Conversation key={organization.id + "/" + topic.id + "/" + selection?.anchor + "/" + (selection?.message ?? "")} organizationId={organization.id} topic={topic} members={members} user={user}
+        </section> : organization && directConversation ? <LazyView label="Direct messages"><DirectConversationView key={organization.id + "/" + directConversation.id}
+          organizationId={organization.id} conversation={directConversation} user={user} members={members} canWrite={canCreate}
+          onChanged={preferenceRefresh} onAuthLost={authLost} /></LazyView> : organization && topic ? <Conversation key={organization.id + "/" + topic.id + "/" + selection?.anchor + "/" + (selection?.message ?? "")} organizationId={organization.id} topic={topic} members={members} user={user}
           focus={selection?.message} referenceTargets={referenceTargets}
           canWrite={canWriteSelected} canManage={["owner", "admin"].includes(organization.role)} draft={draft}
           modelAttempt={modelAttempts[draftKey]} onModelAttempt={(value) => setModelAttempts((existing) => ({ ...existing, [draftKey]: value }))}
@@ -1650,7 +1676,8 @@ export function OrganizationApp({ user, onAccount, onAuthenticated, onSignedOut,
             {!organization && canCreateOrganization && <button onClick={() => beginCreation("organization")}>Create organization</button>}
           </section>}
       </main>
-      {organization && <PresenceSidebar organizationId={organization.id} open={presenceOpen} onClose={() => setPresenceOpen(false)} onAuthLost={authLost} />}
+      {organization && <PresenceSidebar organizationId={organization.id} open={presenceOpen} onClose={() => setPresenceOpen(false)} onAuthLost={authLost}
+        userId={user.id} onMessage={openDirect} />}
     </div>
     {information && <Dialog title={information === "user" ? "User information" : "Organization information"} onClose={() => setInformation(null)}>
       {information === "user" ? <><dl><dt>Name</dt><dd>{user.name}</dd><dt>Email</dt><dd>{user.email}</dd></dl>

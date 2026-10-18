@@ -25,7 +25,14 @@ export type TopicState = {
   topic_id: string; subscribed: boolean; last_read_sequence: number; last_message_sequence: number;
   unread_count: number; unread_mention_count: number;
 };
-export type Hierarchy = { projects: Project[]; channels: Channel[]; topics: Topic[]; topic_state: TopicState[] };
+/** The signed-in member's view of one of their direct conversations. */
+export type DirectConversation = {
+  id: string; created_at: number; other_user: { id: string; name: string }; other_member: boolean;
+  muted: boolean; blocked: boolean; last_read_sequence: number; last_message_sequence: number;
+  last_message_at: number | null; unread_count: number;
+};
+export type Hierarchy = { projects: Project[]; channels: Channel[]; topics: Topic[]; topic_state: TopicState[];
+  direct_conversations?: DirectConversation[] };
 export type Member = Account & { role: Role };
 export type Message = { id: string; sequence: number; topic_id: string; author_id: string; content: string; client_id: string; created_at: number;
   revision?: number; edited_at?: number | null;
@@ -187,8 +194,8 @@ export const modelCatalog = (organizationId: string, signal?: AbortSignal) =>
   sharedRequest<OrganizationPrices>(organizationPath(organizationId) + "/model-prices", { maxAge: CATALOG_MAX_AGE, durable: true, signal });
 
 function mutationCompleted(path: string): void {
-  // Topic-scoped writes (messages, read cursors, runs, goals, media) never change organization catalogs.
-  const topicScoped = path.includes("/topics/");
+  // Topic-scoped and direct-conversation writes (messages, read cursors, runs, goals, media) never change organization catalogs.
+  const topicScoped = path.includes("/topics/") || path.includes("/direct-conversations/");
   for (const [key, entry] of sharedReads) if (!(topicScoped && entry.durable)) sharedReads.delete(key);
 }
 

@@ -51,6 +51,7 @@ DEPLOYMENT_TESTS = {
     "test_public_branding.py",
     "test_public_chat.py",
     "test_public_message_edits.py",
+    "test_public_direct_messages.py",
     "test_public_chat_feedback.py",
     "test_public_navigation.py",
     "test_public_references.py",

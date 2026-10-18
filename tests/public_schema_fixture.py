@@ -18,6 +18,11 @@ def remove_collaboration_schema(db):
     if "bot_run_id" in {row[1] for row in db.execute("PRAGMA table_info(workflow_node_attempts)")}:
         db.execute("ALTER TABLE workflow_node_attempts DROP COLUMN bot_run_id")
     for table in (
+        "direct_message_revisions",
+        "direct_messages",
+        "direct_conversation_state",
+        "direct_conversations",
+        "direct_blocks",
         "bot_compute_approvals",
         "bot_agent_handoffs",
         "bot_agent_tasks",
