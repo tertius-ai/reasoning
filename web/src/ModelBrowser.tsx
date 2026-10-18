@@ -1,11 +1,11 @@
-import React, { useEffect, useId, useRef, useState } from "react";
+import React, { memo, useCallback, useEffect, useId, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { ModelPrice, ModelBenchmarks, OrganizationPrices, request, errorMessage } from "./organization-api";
 import { formatModelPrice } from "./modelPriceFormat";
-import { chatModel, usefulChatModel } from "./modelRecommendations";
+import { catalogModel, chatModel, usefulChatModel } from "./modelRecommendations";
 import { availableEfforts } from "./ReasoningEffort";
 
 export function modelSelectionLabel(catalog: OrganizationPrices | null, model: string, effort = "") {
-  const metadata = catalog?.models.find(item => item.id === model);
+  const metadata = catalogModel(catalog, model);
   const label = metadata?.execution_source === "bot" ? metadata.name : model;
   return label + (availableEfforts(catalog, model).includes(effort) ? "/" + effort : "");
 }
@@ -22,16 +22,21 @@ export function benchmarkScores(id: string, model: ModelPrice | undefined, snaps
   return snapshot?.models[id] ?? (model?.canonical_slug ? snapshot?.models[model.canonical_slug] : undefined);
 }
 
+/** Chat-model IDs whose ID or catalog name contains the query, deduplicated and sorted. */
+function matchingModels(ids: string[], catalog: OrganizationPrices | null, query: string) {
+  const needle = query.trim().toLowerCase();
+  return [...new Set(ids)].filter(id => chatModel(id) && (id + " " + (catalogModel(catalog, id)?.name ?? "")).toLowerCase().includes(needle)).sort();
+}
+
 export function modelSections(ids: string[], catalog: OrganizationPrices | null, query = "", favorites: string[] = []) {
-  const models = new Map((catalog?.models ?? []).map(model => [model.id, model]));
-  const math = new Set(catalog?.recommendations?.model_ids ?? []);
+  const math = new Set(catalog?.recommendations?.model_ids ?? []), favorite = new Set(favorites);
   const seen = new Set<string>();
-  const candidates = [...new Set(ids)].filter(id => chatModel(id) && (id + " " + (models.get(id)?.name ?? "")).toLowerCase().includes(query.trim().toLowerCase())).sort();
+  const candidates = matchingModels(ids, catalog, query);
   const section = (title: string, test: (id: string) => boolean) => {
     const choices = candidates.filter(id => !seen.has(id) && test(id)); choices.forEach(id => seen.add(id));
     return { title, ids: choices };
   };
-  return [section("Favorites", id => favorites.includes(id)), section("Your connected bots", id => models.get(id)?.execution_source === "bot"), section("Best for math", id => math.has(id)), section("Best open-weights", id => !!models.get(id)?.weights_repository),
+  return [section("Favorites", id => favorite.has(id)), section("Your connected bots", id => catalogModel(catalog, id)?.execution_source === "bot"), section("Best for math", id => math.has(id)), section("Best open-weights", id => !!catalogModel(catalog, id)?.weights_repository),
     section("Other models", () => true)].filter(group => group.ids.length);
 }
 
@@ -86,42 +91,106 @@ export function ModelDetails({ id, model, catalog }: { id: string; model?: Model
   </div>;
 }
 
-export function ModelRows({ ids, catalog, allowedModels, selected, onSelect, name, disabled = false, query = "", grouped = true }: {
-  ids: string[]; catalog: OrganizationPrices | null; allowedModels: string[]; selected?: string; onSelect?: (id: string) => void;
-  name?: string; disabled?: boolean; query?: string; grouped?: boolean;
-}) {
-  const [favorites, setFavorites] = useState<string[]>([]), [favoriteError, setFavoriteError] = useState("");
-  const [savingFavorite, setSavingFavorite] = useState(false);
-  useEffect(() => {
-    const controller = new AbortController();
-    const load = () => { void request<{ user_id: string; models: string[] }>("/auth/model-favorites", { signal: controller.signal })
-      .then(value => { if (Array.isArray(value.models)) setFavorites(value.models); })
-      .catch(() => { /* Selecting models does not require preferences. */ }); };
-    load(); window.addEventListener("focus", load); window.addEventListener("reasoning-model-favorites", load);
-    return () => { controller.abort(); window.removeEventListener("focus", load); window.removeEventListener("reasoning-model-favorites", load); };
-  }, []);
-  const favorite = async (id: string) => {
-    setSavingFavorite(true); setFavoriteError("");
-    try { const value = await request<{ user_id: string; models: string[] }>("/auth/model-favorites", {
-      method: "PUT", body: { model_id: id, favorite: !favorites.includes(id) } });
-      setFavorites(value.models); window.dispatchEvent(new Event("reasoning-model-favorites"));
-    } catch (cause) { setFavoriteError(errorMessage(cause)); } finally { setSavingFavorite(false); }
-  };
-  const models = new Map((catalog?.models ?? []).map(model => [model.id, model]));
-  const math = new Set(grouped ? catalog?.recommendations?.model_ids ?? [] : []);
-  const groups = grouped ? modelSections(ids, catalog, query, favorites) : [{ title: "Models", ids: [...new Set(ids)].filter(id => chatModel(id)
-    && (id + " " + (models.get(id)?.name ?? "")).toLowerCase().includes(query.trim().toLowerCase())).sort() }];
-  return <div className="org-model-rows">{groups.map(group => <section key={group.title}>
-    <h5>{group.title}</h5>{group.ids.map(id => <ModelCard key={id} details={<ModelDetails id={id} model={models.get(id)} catalog={catalog} />}>
-      <summary>{onSelect && <button type="button" className="org-model-favorite" aria-label={`Favorite ${id}`} aria-pressed={favorites.includes(id)}
-        disabled={savingFavorite} onClick={event => { event.preventDefault(); event.stopPropagation(); void favorite(id); }}>{favorites.includes(id) ? "★" : "☆"}</button>}{onSelect ? <label onClick={event => event.stopPropagation()}><input type="radio" name={name} aria-label={id} checked={selected === id}
-        disabled={disabled || !allowedModels.includes(id)} onChange={() => { /* Selection also opens effort for the current model. */ }}
-        onClick={() => onSelect(id)} />
-        <ModelLine id={id} model={models.get(id)} allowed={allowedModels.includes(id)} math={math.has(id)} scores={catalog?.benchmarks} /></label>
-        : <ModelLine id={id} model={models.get(id)} allowed={allowedModels.includes(id)} math={math.has(id)} scores={catalog?.benchmarks} />}
-        <span className="org-model-chevron" aria-hidden="true">⌄</span></summary>
-    </ModelCard>)}</section>)}{favoriteError && <p role="alert" className="org-error">{favoriteError}</p>}</div>;
+/*
+ * The signed-in person's favorites, shared by every mounted picker: one read when the first picker mounts, again when
+ * the window regains focus (another device may have changed them), and the server's answer after each toggle.
+ */
+let favoriteModels: string[] = [];
+let favoriteRead: AbortController | null = null;
+const favoriteListeners = new Set<() => void>();
+const noFavorites: string[] = [];
+function publishFavorites(models: string[]) { favoriteModels = models; favoriteListeners.forEach(listener => listener()); }
+function readFavorites() {
+  favoriteRead?.abort();
+  const controller = favoriteRead = new AbortController();
+  void request<{ user_id: string; models: string[] }>("/auth/model-favorites", { signal: controller.signal })
+    .then(value => { if (!controller.signal.aborted && Array.isArray(value.models)) publishFavorites(value.models); })
+    .catch(() => { /* Selecting models does not require preferences. */ })
+    .finally(() => { if (favoriteRead === controller) favoriteRead = null; });
 }
+function subscribeFavorites(listener: () => void) {
+  favoriteListeners.add(listener);
+  if (favoriteListeners.size === 1) { readFavorites(); window.addEventListener("focus", readFavorites); }
+  return () => {
+    favoriteListeners.delete(listener);
+    if (favoriteListeners.size) return;
+    // The next subscriber may belong to another account; it starts empty, as a fresh picker did.
+    window.removeEventListener("focus", readFavorites); favoriteRead?.abort(); favoriteRead = null; favoriteModels = noFavorites;
+  };
+}
+const ignoreFavorites = () => () => { /* Nothing to release. */ };
+/** Favorite model IDs; `enabled` false neither reads nor subscribes. */
+function useModelFavorites(enabled = true): string[] {
+  return useSyncExternalStore(enabled ? subscribeFavorites : ignoreFavorites, () => enabled ? favoriteModels : noFavorites, () => noFavorites);
+}
+async function toggleFavorite(id: string, favorite: boolean) {
+  favoriteRead?.abort(); favoriteRead = null; // An older read must not overwrite this answer.
+  const value = await request<{ user_id: string; models: string[] }>("/auth/model-favorites", { method: "PUT", body: { model_id: id, favorite } });
+  publishFavorites(value.models);
+}
+
+export function ModelRows({ ids, catalog, allowedModels, selected, onSelect, name, disabled = false, query = "", grouped = true, empty }: {
+  ids: string[]; catalog: OrganizationPrices | null; allowedModels: string[]; selected?: string; onSelect?: (id: string) => void;
+  name?: string; disabled?: boolean; query?: string; grouped?: boolean; empty?: React.ReactNode;
+}) {
+  // Favorites order grouped pickers and are toggled from selectable rows; the ungrouped browser needs neither.
+  const favorites = useModelFavorites(grouped || !!onSelect);
+  const [favoriteError, setFavoriteError] = useState(""), [savingFavorite, setSavingFavorite] = useState(false);
+  const favoriteSet = useMemo(() => new Set(favorites), [favorites]);
+  const allowed = useMemo(() => new Set(allowedModels), [allowedModels]);
+  const math = useMemo(() => new Set(grouped ? catalog?.recommendations?.model_ids ?? [] : []), [catalog, grouped]);
+  const groups = useMemo(() => grouped ? modelSections(ids, catalog, query, favorites) : [{ title: "Models", ids: matchingModels(ids, catalog, query) }],
+    [ids, catalog, query, favorites, grouped]);
+  // Rows are memoized, so their callbacks stay stable while always calling the latest handlers.
+  const latest = useRef({ onSelect, favoriteSet });
+  latest.current = { onSelect, favoriteSet };
+  const select = useCallback((id: string) => latest.current.onSelect?.(id), []);
+  const favorite = useCallback(async (id: string) => {
+    setSavingFavorite(true); setFavoriteError("");
+    try { await toggleFavorite(id, !latest.current.favoriteSet.has(id)); }
+    catch (cause) { setFavoriteError(errorMessage(cause)); } finally { setSavingFavorite(false); }
+  }, []);
+  const count = useRowBudget(groups.reduce((total, group) => total + group.ids.length, 0));
+  let remaining = count;
+  const shown = groups.map(group => { const ids = group.ids.slice(0, Math.max(0, remaining)); remaining -= group.ids.length; return { ...group, ids }; });
+  return <div className="org-model-rows">{!count && empty}{shown.map(group => group.ids.length > 0 && <section key={group.title}>
+    <h5>{group.title}</h5>{group.ids.map(id => <ModelRow key={id} id={id} catalog={catalog} allowed={allowed.has(id)} math={math.has(id)}
+      selectable={!!onSelect} selected={selected === id} favorite={favoriteSet.has(id)} savingFavorite={savingFavorite} disabled={disabled}
+      name={name} onSelect={select} onFavorite={favorite} />)}</section>)}
+    {favoriteError && <p role="alert" className="org-error">{favoriteError}</p>}</div>;
+}
+
+/**
+ * How many rows to mount now. A long list mounts one batch at once and a batch per tick after that, so opening a picker
+ * or the capabilities browser never blocks on the whole catalog; every row is mounted shortly after (for find in page,
+ * Tab order and screen readers). A narrowed search lowers the budget, so widening it again also grows in batches.
+ */
+function useRowBudget(total: number, batch = 40) {
+  const [count, setCount] = useState(batch);
+  useEffect(() => {
+    if (count > Math.max(batch, total)) { setCount(Math.max(batch, total)); return; }
+    if (count >= total) return;
+    const timer = window.setTimeout(() => setCount(current => Math.min(current + batch, total)), 30);
+    return () => window.clearTimeout(timer);
+  }, [count, total, batch]);
+  return Math.min(count, total);
+}
+
+const ModelRow = memo(function ModelRow({ id, catalog, allowed, math, selectable, selected, favorite, savingFavorite, disabled, name, onSelect, onFavorite }: {
+  id: string; catalog: OrganizationPrices | null; allowed: boolean; math: boolean; selectable: boolean; selected: boolean; favorite: boolean;
+  savingFavorite: boolean; disabled: boolean; name?: string; onSelect: (id: string) => void; onFavorite: (id: string) => void;
+}) {
+  const model = catalogModel(catalog, id);
+  const line = <ModelLine id={id} model={model} allowed={allowed} math={math} scores={catalog?.benchmarks} />;
+  return <ModelCard details={<ModelDetails id={id} model={model} catalog={catalog} />}>
+    <summary>{selectable && <button type="button" className="org-model-favorite" aria-label={`Favorite ${id}`} aria-pressed={favorite}
+      disabled={savingFavorite} onClick={event => { event.preventDefault(); event.stopPropagation(); onFavorite(id); }}>{favorite ? "★" : "☆"}</button>}
+      {selectable ? <label onClick={event => event.stopPropagation()}><input type="radio" name={name} aria-label={id} checked={selected}
+        disabled={disabled || !allowed} onChange={() => { /* Selection also opens effort for the current model. */ }}
+        onClick={() => onSelect(id)} />{line}</label> : line}
+      <span className="org-model-chevron" aria-hidden="true">⌄</span></summary>
+  </ModelCard>;
+});
 
 /**
  * A model row whose capability details (thousands of elements across a catalog) mount when the row is first
@@ -162,7 +231,11 @@ export function ModelPicker({ label, models, catalog, value, onChange, disabled 
 }) {
   const [open, setOpen] = useState(false), [query, setQuery] = useState(""), [showAll, setShowAll] = useState(false);
   const [effortModel, setEffortModel] = useState<string | null>(null);
-  const choices = models.filter(id => showAll || id === value || usefulChatModel(id, catalog?.models.find(model => model.id === id)));
+  // Read favorites while closed so the first opening already groups them.
+  useModelFavorites();
+  // Options, and the catalog work behind them, exist only while the picker is open.
+  const choices = useMemo(() => open ? models.filter(id => showAll || id === value || usefulChatModel(id, catalogModel(catalog, id))) : [],
+    [open, models, showAll, value, catalog]);
   const [placement, setPlacement] = useState<React.CSSProperties>({});
   const menu = useRef<HTMLDetailsElement>(null), name = useId();
   const place = () => {
@@ -188,16 +261,16 @@ export function ModelPicker({ label, models, catalog, value, onChange, disabled 
   return <details className="org-model-menu org-shared-model-picker" ref={menu} open={open}>
     <summary role="button" aria-label={label} aria-expanded={open} aria-disabled={disabled}
       onClick={event => { event.preventDefault(); if (!disabled) { place(); setEffortModel(null); setOpen(!open); } }}><span>{value ? modelSelectionLabel(catalog, value, effort) : emptyLabel}</span><span aria-hidden="true">⌃</span></summary>
-    <div className="org-model-options" style={effortModel ? effortPlacement : placement}>{effortModel && onEffortChange ? <EffortMenu
+    {open && <div className="org-model-options" style={effortModel ? effortPlacement : placement}>{effortModel && onEffortChange ? <EffortMenu
       model={effortModel} catalog={catalog} effort={effort} disabled={disabled} onBack={() => setEffortModel(null)}
       onSelect={choice => { onEffortChange(choice); setOpen(false); menu.current?.querySelector<HTMLElement>("summary")?.focus(); }} />
       : <><input type="search" aria-label="Search models" placeholder="Search models and routers" value={query} onChange={event => setQuery(event.target.value)} />
       <label className="org-model-choice"><input type="checkbox" checked={showAll} onChange={event => setShowAll(event.target.checked)} />All chat models</label>
       <ModelRows ids={choices} catalog={catalog} allowedModels={models} selected={value} name={name} disabled={disabled} query={query}
+        empty={<p>{models.length ? "No matching models." : "No models are enabled."}</p>}
         onSelect={id => { onChange(id); if (onEffortChange && availableEfforts(catalog, id).length) setEffortModel(id); else setOpen(false); }} />
-      {!models.length && <p>No models are enabled.</p>}{models.length > 0 && !modelSections(choices, catalog, query).length && <p>No matching models.</p>}
       {children}
       </>}
-    </div>
+    </div>}
   </details>;
 }

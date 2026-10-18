@@ -787,7 +787,10 @@ server account. The packaged default Caddy service is disabled in favor of the
 dedicated proxy service.
 
 Caddy obtains and renews HTTPS certificates and replaces forwarded client IP
-headers with the actual peer. Public requests cannot choose the server's origin
+headers with the actual peer. Its `reverse_proxy` flushes `text/event-stream`
+responses immediately, and the topic event stream's `Cache-Control: no-transform`
+keeps the `encode` directive from compressing or holding it back; application
+security headers pass through unchanged. Public requests cannot choose the server's origin
 or spoof their peer through these headers. The CLI waits for a verified HTTPS
 `/api/health` response; failure reports readiness as unverified and retains state
 for diagnosis/resumption. DNS/certificate issuance may take longer than its

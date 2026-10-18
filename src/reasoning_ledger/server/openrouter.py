@@ -396,6 +396,21 @@ class Usage:
         )
 
 
+_TLS_CONTEXT = None
+
+
+def tls_context():
+    """One CA-verifying TLS context per process, as httpx builds without environment trust.
+
+    Building it loads the CA bundle (milliseconds of CPU); a client per
+    provider call or catalog read otherwise repeats that work every time.
+    """
+    global _TLS_CONTEXT
+    if _TLS_CONTEXT is None:
+        _TLS_CONTEXT = httpx.create_ssl_context(trust_env=False)
+    return _TLS_CONTEXT
+
+
 @dataclass(frozen=True)
 class Chunk:
     text: str = ""
@@ -419,6 +434,7 @@ class OpenRouter:
     def client(self) -> httpx.AsyncClient:
         return httpx.AsyncClient(
             transport=self.transport,
+            verify=tls_context(),
             follow_redirects=False,
             trust_env=False,
             timeout=httpx.Timeout(30, connect=10),

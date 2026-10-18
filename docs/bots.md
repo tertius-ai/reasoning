@@ -210,6 +210,27 @@ reading topic history, writing ledger entries, and waiting for approval.
 Heartbeats preserve tool activity; the run retains its last twelve activity labels.
 Private reasoning, tool arguments, and CLI stderr are not included in activity.
 
+Each bot run exposes `timing` in the bot-run API and topic JSON; **Wait stages**
+shows it on activity cards of runs that have not succeeded and in workflow node
+details. The server stamps `enqueued_at_ms`, `claimed_at_ms` and, for a
+succeeded run, `committed_at_ms` when the reply message is written, in epoch
+milliseconds on its own clock; `queue_wait_ms` and `claim_to_commit_ms` are
+their differences. `timing.runner` holds stages reported
+by the bot's runner in whole milliseconds after it received the claim, on its own
+monotonic clock: `cli_started_ms` (CLI process spawned), `cli_ready_ms` (Codex
+`thread.started` or Claude Code `system/init`), `first_text_ms` and
+`final_text_ms` (first and last assistant-text event) and `cli_exited_ms`. The
+runner observes CLI output at its 0.2-second poll, and CLI events are whole
+messages rather than token deltas, so text stages bound when text became visible
+to the runner. `resolved_model` is the model named in Claude Code's session-start event
+and is null for Codex, whose JSON events the runner reads no model from. No
+effective reasoning effort is recorded; the requested level is the run's `effort`. Runner stages carry no text, only
+bounded integers and a model identifier. A runner sends them only to a server
+whose `/api/bot/runtime` response includes `run_timing: true`, so older servers
+never receive the field; completions from older runners, failures before a stage,
+and runs created before these fields leave stages `null`. Stages are never
+derived from the second-rounded `created_at`/`updated_at` fields.
+
 Codex uses a read-only sandbox with native shell execution disabled; Claude Code
 has no built-in tools. The only configured MCP server is Reasoning's scoped
 gateway. Before invoking either paid CLI, the runner initializes that gateway

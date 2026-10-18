@@ -610,3 +610,11 @@ MIGRATIONS += (MODEL_PREFERENCES_SCHEMA,)
 from .bot_issue_self_approval_schema import SCHEMA as BOT_ISSUE_SELF_APPROVAL_SCHEMA  # noqa: E402
 
 MIGRATIONS += (BOT_ISSUE_SELF_APPROVAL_SCHEMA,)
+
+from .inference_admission_schema import SCHEMA as INFERENCE_ADMISSION_SCHEMA  # noqa: E402
+
+MIGRATIONS += (INFERENCE_ADMISSION_SCHEMA,)
+
+from .bot_run_timing_schema import SCHEMA as BOT_RUN_TIMING_SCHEMA  # noqa: E402
+
+MIGRATIONS += (BOT_RUN_TIMING_SCHEMA,)

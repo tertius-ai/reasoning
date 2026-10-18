@@ -12,19 +12,31 @@ export function usefulChatModel(id: string, model?: ModelPrice): boolean {
     || model.supports_tools === true || model.supports_reasoning === true);
 }
 
+const catalogIndexes = new WeakMap<OrganizationPrices, Map<string, ModelPrice>>();
+
+/** A catalog entry by ID, from an index built once per catalog object (the first entry wins, as with `find`). */
+export function catalogModel(catalog: OrganizationPrices | null | undefined, id: string): ModelPrice | undefined {
+  if (!catalog) return undefined;
+  let index = catalogIndexes.get(catalog);
+  if (!index) {
+    index = new Map();
+    for (const model of catalog.models) if (!index.has(model.id)) index.set(model.id, model);
+    catalogIndexes.set(catalog, index);
+  }
+  return index.get(id);
+}
+
 export function recommendedAllowedModels(catalog: OrganizationPrices | null): ModelPrice[] {
   const allowed = new Set(catalog?.allowed_models ?? []);
-  const metadata = new Map((catalog?.models ?? []).map((model) => [model.id, model]));
   return (catalog?.recommendations?.model_ids ?? []).flatMap((id) => {
-    const model = metadata.get(id); return model && allowed.has(id) ? [model] : [];
+    const model = catalogModel(catalog, id); return model && allowed.has(id) ? [model] : [];
   });
 }
 
 export function modelOptionGroups(allowedModels: string[], catalog: OrganizationPrices | null, query = "") {
   const allowed = new Set(allowedModels);
   const matching = (id: string) => {
-    const metadata = catalog?.models.find((model) => model.id === id);
-    return chatModel(id) && (id + " " + (metadata?.name ?? "")).toLowerCase().includes(query.trim().toLowerCase());
+    return chatModel(id) && (id + " " + (catalogModel(catalog, id)?.name ?? "")).toLowerCase().includes(query.trim().toLowerCase());
   };
   const recommended = (catalog?.recommendations?.model_ids ?? []).filter((id) => allowed.has(id) && matching(id));
   const preferred = new Set(recommended);

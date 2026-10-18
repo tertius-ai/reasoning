@@ -12,6 +12,7 @@ from decimal import Decimal
 
 import httpx
 
+from .inference_timing import Spans
 from .openrouter import (
     MAX_EVENT_BYTES,
     MAX_STREAM_BYTES,
@@ -111,23 +112,36 @@ class ResearchCompletion:
         self.received_bytes = 0
         self.next_cancel_check = 0.0
         self._last_visible_finish = None
+        self.worker_spans, self._dispatch = None, None
+        self._reviewer, self._prefix = None, None
 
     def complete(self, payload, *, timeout):
+        if self.worker_spans is not None and "executor_start" not in self.worker_spans.values:
+            self.worker_spans.mark("executor_start")
+        spans = Spans("provider")
         if self.context_transform:
             payload = self.context_transform(payload)
+        spans.mark("context_transform")
         try:
-            return asyncio.run(self.submit(payload, timeout=timeout))
+            return asyncio.run(self.submit(payload, timeout=timeout, spans=spans))
         except StoreError:
             # Admission failed before a submission receipt. Earlier paid calls
             # stay in aggregate(); do not reserve or replay the refused call.
             self.failure_code = "execution_not_authorized"
             raise ProviderError(self.failure_code, no_charge=True) from None
 
-    async def submit(self, payload, *, timeout, purpose=None):
-        self.partial_usage, self.partial_generation = None, None
+    async def submit(self, payload, *, timeout, purpose=None, spans=None):
+        """``spans`` times this call's preparation; values are durations only, never request content."""
+        spans = spans or Spans("provider")
+        self.partial_usage, self.partial_generation, self._prefix = None, None, None
         messages = payload["messages"]
-        with self.inference.store.transaction() as db:
-            review = db.execute("SELECT 1 FROM mathematical_reviews WHERE reviewer_run_id=?", (self.row["id"],)).fetchone()
+        if self._reviewer is None:
+            # A reviewer run is linked to its review when it is enqueued, so one lookup serves every call.
+            with self.inference.store.transaction() as db:
+                self._reviewer = bool(
+                    db.execute("SELECT 1 FROM mathematical_reviews WHERE reviewer_run_id=?", (self.row["id"],)).fetchone()
+                )
+        review = self._reviewer
         purpose = purpose or (
             "review" if review else "continuation" if self.calls else "workflow" if self.row["context_through_sequence"] == 0 else "answer"
         )
@@ -135,12 +149,15 @@ class ResearchCompletion:
             from .research_reviews import REVIEW_PROMPT_VERSION
 
             self.prompt_version = REVIEW_PROMPT_VERSION
+        spans.mark("purpose_lookup")
         key = self.inference.execution_key(self.row)
+        spans.mark("credential_check")
         from .media_context import authorize_captured_media
 
         authorize_captured_media(self.inference.store, self.row, messages)
         if any(ord(character) < 32 or ord(character) > 126 for character in key):
             raise ProviderError("provider_key_invalid", no_charge=True)
+        spans.mark("media_check")
         tools = payload.get("tools", [])
         # Serialize the entire tool protocol into the conservative quote allowance.
         has_tool_protocol = tools or any(
@@ -160,8 +177,9 @@ class ResearchCompletion:
         reserve = self.quote.reservation(priced_context, estimated_output)
         if has_tool_protocol:
             reserve += self.quote.image_reservation(messages)
-        self._goal_admission(reserve)
-        self.inference.reserve_next_call(self.row, reserve)
+        spans.mark("quote_estimate")
+        self.inference.reserve_next_call(self.row, reserve, spans=spans, admit=lambda db: self._goal_admission(reserve, db))
+        spans.mark("reservation")
         call = self.ledger.begin_call(
             self.row,
             self.quote,
@@ -172,16 +190,12 @@ class ResearchCompletion:
             context=messages,
             reserved_microusd=reserve,
             route=self.quote.route() | {"region": (self.quote.routing or {}).get("region", "global")},
+            preparation=spans,
         )
         self.last_call_id = call
         self.stream_visible = purpose != "compaction"
-        with self.inference.store.transaction(write=True) as db:
-            self.inference._event(
-                db,
-                self.row["organization_id"],
-                self.row["id"],
-                {"type": "agent", "phase": "round", "round": len(self.responses) + 1, "purpose": purpose},
-            )
+        self._dispatch = Spans("dispatch")
+        opening = {"type": "agent", "phase": "round", "round": len(self.responses) + 1, "purpose": purpose}
         usage, generation, submitted, recorded_usage = None, None, False, False
         try:
             request = {key: value for key, value in payload.items() if key not in {"max_tokens", "stream"}}
@@ -196,11 +210,11 @@ class ResearchCompletion:
                     for key, value in request.items()
                     if key in {"model", "messages", "max_completion_tokens", "stream", "usage", "provider", "reasoning"}
                 }
-            self._save_session(request, call)
+            self._save_session(request, call, opening=opening)
+            self._dispatch.mark("request_record")
             if not tools and not hasattr(self.provider, "client"):
                 text, finish = "", None
-                with self.inference.store.transaction() as db:
-                    prefix = db.execute("SELECT output_text FROM llm_runs WHERE id=?", (self.row["id"],)).fetchone()[0]
+                prefix = self._stream_prefix()
                 submitted = True
                 first_token = False
                 async for chunk in self._checked_chunks(self.provider.stream(key, self.quote, messages, maximum)):
@@ -287,27 +301,28 @@ class ResearchCompletion:
             )
             raise ProviderError(code, no_charge=free, diagnostics=diagnostics) from None
 
-    def _goal_admission(self, reserve):
-        with self.inference.store.transaction() as db:
-            from .research_goals import ResearchGoals
+    def _goal_admission(self, reserve, db):
+        """Goal time and cost admission, inside the caller's reservation transaction."""
+        from .research_goals import ResearchGoals
 
-            goal = ResearchGoals.execution_goal(db, self.row["id"])
-            if not goal:
-                return
-            if goal["status"] not in {"active", "complete"} or goal["deadline_at"] <= int(time.time()):
-                raise StoreError(409, "goal time budget exhausted")
-            known = sum(usage.cost_microusd for usage in self.calls)
-            prior = db.execute(
-                "SELECT COALESCE(SUM(CASE WHEN r.accounting_state='settled' THEN COALESCE(r.actual_microusd,0) "
-                "WHEN r.accounting_state='released' THEN 0 ELSE r.reserved_microusd END),0) "
-                "FROM llm_runs r JOIN agent_goal_events e ON json_extract(e.event_json,'$.run_id')=r.id "
-                "WHERE e.goal_id=? AND json_extract(e.event_json,'$.type') IN ('turn','review') AND r.id<>?",
-                (goal["id"], self.row["id"]),
-            ).fetchone()[0]
-            if prior + known + reserve > goal["budget_microusd"]:
-                raise StoreError(409, "goal cost budget cannot cover this provider call")
+        goal = ResearchGoals.execution_goal(db, self.row["id"])
+        if not goal:
+            return
+        if goal["status"] not in {"active", "complete"} or goal["deadline_at"] <= int(time.time()):
+            raise StoreError(409, "goal time budget exhausted")
+        known = sum(usage.cost_microusd for usage in self.calls)
+        prior = db.execute(
+            "SELECT COALESCE(SUM(CASE WHEN r.accounting_state='settled' THEN COALESCE(r.actual_microusd,0) "
+            "WHEN r.accounting_state='released' THEN 0 ELSE r.reserved_microusd END),0) "
+            "FROM llm_runs r JOIN agent_goal_events e ON json_extract(e.event_json,'$.run_id')=r.id "
+            "WHERE e.goal_id=? AND json_extract(e.event_json,'$.type') IN ('turn','review') AND r.id<>?",
+            (goal["id"], self.row["id"]),
+        ).fetchone()[0]
+        if prior + known + reserve > goal["budget_microusd"]:
+            raise StoreError(409, "goal cost budget cannot cover this provider call")
 
-    def _save_session(self, payload, call, response=None):
+    def _save_session(self, payload, call, response=None, *, opening=None):
+        """Retain the session; ``opening`` also records the call's round event and reads the output prefix."""
         self.state_sequence += 1
         record = {
             "harness_version": HARNESS_VERSION,
@@ -320,6 +335,13 @@ class ResearchCompletion:
             "context_sha256": hashlib.sha256(encoded(payload["messages"]).encode()).hexdigest(),
         }
         with self.inference.store.transaction(write=True) as db:
+            if opening is not None:
+                self.inference._event(db, self.row["organization_id"], self.row["id"], opening)
+                if self.worker_spans is not None and opening["purpose"] != "compaction":
+                    # Claim-to-first-request worker spans, retained once with the first answer call.
+                    self.inference._event(db, self.row["organization_id"], self.row["id"],
+                                          {"type": "timing", "stage": "worker", "spans_ms": self.worker_spans.record()})
+                    self.worker_spans = None
             db.execute(
                 "INSERT INTO research_sessions VALUES(?,?,?,?,?) ON CONFLICT(run_id) "
                 "DO UPDATE SET state_json=excluded.state_json,updated_at=excluded.updated_at",
@@ -328,6 +350,8 @@ class ResearchCompletion:
             event = {"type": "agent", "phase": "provider_response" if response else "provider_request", "call_id": call}
             event["response" if response else "request"] = response if response else payload
             self.inference._event(db, self.row["organization_id"], self.row["id"], event)
+            if opening is not None:
+                self._prefix = db.execute("SELECT output_text FROM llm_runs WHERE id=?", (self.row["id"],)).fetchone()[0]
 
     def _check_cancel(self):
         now = time.monotonic()
@@ -372,6 +396,9 @@ class ResearchCompletion:
                 await asyncio.gather(pending, return_exceptions=True)
 
     def _stream_prefix(self):
+        prefix, self._prefix = self._prefix, None
+        if prefix is not None:
+            return prefix  # Read with the call's request record; only this run's stream appends to it.
         with self.inference.store.transaction() as db:
             return db.execute("SELECT output_text FROM llm_runs WHERE id=?", (self.row["id"],)).fetchone()[0]
 
@@ -391,9 +418,14 @@ class ResearchCompletion:
         if self.last_call_id is not None:
             self.ledger.first_token(self.last_call_id)
 
+    def _stream_client_ready(self):
+        if getattr(self, "_dispatch", None) is not None:
+            self._dispatch.mark("client_setup")
+
     def _stream_response_headers(self):
         if self.last_call_id is not None:
-            self.ledger.response_headers(self.last_call_id)
+            dispatch, self._dispatch = self._dispatch, None
+            self.ledger.response_headers(self.last_call_id, dispatch=dispatch.record() if dispatch else None)
 
     def _stream_summary(self, brief):
         with self.inference.store.transaction(write=True) as db:
@@ -430,8 +462,10 @@ class ResearchCompletion:
             await self._stream_summary_async(brief)
             last_summary, last_summary_flush = summary, time.monotonic()
 
+        client = self.provider.client()
+        self._stream_client_ready()
         async with (
-            self.provider.client() as client,
+            client,
             client.stream(
                 "POST",
                 self.quote.origin(self.provider.base_url) + "/chat/completions",

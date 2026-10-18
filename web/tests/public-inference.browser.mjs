@@ -119,6 +119,10 @@ for (const loss of ["network", "gateway-timeout"]) test(`shared beta responses s
     await api("/topics", { name: "Human notes", channel_id: channel.id, kind: "alpha" });
     browser = await chromium.launch({ headless: true });
     const pages = [];
+    // The member's topic event stream stays offline until the polling-recovery check below. While a stream is live
+    // the views poll only as a slow safety net, and an established stream outlives later request interception, so
+    // the connection warnings are exercised on the polling fallback.
+    let memberStreamOffline = true;
     for (const [email, name] of [["owner@example.org", "Owner"], ["member@example.org", "Member"], ["reviewer@example.org", "Reviewer"]]) {
       if (name !== "Owner") {
         const invitation = await api("/invitations", { email });
@@ -140,6 +144,7 @@ for (const loss of ["network", "gateway-timeout"]) test(`shared beta responses s
         assert.deepEqual(await page.evaluate(() => [typeof window.require, typeof window.process, typeof window.reasoningConnection]), ["undefined", "undefined", "undefined"]);
       } else page = await (await browser.newContext({ viewport: { width: 1200, height: 920 } })).newPage();
       page.on("pageerror", (error) => errors.push(error.message));
+      if (name === "Member") await page.route("**/topics/*/events", (route) => memberStreamOffline ? route.abort("failed") : route.continue());
       await page.goto(url); await page.getByLabel("Email", { exact: true }).fill(email);
       await page.getByLabel("Password", { exact: true }).fill(password); await page.getByRole("button", { name: "Sign in", exact: true }).click();
       await page.getByRole("navigation", { name: "Projects and channels" }).getByRole("button", { name: /^beta topic -Shared models\b/ }).click();
@@ -159,7 +164,7 @@ for (const loss of ["network", "gateway-timeout"]) test(`shared beta responses s
     for (const pattern of pollRoutes) await member.route(pattern, interruptPolling);
     await visible(member.getByText(/Unable to refresh agent activity; reconnecting/));
     await visible(member.getByText(/Unable to refresh research status; reconnecting/));
-    pollingOffline = false;
+    pollingOffline = false; memberStreamOffline = false;
     await until(async () => await member.getByText(/Unable to refresh .*; reconnecting/).count() === 0, "polling recovery clears connection warnings");
     for (const pattern of pollRoutes) await member.unroute(pattern, interruptPolling);
     await member.getByRole("button", { name: "Choose reply model", exact: true }).click();
@@ -231,7 +236,7 @@ for (const loss of ["network", "gateway-timeout"]) test(`shared beta responses s
     await visible(member.locator(".org-message").filter({ hasText: "One question for the default model." }));
     await member.getByRole("button", { name: "Choose reply model", exact: true }).click();
     await member.getByLabel("All chat models", { exact: true }).check();
-    await member.getByRole("radio", { name: /test\/two/ }).check();
+    await member.getByRole("radio", { name: /test\/two/ }).click();
     await member.getByRole("navigation", { name: "Projects and channels" }).getByRole("button", { name: /^alpha topic -Human notes\b/ }).click();
     await member.getByRole("navigation", { name: "Projects and channels" }).getByRole("button", { name: /^beta topic -Shared models\b/ }).click();
     await visible(member.getByRole("button", { name: "Choose reply model", exact: true }).filter({ hasText: "test/two" }));
@@ -244,7 +249,7 @@ for (const loss of ["network", "gateway-timeout"]) test(`shared beta responses s
     await visible(member.locator(".org-message").filter({ hasText: "Shared mathematics:" }).nth(1));
     await member.getByRole("button", { name: "Choose reply model", exact: true }).click();
     await member.getByLabel("All chat models", { exact: true }).check();
-    await member.getByRole("radio", { name: /test\/one/ }).check();
+    await member.getByRole("radio", { name: /test\/one/ }).click();
     await send(member, "Return to the first model.");
     await until(() => calls.length === 3, "third selected model call");
     for (const page of pages) {
@@ -254,7 +259,9 @@ for (const loss of ["network", "gateway-timeout"]) test(`shared beta responses s
       await visible(page.locator(".org-message .org-message-usage").filter({ hasText: "0.7 Wh" }).first());
       assert.ok(!(await page.locator(".org-app").innerText()).includes(key));
     }
-    assert.equal(calls.length, 3); const catalogBeforeBrowser = catalogRequests; assert.ok(catalogBeforeBrowser >= 6);
+    assert.equal(calls.length, 3); assert.ok(catalogRequests >= 6);
+    const reviewerCatalogReads = [];
+    reviewer.on("request", (sent) => { if (/\/model-(prices|benchmarks)$/.test(new URL(sent.url()).pathname)) reviewerCatalogReads.push(new URL(sent.url()).pathname); });
     await reviewer.getByRole("button", { name: "Account menu", exact: true }).click();
     await reviewer.getByRole("button", { name: "Model capabilities", exact: true }).click();
     const prices = reviewer.getByRole("dialog", { name: "Model capabilities" });
@@ -264,8 +271,12 @@ for (const loss of ["network", "gateway-timeout"]) test(`shared beta responses s
     await prices.getByLabel("Search", { exact: true }).fill("test/two");
     assert.equal(await prices.locator(".org-model-card").count(), 1);
     assert.match(await prices.locator(".org-model-card").first().innerText(), /\$1/);
+    assert.ok(!reviewerCatalogReads.some((item) => item.endsWith("/model-prices")), "opening prices reuses the topic's shared catalogue");
+    await prices.getByRole("button", { name: "Refresh catalog", exact: true }).click();
+    await until(() => reviewerCatalogReads.filter((item) => item.endsWith("/model-prices")).length === 1, "an explicit refresh fetches the catalogue");
+    await visible(prices.locator(".org-model-card").filter({ hasText: "test/two" }));
     await prices.getByRole("button", { name: "Close dialog" }).click();
-    assert.equal(calls.length, 3); assert.ok(catalogRequests >= catalogBeforeBrowser + 1, "opening prices refreshes the catalogue alongside ordinary polling");
+    assert.equal(calls.length, 3);
     await reviewer.getByRole("button", { name: "Account menu", exact: true }).click();
     await reviewer.getByRole("button", { name: "Usage and energy", exact: true }).click();
     const memberUsage = reviewer.getByRole("dialog", { name: "Usage and energy" });
@@ -278,7 +289,7 @@ for (const loss of ["network", "gateway-timeout"]) test(`shared beta responses s
     assert.match(await memberUsage.innerText(), /Energy covers 3\/3 calls, including 1 reference scenarios/);
     await memberUsage.getByRole("button", { name: "Close dialog" }).click();
     await member.getByRole("button", { name: "Choose reply model", exact: true }).click();
-    await member.getByRole("radio", { name: /test\/slow/ }).check();
+    await member.getByRole("radio", { name: /test\/slow/ }).click();
     await send(member, "Start a cancellable response.");
     await visible(member.getByLabel("Streaming response from test/slow"));
     await member.evaluate(id => window.dispatchEvent(new CustomEvent("reasoning-topic-command", { detail: { topicId: id, command: "stop" } })), topic.id);

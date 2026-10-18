@@ -181,7 +181,7 @@ test("ordinary beta conversation delegates, streams roles and integrates without
     assert.equal(await final.locator(".chat-reactor-initials").textContent(), "O");
     assert.equal(await final.locator(".chat-reactor-initials").getAttribute("title"), "Owner");
     await page.getByRole("button", { name: "Choose reply model", exact: true }).click();
-    await page.getByRole("radio", { name: "fixture/new", exact: true }).check();
+    await page.getByRole("radio", { name: "fixture/new", exact: true }).click();
     const sourceId = await page.locator("article.org-message").filter({ hasText: "Please compare two approaches and consult a librarian and critic." }).getAttribute("id");
     const source = page.locator("#" + sourceId);
     await source.hover(); await source.getByLabel("Message actions", { exact: true }).click();

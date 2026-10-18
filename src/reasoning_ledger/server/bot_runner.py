@@ -5,7 +5,9 @@ Copyright Benjamin Antieau and Deven Manam. SPDX-License-Identifier: Apache-2.0
 
 from __future__ import annotations
 
+import inspect
 import json
+import time
 from contextlib import suppress
 from pathlib import Path
 
@@ -55,6 +57,17 @@ def topic_workspace(root, run):
     return path
 
 
+def runner_stages(stamps, claimed):
+    """Whole milliseconds from the claim's receipt, on this runner's monotonic clock; unobserved stages stay null."""
+    def elapsed(key):
+        value = stamps.get(key)
+        return min(86_400_000, max(0, round((value - claimed) * 1000))) if isinstance(value, float) else None
+
+    return {"cli_started_ms": elapsed("cli_started"), "cli_ready_ms": elapsed("cli_ready"),
+            "first_text_ms": elapsed("first_text"), "final_text_ms": elapsed("final_text"),
+            "cli_exited_ms": elapsed("cli_exited"), "resolved_model": stamps.get("model")}
+
+
 def runtime_step(client, directory, configuration, agent, binding, *, runner=invoke, on_activity=None, on_status=None):
     journal = directory / "runtime-runner.json"
     state = read_journal(journal) if journal.exists() else {"format": 1, "binding": binding, "pending": None, "cursor": 0}
@@ -70,6 +83,11 @@ def runtime_step(client, directory, configuration, agent, binding, *, runner=inv
     # A server with mention feedback records a visible refusal for requesters this policy excludes.
     # Older servers would reject those mentions, so the runner then keeps skipping them locally.
     feedback = isinstance(advertised, dict) and advertised.get("mention_feedback") is True
+    # Only a server that advertises run timing accepts a completion's timing field.
+    reports_timing = isinstance(advertised, dict) and advertised.get("run_timing") is True
+
+    def with_timing(completion, stages):
+        return {**completion, "timing": stages} if reports_timing and stages else completion
     pending = state["pending"]
     if pending:
         if pending["phase"] == "approval_interrupted":
@@ -86,7 +104,7 @@ def runtime_step(client, directory, configuration, agent, binding, *, runner=inv
         completion = {"lease": pending["run"]["lease"], "status": "succeeded", "output": pending["text"]} \
             if pending["phase"] == "reply_ready" else {"lease": pending["run"]["lease"], "status": "failed",
                                                        "error": "gateway_not_attached"}
-        client._request("POST", f"/api/bot/runs/{pending['run']['id']}/finish", completion)
+        client._request("POST", f"/api/bot/runs/{pending['run']['id']}/finish", with_timing(completion, pending.get("timing")))
         state["pending"] = None
         write_journal(journal, state)
         return {"replied": pending["phase"] == "reply_ready", "cursor": state["cursor"]}
@@ -98,6 +116,7 @@ def runtime_step(client, directory, configuration, agent, binding, *, runner=inv
         state["cursor"] = message["sequence"]
         write_journal(journal, state, new=not journal.exists())
     run = client._request("POST", "/api/bot/runs/claim")
+    claimed, stamps = time.monotonic(), {}
     if run is None:
         return {"replied": False, "cursor": state["cursor"]}
     if on_activity:
@@ -155,14 +174,17 @@ def runtime_step(client, directory, configuration, agent, binding, *, runner=inv
         if runner is invoke:
             options["progress"] = activity
             options["effort"] = run.get("effort")
+        if runner is invoke or "timing" in inspect.signature(runner).parameters:
+            options["timing"] = stamps
         result = runner(agent["engine"], workspace, prompt, False, None, **options)
+        stages = runner_stages(stamps, claimed)
         if runner is invoke:
             attached = client._request("POST", f"/api/bot/runs/{run['id']}/context", {"lease": run["lease"]})
             if attached.get("gateway", {}).get("stage") != "cli":
-                state["pending"] = {"phase": "failure_ready", "run": retained_run}
+                state["pending"] = {"phase": "failure_ready", "run": retained_run, "timing": stages}
                 write_journal(journal, state)
-                client._request("POST", f"/api/bot/runs/{run['id']}/finish", {"lease": run["lease"], "status": "failed",
-                                 "error": "gateway_not_attached"})
+                client._request("POST", f"/api/bot/runs/{run['id']}/finish", with_timing(
+                    {"lease": run["lease"], "status": "failed", "error": "gateway_not_attached"}, stages))
                 state["pending"] = None
                 write_journal(journal, state)
                 return {"replied": False, "cursor": state["cursor"], "error": "gateway_not_attached"}
@@ -171,9 +193,10 @@ def runtime_step(client, directory, configuration, agent, binding, *, runner=inv
 
         # Never echo stderr, command output or credentials into an error. The local invocation stays retained.
         with suppress(BotClientError):
-            receipt = client._request("POST", f"/api/bot/runs/{run['id']}/finish", {"lease": run["lease"],
+            receipt = client._request("POST", f"/api/bot/runs/{run['id']}/finish", with_timing({"lease": run["lease"],
                              "status": "failed" if isinstance(exc, BotGatewayError) else "outcome_unknown",
-                             "error": "gateway_unavailable" if isinstance(exc, BotGatewayError) else "cli_failed"})
+                             "error": "gateway_unavailable" if isinstance(exc, BotGatewayError) else "cli_failed"},
+                             runner_stages(stamps, claimed)))
             if receipt.get("error_code") == "approval_transport_ended":
                 state["pending"] = {"phase": "approval_interrupted", "run": retained_run}
                 write_journal(journal, state)
@@ -181,7 +204,8 @@ def runtime_step(client, directory, configuration, agent, binding, *, runner=inv
             state["pending"] = None
             write_journal(journal, state)
         raise
-    state["pending"] = {"phase": "reply_ready", "run": retained_run, "text": result["text"], "session": result.get("session")}
+    state["pending"] = {"phase": "reply_ready", "run": retained_run, "text": result["text"], "session": result.get("session"),
+                        "timing": stages}
     write_journal(journal, state)
     return runtime_step(client, directory, configuration, agent, binding, runner=runner,
                         on_activity=on_activity, on_status=on_status)

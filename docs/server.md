@@ -417,6 +417,7 @@ Use the prefix `/api/organizations/{organization_id}` for organization resources
 | `{prefix}/projects/{project_id}/members/{member_id}` | PUT, DELETE | Private-project owner/member assignment and removal |
 | `{prefix}/topics/{topic_id}/messages` | GET, POST | History and message submission |
 | `{prefix}/topics/{topic_id}/message-updates` | GET | Incremental edited-message updates with a revision-event cursor |
+| `{prefix}/topics/{topic_id}/events` | GET | Server-Sent Events: message watermarks and run, agent, goal and bot-invocation changes for one readable topic |
 | `{prefix}/topics/{topic_id}/messages/{message_id}` | PATCH | Human author's optimistic edit with the current revision |
 | `{prefix}/topics/{topic_id}/messages/{message_id}/history` | GET | Authorized immutable original and edited versions |
 | `{prefix}/topics/{topic_id}/subscription` | PUT | Current member's topic following preference |
@@ -505,6 +506,44 @@ Mention syntax is `@[user_id]`; only current members of the same organization
 receive mention records. Removing a membership clears its preferences and
 mention records without deleting account or message history.
 
+### Topic event stream
+
+`GET {prefix}/topics/{topic_id}/events` returns `text/event-stream` for a signed-in
+member who can read the topic (session cookie without CSRF, or bearer). Unreadable
+or absent topics return 404 before streaming. The response keeps the application's
+security headers with `Cache-Control: no-store, no-transform` and
+`X-Accel-Buffering: no`, so compressing or buffering proxies pass events through.
+Events, each a JSON `data` line:
+
+| Event | Data |
+| --- | --- |
+| `ready` | `heartbeat_ms` and the topic's `channels`; sent first |
+| `messages` | `{"sequence", "updates"}`: the latest message sequence and message-revision sequence |
+| `runs` | Beta only: `{"order": [run IDs], "runs": [changed runs]}`, in the `inference-runs` shape; a run whose output only grew carries `output_append` instead of `output_text` |
+| `agents`, `goal` | Beta only: the `agents` and `goal` responses, when they change |
+| `bot-runs` | The `bot-runs` response, when it changes |
+| `end` | `{"reason"}`: `lifetime`, `shutdown`, `access` or `session`; the server then closes the stream |
+
+A connection starts with every channel, so a reconnect needs no server-side
+history: the browser compares the message watermarks with its own message and edit
+cursors and fetches exactly the missing range with `messages?after=` and
+`message-updates?after=`, and run patches apply only to runs sent on the same
+connection. Within one change, `messages` precedes the `runs` event that links a
+finished run to its message. One watcher per topic and server process reads a
+content-free change signature (latest message and revision sequences, recent run,
+event and call-receipt markers, agent threads, goal and bot invocations) every 250
+ms while work is active and every second otherwise, and at once after any
+successful write through the server. When a signature changes, each stream
+re-reads that channel through the same access-checked reads as the REST routes.
+Streams send a comment every 15 seconds when otherwise silent, re-check the
+session and topic access every 30 seconds, and end after 10 minutes. A process
+admits at most 256 streams and 8 per account (more return 429). Streams hold no
+worker thread while waiting; their database reads run under their own concurrency
+limits (four signature reads and eight stream reads at a time), not the limit shared
+by ordinary requests. On SIGINT/SIGTERM streams end
+within about a second, so shutdown does not wait for them. `serve --no-topic-events`
+disables the route (503); browsers then keep polling.
+
 Search uses `q` (1–200 characters), with a limit of 1–100 (default 50). It searches
 message content literally, including percent and underscore characters, and
 returns the latest matches with project/channel/topic context. It cannot search
@@ -585,6 +624,17 @@ A message's Markdown and KaTeX output is rendered again only when its displayed
 text changes; refreshes that return no change, composer typing, and model-menu
 updates reuse the rendered transcript.
 
+An open topic holds one event stream (see [topic event stream](#topic-event-stream)),
+shared by its transcript, agent activity and bot invocations. While it is live,
+those views apply its events directly and poll only every 30 seconds as a safety
+net, discarding a poll result if an event arrived after that poll started; a newer
+message watermark makes the transcript fetch the missing messages and edits at once.
+A refused, broken or silent stream (no `ready` within 10 seconds, or no bytes for
+three heartbeats) returns the views to the polling below at once and is retried
+with backoff from one second to one minute; a refusal or an `access`/`session` end
+waits a minute, so polling reports the lost session or access. A scheduled end
+reconnects within a second without leaving the live state. A hidden tab closes its
+stream after a minute and reopens it when visible.
 Visible-tab message polling uses an exclusive sequence cursor every two seconds
 and retries after a network failure. The topic hierarchy (including unread state)
 refreshes every four seconds; members and the organization list refresh with every
@@ -595,10 +645,12 @@ previous request to finish before scheduling another.
 Activity views slow down while their work is idle and return to their active cadence
 when work appears or the transcript gains a message: beta agent activity (runs,
 agent threads, goal) every second, then up to five seconds; research proposals,
-tool receipts and reviews every 2.5 seconds, then up to ten; topic bot invocations
+tool receipt summaries and reviews every 2.5 seconds, then up to ten; topic bot invocations
 every two seconds, then up to eight; topic compute jobs every two seconds, then up
-to ten; and a finished compute job's log and artifacts up to thirty. Each slows only
-after three quiet refreshes (one for a finished compute job). Compute images, policy
+to ten; a finished compute job's log and artifacts up to thirty; and, while
+**People** is open, the owner's pending bot approvals every three seconds, then up
+to fifteen while none are pending. Each slows only after three quiet refreshes (one
+for a finished compute job). Compute images, policy
 and CPU balance load only while the submission dialog is open. The composer's model
 configuration refreshes every ten seconds and topic bot models every five (beta) or
 ten seconds; the server re-checks policy, membership and admission when a request is
@@ -610,11 +662,17 @@ or topic bot models use one response, and a recent response is reused within a
 short per-view window (at most a few seconds). The public model catalog
 (`model-prices`) and model benchmarks are shared for five minutes across topics and
 dialogs; "Refresh catalog" fetches them again. Any write invalidates shared reads;
-the catalog and benchmarks survive only writes within a topic. The eight most
+the catalog and benchmarks survive only writes within a topic. Read-only
+mathematics operations sent with `POST /mathematics` (for example the
+Bibliography's `ledger_references`) are not writes and invalidate nothing. The eight most
 recently viewed topics keep their loaded messages and message/edit cursors in
 memory: revisiting one shows them at once while the poll fetches only newer
 messages and edits, and a 403 or 404 discards the snapshot (and its displayed
-messages if not yet revalidated). Shared reads and topic snapshots are cleared on
+messages if not yet revalidated). The eight most recently viewed beta topics also keep,
+per account, their five newest tool receipt summaries and receipt cursor: a revisit
+shows them at once and requests only receipts created since the oldest one still
+running (or since the newest one), and a 403 or 404 discards them. A receipt's
+arguments and result are read only when it is opened. Shared reads and topic snapshots are cleared on
 sign-out and session loss, and failures are never reused. Sending, model requests
 and other spending actions are checked by the server when they are made.
 Startup loads health and session state concurrently; an authenticated session can
@@ -674,8 +732,12 @@ mathematical records, versioned text files, independent review results, persiste
 goal limits, exact prompt/context evidence, grants, and proposed paid executions.
 Ordinary typed research writes save automatically; authors cannot self-certify.
 See [research workbench](research-workbench.md).
-Model progress polls every second and follows its triggering message in the
-transcript, including requests made in the same second. Play and stop control
+Model progress arrives through the topic event stream, or without it polls every
+second, and follows its triggering message in the transcript, including requests
+made in the same second. Run output is applied as soon as its event or read returns; the agent-thread and goal reads that decide controls and
+cadence are applied separately and never delay the next run read. A finished run
+stays expanded until the transcript shows its reply message, and the transcript
+refreshes at once when such a reply is missing. Play and stop control
 retained agent continuations without a separate agent-status banner; failures
 and uncertain charges remain available in their run records. Finished and partial
 replies become topic messages labeled with their model, not their requester.

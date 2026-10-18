@@ -37,6 +37,29 @@ def tool_activity(name):
     return "using_tools"
 
 
+def cli_stage(event):
+    """Session-ready or visible-text markers of the CLI protocols, and a reported model; never text content."""
+    if not isinstance(event, dict):
+        return None, None
+    kind, item = event.get("type"), event.get("item")
+    if kind == "thread.started":
+        return "ready", None
+    if kind == "system" and event.get("subtype") == "init":
+        model = event.get("model")
+        from .bot_runtime import MODEL
+
+        return "ready", model if isinstance(model, str) and MODEL.fullmatch(model) else None
+    if (kind in {"item.started", "item.updated", "item.completed"} and isinstance(item, dict)
+            and item.get("type") == "agent_message" and isinstance(item.get("text"), str) and item["text"]):
+        return "text", None
+    message = event.get("message") if kind == "assistant" else None
+    if isinstance(message, dict) and isinstance(message.get("content"), list) and any(
+            isinstance(block, dict) and block.get("type") == "text" and isinstance(block.get("text"), str) and block["text"]
+            for block in message["content"]):
+        return "text", None
+    return None, None
+
+
 def cli_activity(event):
     """Recognize public protocol events without forwarding their free-form fields."""
     if not isinstance(event, dict):

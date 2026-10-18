@@ -360,8 +360,12 @@ Under `/api/organizations/{organization_id}/topics/{topic_id}`:
 - `PATCH /goal/{goal_id}` selects `active`, `paused` or `cancelled`.
 - `GET /research-proposals` lists proposed actions; `POST /research-proposals/{id}`
   with `approve` records the human decision and runs an approved action.
-- `GET /research-tools` and `GET /research-tools/{receipt_id}` expose authorized
-  tool receipts with exact arguments and results.
+- `GET /research-tools` lists up to 50 of the topic's newest tool receipts
+  created at or after `after` (seconds, inclusive), with exact arguments and
+  results. With `summary=1` each row is only `id`, `name`, `status`,
+  `created_at` and `finished_at`; the web interface polls this form.
+  `GET /research-tools/{receipt_id}` returns one receipt with exact arguments and
+  results. Both require read access to the topic.
 
 `GET /api/organizations/{organization_id}/inference-configuration` returns
 current catalog model choices (the compatibility field `allowed_models`),
@@ -379,8 +383,10 @@ two concurrent turns and a 1,800-second execution timeout per turn. A private ex
 file lock prevents a second executor from using the same installation. Queues,
 attempt fencing, text deltas, terminal state, and assistant messages are stored
 in SQLite. Provider SSE is incrementally decoded, including split UTF-8 chunks;
-the browser polls durable state every second rather than maintaining a separate
-browser-to-provider connection. Provider input is bounded to 64 MiB per stream,
+the browser receives durable state through its
+[topic event stream](server.md#topic-event-stream), or polls it every second when
+the stream is unavailable, rather than maintaining a separate browser-to-provider
+connection. Provider input is bounded to 64 MiB per stream,
 2 MiB per event/line, and 2,000,000 accumulated output characters.
 The provider stream is the single writer of cumulative visible output, including
 progress accompanying tool calls. Final-answer events do not replace that prefix.
@@ -493,7 +499,14 @@ seconds. Membership and organization settings are checked on every request.
 Inference admission fetches current availability and prices independently of
 this display cache. The browser shares one copy of the catalog across topics and
 dialogs for five minutes ("Refresh catalog" fetches it again), and a model's
-detailed capabilities are built only when its row is first expanded.
+detailed capabilities are built only when its row is first expanded. A model
+picker mounts its search and rows only while it is open, and composer edits do
+not re-render the reply picker. Opening a picker or the capabilities browser
+mounts 40 rows at once and another 40 per tick until the list is complete, so
+no single task mounts the whole list. Lists are not windowed, so find in
+page, Tab order, radio-group arrow keys and screen readers reach every row once
+it has mounted. Favorites are read once for all mounted pickers and again when
+the window regains focus.
 
 The browser and model pickers share compact expandable rows. Topic selection
 pickers are alphabetized within **Best for math**, **Best open-weights**, and
@@ -595,6 +608,29 @@ context preparation, provider waiting/streaming, and tool execution. Missing
 historical measurements remain null. Timing does not change routing policy or
 retry paid requests; compare identical prompts and effort under different
 routing strategies before attributing model slowness to cheapest routing.
+
+`timing.spans_ms` attributes admission and preparation to named spans, defined
+in `SPANS` in `server/inference_timing.py`. Each span is the elapsed time in
+milliseconds, on the measuring process's monotonic clock, from the previous span
+of its stage to the end of this one. Spans record names and durations only,
+never prompts, context, credentials, tool arguments or answers, and are read
+back only through that vocabulary. Four stages are retained:
+
+| Stage | Interval | Retained in |
+| --- | --- | --- |
+| `admission` | Authenticated API request: access/replay/key check, catalog quote, admission transaction and credit lock, access recheck, limits, context compilation, reservation, ledger inserts | A `timing` run event committed with the request |
+| `worker` | Claim handoff through the executor's first provider request: snapshot read, tool permissions, compaction when it runs, tool preparation, goal lookup, executor setup/start | A `timing` run event written with the first answer call |
+| `provider` | One call's preparation before its header records the call start: context transform, purpose lookup, credential check, media check, quote estimate, reservation lock and goal admission, reservation, call-ledger lock and header | The call's submission and completion receipts (`preparation_ms`) |
+| `dispatch` | After the call start: request record (round event, session, output prefix) and HTTP client setup | The call's response-arrival and completion receipts (`dispatch_ms`) |
+
+The run view reports the first call's provider and dispatch spans; inference
+call details and topic JSON carry every call's spans. The worker can claim a
+run before its HTTP response is delivered, and the request also spends time in
+authentication and response serialization outside the spans, so stage totals
+are not added to each other or to HTTP latency.
+Internally enqueued runs (agents, reviews, workflows) start their admission
+spans inside the caller's transaction. Runs or calls admitted before this
+instrumentation, and calls that fail before a stage is reached, report `null`.
 Cache, reasoning, total, and tool-token counts remain unknown when the provider
 does not report them. Accounting reconciliation appends a new receipt while
 preserving the original charge evidence. The database rejects updates and

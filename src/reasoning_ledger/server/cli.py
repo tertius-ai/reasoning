@@ -135,6 +135,8 @@ def main(argv: list[str] | None = None) -> int:
     serve.add_argument("--port", type=int, default=8766)
     serve.add_argument("--frontend-dir", type=Path, help="built web/dist directory for the organization chat interface")
     serve.add_argument("--no-inference-worker", action="store_true", help="disable LLM submission and execution on this installation")
+    serve.add_argument("--no-topic-events", action="store_true",
+                       help="disable per-topic browser event streams; the browser keeps polling")
     serve.add_argument("--agent-concurrency", type=int, default=8, help="simultaneous native topic agents (1–256; default 8)")
     serve.add_argument("--compute-images", type=Path, help="operator-approved digest-pinned compute image catalog")
     serve.add_argument("--mail-config", type=Path, help="private mail configuration; defaults to DATA_DIR/mail.json if present")
@@ -291,6 +293,7 @@ def main(argv: list[str] | None = None) -> int:
                 mail,
                 args.deployment_release,
                 args.agent_concurrency,
+                not args.no_topic_events,
             )
             # Only the host-local reverse proxy can supply forwarded client IPs.
             # All application origin checks use public-url, not forwarded headers.

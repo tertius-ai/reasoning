@@ -167,10 +167,10 @@ test('local hot-reload workflow signs in, streams a simulated beta answer, and c
     assert.ok(full.captured_contexts.length && full.runs[0].latest_session);
     await page.getByRole('button', { name: 'Choose reply model', exact: true }).click();
     const picker = page.locator('.org-shared-model-picker[open]');
-    await picker.getByRole('radio', { name: 'development/slow', exact: true }).check();
+    await picker.getByRole('radio', { name: 'development/slow', exact: true }).click();
     assert.ok(await page.getByRole('button', { name: 'Choose reply model', exact: true }).filter({ hasText: 'development/slow' }).isVisible());
     await page.getByRole('button', { name: 'Choose reply model', exact: true }).click();
-    await picker.getByRole('radio', { name: 'development/fast', exact: true }).check();
+    await picker.getByRole('radio', { name: 'development/fast', exact: true }).click();
     await command('goal');
     await page.getByRole('button', { name: 'Goal model', exact: true }).click();
     assert.ok(await page.getByRole('dialog', { name: 'Start a research goal' }).locator('.org-model-line').first().isVisible());

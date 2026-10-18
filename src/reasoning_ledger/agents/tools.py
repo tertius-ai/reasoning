@@ -24,6 +24,30 @@ class ToolRegistryError(ValueError):
     """A tool definition, grant, or invocation is invalid."""
 
 
+# Canonical JSON of schemas that already passed the metaschema check. Tool
+# registries are rebuilt for every run with the same schemas; a schema whose
+# exact content was validated once is not revalidated. Failures are not cached.
+_CHECKED_SCHEMAS: set[str] = set()
+_CHECKED_LOCK = threading.Lock()
+_CHECKED_LIMIT = 4096
+
+
+def check_schema(schema: dict[str, Any]) -> None:
+    try:
+        identity = json.dumps(schema, sort_keys=True, separators=(",", ":"), allow_nan=False)
+    except (TypeError, ValueError):
+        Draft202012Validator.check_schema(schema)
+        return
+    with _CHECKED_LOCK:
+        if identity in _CHECKED_SCHEMAS:
+            return
+    Draft202012Validator.check_schema(schema)
+    with _CHECKED_LOCK:
+        if len(_CHECKED_SCHEMAS) >= _CHECKED_LIMIT:
+            _CHECKED_SCHEMAS.clear()
+        _CHECKED_SCHEMAS.add(identity)
+
+
 @dataclass(frozen=True)
 class ToolDefinition:
     name: str
@@ -44,9 +68,9 @@ class ToolDefinition:
             raise ToolRegistryError(
                 f"tool risk must be one of {', '.join(TOOL_RISKS)}"
             )
-        Draft202012Validator.check_schema(self.input_schema)
+        check_schema(self.input_schema)
         if self.output_schema:
-            Draft202012Validator.check_schema(self.output_schema)
+            check_schema(self.output_schema)
 
 
 @dataclass(frozen=True)

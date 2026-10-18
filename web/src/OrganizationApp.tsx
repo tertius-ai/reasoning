@@ -1,4 +1,5 @@
-import { schedulePoll } from "./polling";
+import { schedulePoll, startPolling } from "./polling";
+import { LIVE_SAFETY_POLL_MS, subscribeTopicEvents } from "./topicEvents";
 import React, { lazy, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import ReactMarkdown, { Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -21,7 +22,7 @@ import { WorkflowExecutionAttempt } from "./workflow-run-api";
 import { ComputeAttempt } from "./compute-api";
 import { MessageUsageDetails } from "./MessageUsageDetails";
 import { normalizeMathDelimiters } from "./markdownMath";
-import { modelOptionGroups } from "./modelRecommendations";
+import { catalogModel, modelOptionGroups } from "./modelRecommendations";
 import { ModelPicker, compactTokens } from "./ModelBrowser";
 import { ResearchControls, RESEARCH_TOOLS, ResearchTool, TOOL_LABELS, goalCommand } from "./ResearchControls";
 import { TopicCopyButton, TopicSystemPrompt } from "./TopicDiagnostics";
@@ -528,13 +529,13 @@ function OrganizationCreationDialog({ organizations, onClose, onCreate }: {
   </form></Dialog>;
 }
 
-export function BetaModelMenu({ configuration, catalog, selected, tools, disabled, error, onSelect, effort = "", onEffortChange }: {
+/** Memoized: composer edits re-render the conversation, but leave the reply picker untouched unless its props change. */
+export const BetaModelMenu = React.memo(function BetaModelMenu({ configuration, catalog, selected, tools, disabled, error, onSelect, effort = "", onEffortChange }: {
   configuration: Pick<InferenceConfiguration, "allowed_models"> | null; catalog: OrganizationPrices | null; selected: string; disabled: boolean;
   tools: KnowledgeTool[]; error: string; onSelect: (model: string) => void;
   effort?: string; onEffortChange?: (effort: string) => void;
 }) {
-  const metadata = catalog?.models.find((model) => model.id === selected);
-  const maximum = metadata?.max_completion_tokens ?? 8192;
+  const maximum = catalogModel(catalog, selected)?.max_completion_tokens ?? 8192;
   const sourceLabels = tools.map((tool) => tool === "journal" ? "journal" : tool === "workflows" ? "workflows" : tool);
   return <ModelPicker label="Choose reply model" models={configuration?.allowed_models ?? []} catalog={catalog} value={selected}
     onChange={onSelect} effort={effort} onEffortChange={onEffortChange} disabled={disabled}>
@@ -547,7 +548,7 @@ export function BetaModelMenu({ configuration, catalog, selected, tools, disable
         <details><summary>Details</summary><p>The selected model receives this topic through your new message, research memory, and granted sources. Tools can recover earlier context. Inspect context in research settings for the exact input.</p></details>
       </section>
   </ModelPicker>;
-}
+});
 
 export function peopleWithBots(presence: Presence | null) {
   return (presence?.humans ?? []).map(person => ({ ...person,
@@ -645,7 +646,7 @@ function Conversation({ organizationId, topic, members, user, canWrite, canManag
   const [effort, setEffort] = useState("");
   useEffect(() => { const initial = selectedModel === topic.default_model ? topic.default_effort ?? "" : "";
     try { setEffort(localStorage.getItem(effortKey) ?? initial); } catch { setEffort(initial); } }, [effortKey, topic.default_effort, topic.default_model]);
-  const chooseEffort = (value: string) => { setEffort(value); try { localStorage.setItem(effortKey, value); } catch { /* Optional storage. */ } };
+  const chooseEffort = useCallback((value: string) => { setEffort(value); try { localStorage.setItem(effortKey, value); } catch { /* Optional storage. */ } }, [effortKey]);
   const selectedEffort = availableEfforts(replyCatalog, selectedModel).includes(effort) ? effort : null;
   const [promptRevision, setPromptRevision] = useState(0);
   useEffect(() => { try { if (selectedModel) localStorage.setItem(modelStorageKey, selectedModel); } catch { /* Storage is optional. */ } }, [modelStorageKey, selectedModel]);
@@ -790,9 +791,16 @@ function Conversation({ organizationId, topic, members, user, canWrite, canManag
     return () => { controller.abort(); clearTimeout(timer); };
   }, [root, topic.kind]);
 
+  const messagePoller = useRef<{ wake(): void } | null>(null);
+  const refreshMessages = useCallback(() => messagePoller.current?.wake(), []);
   useEffect(() => {
-    const controller = new AbortController(); let timer: ReturnType<typeof setTimeout>;
-    const poll = async () => {
+    const controller = new AbortController();
+    // While the topic event stream is live, it announces new messages and edits by their latest sequences; the
+    // poll then fetches exactly what is missing from its cursors, and otherwise runs only as a slow safety net.
+    let live = false, loaded = false, watermark = { sequence: 0, updates: 0 };
+    const behind = () => watermark.sequence > cursor.current || watermark.updates > editCursor.current;
+    const poll = async (): Promise<number | null> => {
+      const before = [cursor.current, editCursor.current];
       try {
         const query = cursor.current ? `after=${cursor.current}&limit=200` : `before=${anchor === null ? Number.MAX_SAFE_INTEGER : anchor + 1}&limit=100`;
         const [incoming, updates] = await Promise.all([
@@ -804,7 +812,7 @@ function Conversation({ organizationId, topic, members, user, canWrite, canManag
           }),
           request<{ after: number; messages: Message[] }>(root + "/message-updates?after=" + editCursor.current, { signal: controller.signal }),
         ]);
-        if (controller.signal.aborted) return;
+        if (controller.signal.aborted) return null;
         if (!updates || !Array.isArray(updates.messages) || !Number.isSafeInteger(updates.after) || updates.after < editCursor.current)
           throw new Error("Invalid message update response; reconnecting.");
         if (!cursor.current) setOlder(incoming.length === 100);
@@ -812,25 +820,34 @@ function Conversation({ organizationId, topic, members, user, canWrite, canManag
         editCursor.current = updates.after;
         setMessages((existing) => mergeMessages(mergeMessages(existing, incoming), updates.messages.filter(message =>
           existing.some(prior => prior.id === message.id) || incoming.some(prior => prior.id === message.id))));
-        setOnline(true); setLoading(false); revalidated.current = true;
+        setOnline(true); setLoading(false); revalidated.current = true; loaded = true;
         if (incoming.some((message) => message.client_id === currentDraft.current.clientId && message.author_id === user.id)) {
           updateDraft(newDraft()); setError("");
         }
+        if (behind() && (cursor.current !== before[0] || editCursor.current !== before[1])) return 0;
       } catch (cause) {
-        if (aborted(cause)) return;
-        if (cause instanceof ApiError && cause.status === 401) { onAuthLost(); return; }
+        if (aborted(cause)) return null;
+        if (cause instanceof ApiError && cause.status === 401) { onAuthLost(); return null; }
         // A topic that is no longer readable must not be shown again from memory.
         if (cause instanceof ApiError && (cause.status === 403 || cause.status === 404)) {
           retained.current.failed = true; if (snapshotKey) rememberTopicSnapshot(snapshotKey, null);
           if (!revalidated.current) setMessages([]);
         }
         setOnline(false); setError(errorMessage(cause)); setLoading(false);
+        return 2000;
       }
-      if (!controller.signal.aborted) timer = schedulePoll(poll, 2000, controller.signal);
+      return live ? LIVE_SAFETY_POLL_MS : 2000;
     };
-    void poll();
-    return () => { controller.abort(); clearTimeout(timer); };
-  }, [root, anchor, user.id, onAuthLost]);
+    const poller = startPolling(poll, controller.signal);
+    messagePoller.current = poller;
+    const unsubscribe = subscribeTopicEvents(organizationId, topic.id, {
+      // Losing the stream resumes the ordinary cadence at once; becoming live waits for the announced sequences.
+      status: status => { const next = status === "live"; if (live && !next && loaded) poller.wake(); live = next; },
+      messages: value => { watermark = value; if (loaded && behind()) poller.wake(); },
+    });
+    return () => { unsubscribe(); controller.abort(); messagePoller.current = null; };
+  }, [root, anchor, user.id, onAuthLost, organizationId, topic.id]);
+  const transcript = useMemo(() => ({ ids: new Set(messages.map(message => message.id)), from: messages[0]?.sequence ?? Infinity }), [messages]);
 
   useEffect(() => {
     if (bottom.current && viewport.current && !document.querySelector(".chat-action-menu") && !window.getSelection()?.toString())
@@ -995,7 +1012,8 @@ function Conversation({ organizationId, topic, members, user, canWrite, canManag
         .map(item => <div key={item.id} data-activity-id={item.id}>{item.body}</div>)}
       {topic.kind === "beta" && <BetaConversation organizationId={organizationId} topicId={topic.id} userId={user.id}
         canWrite={canWrite} canManage={canManage} online={online} toolbarTarget={composerTools} hidePlay={Boolean(draft.text.trim())}
-        attempt={modelAttempt} onAttempt={onModelAttempt} onAuthLost={onAuthLost} onActivity={setBetaActivity} wake={messages.at(-1)?.sequence} />}
+        attempt={modelAttempt} onAttempt={onModelAttempt} onAuthLost={onAuthLost} onActivity={setBetaActivity} wake={messages.at(-1)?.sequence}
+        transcript={transcript} onReplyPending={refreshMessages} />}
       <BotConversation organizationId={organizationId} topicId={topic.id} names={botNames} userId={user.id}
         canWrite={canWrite} canManage={canManage} onActivity={setBotActivity} onAuthLost={onAuthLost} wake={messages.at(-1)?.sequence} />
 
@@ -1025,8 +1043,8 @@ function Conversation({ organizationId, topic, members, user, canWrite, canManag
       <textarea id="org-message" ref={textarea} placeholder={!canWrite ? "You have read-only access" : topic.kind === "beta" && modelAttempt
         ? modelAttempt.unconfirmed ? "Retry or dismiss the unconfirmed reply request before sending another message"
           : "Sending the reply request…" : topic.kind === "beta" && selectedModel
-      ? `Message ${replyCatalog?.models.find(model => model.id === selectedModel)?.execution_source === "bot"
-        ? replyCatalog.models.find(model => model.id === selectedModel)?.name : selectedModel}…` : "Write a message…"} value={draft.text}
+      ? `Message ${catalogModel(replyCatalog, selectedModel)?.execution_source === "bot"
+        ? catalogModel(replyCatalog, selectedModel)?.name : selectedModel}…` : "Write a message…"} value={draft.text}
         disabled={!canWrite || sending || (topic.kind === "beta" && !!modelAttempt)} maxLength={16000} rows={1} onChange={(event) => {
           updateDraft({ text: event.target.value, clientId: draft.attempted || !draft.clientId ? crypto.randomUUID() : draft.clientId,
             attempted: false, mentions: editMentions(draft.text, event.target.value, draft.mentions) });

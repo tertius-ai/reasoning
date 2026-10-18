@@ -1,10 +1,10 @@
 import { PollBackoff, schedulePoll } from "./polling";
-import React, { useEffect, useRef, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { availableEfforts } from "./ReasoningEffort";
 import { createPortal } from "react-dom";
 import { ApiError, OrganizationPrices, aborted, decimalBudget, errorMessage, request, sharedRequest, topicPath, usd } from "./organization-api";
 import { ModelPicker } from "./ModelBrowser";
-import { modelOptionGroups } from "./modelRecommendations";
+import { catalogModel, modelOptionGroups } from "./modelRecommendations";
 import { MathematicsBrowser, ResearchMarkdown } from "./MathematicsBrowser";
 import { ResearchFiles } from "./ResearchFiles";
 import "./research-controls.css";
@@ -24,7 +24,33 @@ type Context = { snapshot: { messages: { role: string; content: string }[]; memo
   system_prompt: string; prompt_version: string; last_call_context?: unknown; memory_versions?: unknown[];
   pins?: { id: string; sequence: number; content: string }[] };
 type Proposal = { id: string; status: string; reviewed_by: string | null; body: { action: string; title?: string; [key: string]: unknown } };
-type ToolReceipt = { id: string; name: string; status: string; created_at: number };
+type ToolReceipt = { id: string; name: string; status: string; created_at: number; finished_at?: number | null };
+/** The newest tool receipt summaries of a topic and the inclusive `created_at` cursor of its next receipt request. */
+export type ToolReceiptState = { receipts: ToolReceipt[]; cursor: number };
+export const RECENT_TOOL_LIMIT = 5;
+const RECEIPT_TOPIC_LIMIT = 8;
+const receiptStates = new Map<string, ToolReceiptState>();
+/** Recently viewed topics keep their receipt summaries and cursor, so a revisit requests only newer receipts. */
+export function readToolReceipts(key: string): ToolReceiptState | undefined { return receiptStates.get(key); }
+export function rememberToolReceipts(key: string, state: ToolReceiptState | null): void {
+  receiptStates.delete(key);
+  if (!state) return;
+  receiptStates.set(key, state);
+  while (receiptStates.size > RECEIPT_TOPIC_LIMIT) receiptStates.delete(receiptStates.keys().next().value!);
+}
+/** The next request's cursor; it stays at the oldest displayed pending receipt so that receipt's status change is fetched. */
+export function toolReceiptAfter(state: ToolReceiptState): number {
+  return Math.min(state.cursor, ...state.receipts.filter(receipt => receipt.status === "requested").map(receipt => receipt.created_at));
+}
+/** Merge returned summaries by ID, keep the newest five, and advance the cursor. Unchanged input returns `state` itself. */
+export function mergeToolReceipts(state: ToolReceiptState, incoming: ToolReceipt[]): ToolReceiptState {
+  const byId = new Map(state.receipts.map(receipt => [receipt.id, receipt]));
+  for (const receipt of incoming) byId.set(receipt.id, receipt);
+  const receipts = [...byId.values()].sort((a, b) => b.created_at - a.created_at || (a.id < b.id ? 1 : a.id > b.id ? -1 : 0))
+    .slice(0, RECENT_TOOL_LIMIT);
+  const cursor = Math.max(state.cursor, ...incoming.map(receipt => receipt.created_at));
+  return cursor === state.cursor && JSON.stringify(receipts) === JSON.stringify(state.receipts) ? state : { receipts, cursor };
+}
 export type GoalAttempt = { client_id: string; objective: string; acceptance: string[]; model: string; budget_microusd: number; effort?: string | null;
   max_turns: number; max_tool_calls: number; duration_seconds: number };
 
@@ -98,14 +124,16 @@ export function ResearchControls({ organizationId, topicId, userId, selectedMode
   const [busy, setBusy] = useState(false); const [error, setError] = useState(""); const [refresh, setRefresh] = useState(0);
   const [pollError, setPollError] = useState("");
   const [receipt, setReceipt] = useState<unknown>(null);
-  const [recentTools, setRecentTools] = useState<ToolReceipt[]>([]);
-  const toolCursor = useRef(0);
+  const receiptKey = userId + " " + topicPath(organizationId, topicId);
+  const toolState = useRef<ToolReceiptState & { key: string }>({ key: receiptKey, ...readToolReceipts(receiptKey) ?? { receipts: [], cursor: 0 } });
+  const [recentTools, setRecentTools] = useState<ToolReceipt[]>(toolState.current.receipts);
   const dialog = useRef<HTMLDialogElement>(null);
   const objectiveField = useRef<HTMLTextAreaElement>(null);
   const acceptanceField = useRef<HTMLTextAreaElement>(null);
   const root = topicPath(organizationId, topicId);
-  const toolModels = allowedModels.filter((id) => catalog?.models.some((model) => model.id === id && model.supports_tools));
-  const goalModelGroups = modelOptionGroups(toolModels, catalog);
+  // Computed once per catalog and model list, not on every keystroke in the composer.
+  const toolModels = useMemo(() => allowedModels.filter((id) => catalogModel(catalog, id)?.supports_tools), [allowedModels, catalog]);
+  const goalModelGroups = useMemo(() => modelOptionGroups(toolModels, catalog), [toolModels, catalog]);
   useEffect(() => {
     if (goalDraft !== null) { if (!attempt) setObjective(goalDraft); setCreateOpen(true); setError(""); }
   }, [goalDraft]);
@@ -119,6 +147,10 @@ export function ResearchControls({ organizationId, topicId, userId, selectedMode
   const fail = (cause: unknown) => { if (cause instanceof ApiError && cause.status === 401) onAuthLost(); else setError(errorMessage(cause)); };
   useEffect(() => {
     const controller = new AbortController(), backoff = new PollBackoff(2500, 10000); let timer: ReturnType<typeof setTimeout>;
+    if (toolState.current.key !== receiptKey) {
+      toolState.current = { key: receiptKey, ...readToolReceipts(receiptKey) ?? { receipts: [], cursor: 0 } };
+      setRecentTools(toolState.current.receipts);
+    }
     const poll = async () => {
       let active = true;
       try {
@@ -126,21 +158,27 @@ export function ResearchControls({ organizationId, topicId, userId, selectedMode
           // The agent activity view polls the same goal more often; reuse its recent result.
           sharedRequest<Goal | null>(root + "/goal", { maxAge: 2500, signal: controller.signal }),
           request<Proposal[]>(root + "/research-proposals", { signal: controller.signal }),
-          request<ToolReceipt[]>(root + "/research-tools?after=" + toolCursor.current, { signal: controller.signal }),
+          // Summaries only: a receipt's arguments and result are read when it is opened.
+          request<ToolReceipt[]>(root + "/research-tools?summary=1&after=" + toolReceiptAfter(toolState.current), { signal: controller.signal }),
           request<typeof reviews>(root + "/mathematical-reviews", { signal: controller.signal }),
         ]);
         if (controller.signal.aborted) return; setGoal(current); setProposals(pending); setReviews(checked); setPollError("");
-        active = current?.status === "active" || pending.some(proposal => ["pending", "reviewing"].includes(proposal.status))
-          || toolReceipts.some(tool => tool.status === "requested");
-        if (toolReceipts.length) {
-          toolCursor.current = Math.max(toolCursor.current, ...toolReceipts.map((item) => item.created_at));
-          setRecentTools((previous) => [...new Map([...previous, ...toolReceipts].map((item) => [item.id, item])).values()]
-            .sort((a, b) => b.created_at - a.created_at).slice(0, 5));
+        const merged = mergeToolReceipts(toolState.current, toolReceipts);
+        if (merged !== toolState.current) {
+          toolState.current = { key: receiptKey, ...merged };
+          rememberToolReceipts(receiptKey, merged); setRecentTools(merged.receipts);
         }
+        active = current?.status === "active" || pending.some(proposal => ["pending", "reviewing"].includes(proposal.status))
+          || merged.receipts.some(tool => tool.status === "requested");
       } catch (cause) {
         if (!aborted(cause)) {
           if (cause instanceof ApiError && cause.status === 401) onAuthLost();
-          else setPollError("Unable to refresh research status; reconnecting. " + errorMessage(cause));
+          else {
+            if (cause instanceof ApiError && (cause.status === 403 || cause.status === 404)) {
+              rememberToolReceipts(receiptKey, null); toolState.current = { key: receiptKey, receipts: [], cursor: 0 }; setRecentTools([]);
+            }
+            setPollError("Unable to refresh research status; reconnecting. " + errorMessage(cause));
+          }
         }
       }
       if (!controller.signal.aborted) timer = schedulePoll(poll, backoff.next(active), controller.signal);
@@ -154,7 +192,7 @@ export function ResearchControls({ organizationId, topicId, userId, selectedMode
         setAdditionalInstructions(value.additional_instructions ?? ""); setProfiles(value.profiles ?? []); }
     }).catch((cause) => { if (!aborted(cause)) fail(cause); });
     return () => { controller.abort(); clearTimeout(timer); };
-  }, [root, refresh, onAuthLost]);
+  }, [root, receiptKey, refresh, onAuthLost]);
   const loadContext = async () => {
     setPane(pane === "context" ? null : "context"); setError("");
     try { setContext(await request<Context>(root + "/research-context")); } catch (cause) { fail(cause); }

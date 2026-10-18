@@ -235,9 +235,20 @@ def install_routes(app, inference, compute, workflows, authenticated, *, enabled
         return proposals.review(user, organization_id, topic_id, proposal_id, body.approve)
 
     @app.get(prefix + "/research-tools")
-    def receipts(organization_id: str, topic_id: str, user: User, after: Annotated[int, Query(ge=0)] = 0):
+    def receipts(organization_id: str, topic_id: str, user: User, after: Annotated[int, Query(ge=0)] = 0, summary: bool = False):
         with store.transaction() as db:
             store._topic_access(db, user, organization_id, topic_id)
+            if summary:
+                # Status lists omit arguments and results; GET /research-tools/{receipt_id} returns them.
+                return [
+                    dict(row)
+                    for row in db.execute(
+                        "SELECT r.id,r.name,r.status,r.created_at,r.finished_at "
+                        "FROM research_tool_receipts r JOIN research_sessions s ON s.run_id=r.run_id "
+                        "WHERE r.organization_id=? AND s.topic_id=? AND r.created_at>=? ORDER BY r.created_at DESC,r.id DESC LIMIT 50",
+                        (organization_id, topic_id, after),
+                    )
+                ]
             return [
                 dict(row)
                 | {"arguments": json.loads(row["arguments_json"]), "result": json.loads(row["result_json"]) if row["result_json"] else None}

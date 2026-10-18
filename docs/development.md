@@ -151,7 +151,8 @@ node --test --test-concurrency=1 web/tests/public-ledger.browser.mjs web/tests/p
   web/tests/bot-controls.browser.mjs web/tests/bot-approvals.browser.mjs \
   web/tests/model-selection.browser.mjs web/tests/chat-polish.browser.mjs \
   web/tests/invitations.browser.mjs web/tests/organization-responsiveness.browser.mjs \
-  web/tests/organization-requests.browser.mjs
+  web/tests/organization-requests.browser.mjs web/tests/research-requests.browser.mjs \
+  web/tests/model-picker.browser.mjs
 ```
 
 The batch runs serially because its Vite fixtures share a dependency optimizer
@@ -162,7 +163,10 @@ blog deletion and accessible mathematics, phone navigation persistence,
 scoped picture/PDF uploads and previews, bot-access editing, bot-model mentions,
 invitation batches with live provider-status totals, conversation, model, and bot rendering
 while secondary startup requests are held, and request budgets for opening and idling in a beta
-topic, revisiting a topic, and reopening model capabilities, measured against a production build.
+topic, revisiting a topic, reopening model capabilities, revisiting a topic's tool receipts, and returning
+from the Bibliography, measured against a production build, and a 451-model catalog in the reply picker
+and capabilities browser: no rows while closed, then search, favorites, effort selection and the complete
+list once open.
 The PostgreSQL shards repeat storage, permission, review, fork, feedback, blog
 deletion and navigation contracts against PostgreSQL 16. Organization-storage
 contracts and leases/project-compute contracts run in separate parallel jobs;

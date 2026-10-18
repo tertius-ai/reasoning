@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { ModelRows } from "./ModelBrowser";
 import { chatModel, usefulChatModel } from "./modelRecommendations";
 import { InferenceLedger } from "./InferenceLedger";
@@ -11,6 +11,8 @@ import { estimateLabel } from "./usageFormat";
 export { estimateLabel } from "./usageFormat";
 
 export { MessageUsageDetails } from "./MessageUsageDetails";
+
+const noModels: string[] = [];
 
 export function OrganizationModelBrowser({ organizationId, canManage = false, onAuthLost }: { organizationId: string; canManage?: boolean; onAuthLost: () => void }) {
   const [catalog, setCatalog] = useState<OrganizationPrices | null>(null);
@@ -42,12 +44,14 @@ export function OrganizationModelBrowser({ organizationId, canManage = false, on
       }).finally(() => { if (!controller.signal.aborted) setLoading(false); });
     return () => controller.abort();
   }, [organizationId, refresh, onAuthLost]);
-  const providers = [...new Set((catalog?.models ?? []).map((model) => model.provider))].sort();
-  const rows = (catalog?.models ?? []).filter((model) => chatModel(model.id) && (showAll || usefulChatModel(model.id, model))
+  const providers = useMemo(() => [...new Set((catalog?.models ?? []).map((model) => model.provider))].sort(), [catalog]);
+  const rows = useMemo(() => (catalog?.models ?? []).filter((model) => chatModel(model.id) && (showAll || usefulChatModel(model.id, model))
     && (model.id + " " + model.name + " " + model.description).toLowerCase().includes(query.toLowerCase())
     && (!provider || model.provider === provider)
     && (capability === "all" || capability === "tools" && model.supports_tools || capability === "reasoning" && model.supports_reasoning
-      || capability === "images" && model.input_modalities.includes("image")));
+      || capability === "images" && model.input_modalities.includes("image"))).map(model => model.id), [catalog, showAll, query, provider, capability]);
+  const scored = useMemo(() => catalog ? { ...catalog, benchmarks } : null, [catalog, benchmarks]);
+  const allowed = catalog?.allowed_models ?? noModels;
   return <section aria-label="Model capabilities" className="org-capability-browser">
     <OrganizationRouting organizationId={organizationId} canManage={canManage} onAuthLost={onAuthLost} />
     <header><label>Search<input type="search" placeholder="Name, ID, or capability" value={query} onChange={(event) => setQuery(event.target.value)} /></label>
@@ -64,7 +68,7 @@ export function OrganizationModelBrowser({ organizationId, canManage = false, on
     {catalog && <p className="org-catalog-status">{rows.length.toLocaleString()} models · refreshed {new Date(catalog.fetched_at * 1000).toLocaleString()}</p>}
     {benchmarks?.meta && <p className="org-catalog-status"><a href={benchmarks.meta.source_url} target="_blank" rel="noreferrer">{benchmarks.meta.citation}</a>
       {" "}As of {new Date(benchmarks.meta.as_of).toLocaleString()} · {benchmarks.status}. Licensed under CC BY 4.0.</p>}
-    <ModelRows ids={rows.map(model => model.id)} catalog={catalog ? { ...catalog, benchmarks } : null} allowedModels={catalog?.allowed_models ?? []} grouped={false} />
+    <ModelRows ids={rows} catalog={scored} allowedModels={allowed} grouped={false} />
     {!loading && !error && !rows.length && <p>No matching models.</p>}
   </section>;
 }

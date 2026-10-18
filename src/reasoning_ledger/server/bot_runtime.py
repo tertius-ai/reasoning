@@ -28,11 +28,27 @@ APPROVAL_BY = (
 )
 # A mention whose author the bot owner's runner policy excludes; recorded so the requester sees why.
 DECLINED = "requester_not_permitted"
+# Runner-reported stages: whole milliseconds on the runner's monotonic clock,
+# measured from the runner's receipt of the claim response.
+RUNNER_STAGES = ("cli_started_ms", "cli_ready_ms", "first_text_ms", "final_text_ms", "cli_exited_ms")
 MENTION = re.compile(r"@\[([a-f0-9]{32})(?::([A-Za-z0-9][A-Za-z0-9._/-]{0,99})(?:!(low|medium|high|xhigh|max))?)?\]")
 
 
 def mentioned_models(content, bot_id):
     return [match[2] for match in MENTION.finditer(content) if match[1] == bot_id]
+
+
+def runner_timing(value):
+    """Validate a runner's content-free stage report; absent stages stay unknown."""
+    if value is None:
+        return None
+    if (not isinstance(value, dict) or set(value) - {*RUNNER_STAGES, "resolved_model"}
+            or any(value.get(stage) is not None and (type(value[stage]) is not int or not 0 <= value[stage] <= 86_400_000)
+                   for stage in RUNNER_STAGES)
+            or value.get("resolved_model") is not None
+            and (not isinstance(value["resolved_model"], str) or not MODEL.fullmatch(value["resolved_model"]))):
+        raise StoreError(400, "invalid bot runner timing")
+    return {key: value.get(key) for key in (*RUNNER_STAGES, "resolved_model")}
 
 
 def bot_model(value):
@@ -83,7 +99,8 @@ class BotRuntime:
                  json.dumps(capabilities or {})),
             )
             # mention_feedback: from_message records a visible refusal for a requester the policy excludes.
-            return {"models": models, "policy": "topic-v1", "mention_feedback": True}
+            # run_timing: completions may carry the runner's content-free wait stages.
+            return {"models": models, "policy": "topic-v1", "mention_feedback": True, "run_timing": True}
 
     def models(self, user, org, topic):
         with self.store.transaction() as db:
@@ -187,10 +204,10 @@ class BotRuntime:
                       (bot["id"],)).fetchone()[0] >= 50:
             raise StoreError(409, "bot has 50 pending requests; finish or cancel existing work")
         db.execute("INSERT INTO bot_runs(id,organization_id,project_id,channel_id,topic_id,bot_id,requested_by,model,client_id,"
-                   "request_json,prompt,status,phase,created_at,updated_at,context_through_sequence) "
-                   "VALUES(?,?,?,?,?,?,?,?,?,?,?,'queued','thinking',?,?,?)",
+                   "request_json,prompt,status,phase,created_at,updated_at,context_through_sequence,enqueued_at_ms) "
+                   "VALUES(?,?,?,?,?,?,?,?,?,?,?,'queued','thinking',?,?,?,?)",
                    (run_id, org, access[1]["id"], access[4]["channel_id"], topic, bot["id"], user, parsed[1], client_id,
-                    identity, prompt, now, now, through))
+                    identity, prompt, now, now, through, int(time.time() * 1000)))
         self.store._audit(db, org, user, "bot.inference.request", run_id)
         from .research_context import ResearchContext
 
@@ -248,8 +265,22 @@ class BotRuntime:
         return self.public(db.execute("SELECT * FROM bot_runs WHERE id=?", (run_id,)).fetchone())
 
     @staticmethod
+    def timing(row):
+        """Server stages on the server clock; runner stages as reported. Unknown stays null, never derived from seconds."""
+        value = dict(row)
+        enqueued, claimed, committed = value.get("enqueued_at_ms"), value.get("claimed_at_ms"), value.get("committed_at_ms")
+        runner = json.loads(value.get("runner_timing_json") or "null") or {}
+        return {
+            "enqueued_at_ms": enqueued, "claimed_at_ms": claimed, "committed_at_ms": committed,
+            "queue_wait_ms": claimed - enqueued if enqueued is not None and claimed is not None else None,
+            "claim_to_commit_ms": committed - claimed if claimed is not None and committed is not None else None,
+            "runner": {stage: runner.get(stage) for stage in RUNNER_STAGES},
+            "resolved_model": runner.get("resolved_model"),
+        }
+
+    @staticmethod
     def public(row):
-        return {"bot_name": dict(row).get("bot_name"),
+        return {"bot_name": dict(row).get("bot_name"), "timing": BotRuntime.timing(row),
                 "effort": dict(row).get("effort"), "gateway": json.loads(dict(row).get("gateway_json", "{}")),
                 "activity": json.loads(dict(row).get("activity_json", "[]")),
                 "owner_user_id": dict(row).get("owner_user_id"), "approval_by": dict(row).get("approval_by"),
@@ -332,7 +363,8 @@ class BotRuntime:
                     db.execute("UPDATE bot_runs SET status='cancelled',error_code='access_changed' WHERE id=?", (row["id"],))
                     continue
                 lease = token()
-                db.execute("UPDATE bot_runs SET status='running',lease_hash=?,updated_at=? WHERE id=?", (digest(lease), now, row["id"]))
+                db.execute("UPDATE bot_runs SET status='running',lease_hash=?,updated_at=?,claimed_at_ms=? WHERE id=?",
+                           (digest(lease), now, int(time.time() * 1000), row["id"]))
                 from .research_profiles import topic_instructions
 
                 kind = db.execute("SELECT kind FROM topics WHERE id=?", (row["topic_id"],)).fetchone()[0]
@@ -405,9 +437,11 @@ class BotRuntime:
                 "SELECT 1 FROM bot_runs WHERE id=? AND " + AWAITING_CONSENT, (run_id,)).fetchone())
             return {"active": True, "phase": phase or run["phase"], "waiting_for_approval": waiting}
 
-    def finish(self, credential, run_id, lease, status, output="", error=None):
+    def finish(self, credential, run_id, lease, status, output="", error=None, timing=None):
+        """``timing`` is the runner's stage report; a replayed receipt keeps the first one."""
         if status not in TERMINAL or not isinstance(output, str) or len(output.encode()) > 128 * 1024:
             raise StoreError(400, "invalid bounded bot completion")
+        timing = runner_timing(timing)
         if status == "succeeded" and not output.strip() or error is not None and error not in {
                 "cli_failed", "runner_lost", "cancelled", "gateway_unavailable", "gateway_not_attached"}:
             raise StoreError(400, "invalid bot completion receipt")
@@ -427,12 +461,15 @@ class BotRuntime:
                 db.execute("UPDATE bot_runs SET error_code='approval_transport_ended',updated_at=? WHERE id=?",
                            (int(time.time()), run_id))
                 return self.public(db.execute("SELECT * FROM bot_runs WHERE id=?", (run_id,)).fetchone())
+            committed = None
             if status == "succeeded":
                 for index, start in enumerate(range(0, len(output), 16000)):
                     self.store._post_message(db, bot["id"], run["organization_id"], run["topic_id"], output[start:start + 16000],
                                              f"bot-run-{run_id}-{index}", sender_kind="bot")
-            db.execute("UPDATE bot_runs SET status=?,phase='finishing',output_text=?,error_code=?,updated_at=? WHERE id=?",
-                       (status, output, error, int(time.time()), run_id))
+                committed = int(time.time() * 1000)
+            db.execute("UPDATE bot_runs SET status=?,phase='finishing',output_text=?,error_code=?,updated_at=?,"
+                       "committed_at_ms=?,runner_timing_json=? WHERE id=?",
+                       (status, output, error, int(time.time()), committed, json.dumps(timing) if timing else None, run_id))
             return self.public(db.execute("SELECT * FROM bot_runs WHERE id=?", (run_id,)).fetchone())
 
     @staticmethod

@@ -3,6 +3,7 @@ import React, { useEffect, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { aborted, ApiError, errorMessage, organizationPath, Presence, request } from "./organization-api";
+import { PollBackoff, schedulePoll } from "./polling";
 
 type BaseApproval = { id: string; bot_id: string; run_id: string; requester_name: string; topic_name: string;
   created_at: number; delivery_interrupted?: boolean };
@@ -13,26 +14,38 @@ export type BotApproval = BaseApproval & (
     parameters: { image_id: string; language: string; program: string; resources: Record<string, number> } }
 );
 
+/**
+ * Poll the signed-in owner's pending bot approvals until `signal` aborts: every three seconds while requests are
+ * pending or the list changes, then slowing to fifteen seconds; hidden tabs pause and refresh when visible again.
+ */
+export function pollBotApprovals(organizationId: string, signal: AbortSignal,
+  onRows: (rows: BotApproval[]) => void, onError: (cause: unknown) => void): void {
+  const backoff = new PollBackoff(3000, 15000); let previous = "";
+  const poll = async () => {
+    let active = false;
+    try {
+      const value = await request<BotApproval[]>(organizationPath(organizationId) + "/my-bots/pending-approvals", { signal });
+      if (signal.aborted) return;
+      const ids = value.map(row => row.id).join(" ");
+      active = value.length > 0 || ids !== previous; previous = ids;
+      onRows(value);
+    } catch (cause) { if (!aborted(cause)) onError(cause); }
+    if (!signal.aborted) schedulePoll(poll, backoff.next(active), signal);
+  };
+  void poll();
+}
+
 export function useBotApprovals(organizationId: string, open: boolean, onAuthLost: () => void) {
   const [rows, setRows] = useState<BotApproval[]>([]), [error, setError] = useState("");
   const [revision, setRevision] = useState(0);
   useEffect(() => { setRows([]); setError(""); }, [organizationId]);
   useEffect(() => {
     if (!open) return;
-    const controller = new AbortController(); let timer: ReturnType<typeof setTimeout>;
-    const poll = async () => {
-      try {
-        const value = await request<BotApproval[]>(organizationPath(organizationId) + "/my-bots/pending-approvals", { signal: controller.signal });
-        if (!controller.signal.aborted) { setRows(value); setError(""); }
-      } catch (cause) {
-        if (!aborted(cause)) {
-          if (cause instanceof ApiError && cause.status === 401) onAuthLost();
-          else setError(errorMessage(cause));
-        }
-      }
-      if (!controller.signal.aborted) timer = setTimeout(poll, 3000);
-    };
-    void poll(); return () => { controller.abort(); clearTimeout(timer); };
+    const controller = new AbortController();
+    pollBotApprovals(organizationId, controller.signal, value => { setRows(value); setError(""); }, cause => {
+      if (cause instanceof ApiError && cause.status === 401) onAuthLost(); else setError(errorMessage(cause));
+    });
+    return () => controller.abort();
   }, [organizationId, open, revision, onAuthLost]);
   return { rows, error, refresh: () => setRevision(value => value + 1),
     remove: (id: string) => setRows(current => current.filter(row => row.id !== id)) };

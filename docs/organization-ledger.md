@@ -65,7 +65,10 @@ Under `/api/organizations/{org}/mathematics`:
   Exact `ledger_read` and per-claim `ledger_status` also expose at most 100
   judgments on the inspected revision, explicitly labeled `human-judgment`.
 - `POST` accepts `name`, `arguments`, optional project/topic IDs and a stable
-  `client_id` for writes. Humans include `expected_revision_id` when revising a
+  `client_id` for writes. `ledger_status`, `ledger_search`, `ledger_graph`,
+  `ledger_blockers`, `ledger_blast_radius`, `ledger_references`,
+  `ledger_search_references` and `ledger_read` only read; every other operation
+  is a write. Humans include `expected_revision_id` when revising a
   claim/proof/reference. Positive or machine-authority author verdicts are forbidden.
 - `POST /import` takes `project_id`, `client_id`, and a complete `records` snapshot
   of `{path, record}` objects. Omitting `records` promotes eligible retained

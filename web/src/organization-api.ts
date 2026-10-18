@@ -84,7 +84,12 @@ export type BotRun = { id: string; bot_id: string; bot_name?: string | null; mod
   activity?: { kind: string; label: string; at: number }[];
   context_through_sequence?: number;
   requested_by?: string; owner_user_id?: string | null; approval_by?: "owner" | "requester" | null;
-  created_at: number; updated_at: number; output_text: string; error_code: string | null };
+  created_at: number; updated_at: number; output_text: string; error_code: string | null; timing?: BotRunTiming | null };
+/** Server stamps in epoch milliseconds; runner stages in milliseconds after the runner received the claim. Null is unknown. */
+export type BotRunTiming = { enqueued_at_ms: number | null; claimed_at_ms: number | null; committed_at_ms: number | null;
+  queue_wait_ms: number | null; claim_to_commit_ms: number | null; resolved_model: string | null;
+  runner: { cli_started_ms: number | null; cli_ready_ms: number | null; first_text_ms: number | null;
+    final_text_ms: number | null; cli_exited_ms: number | null } };
 export type SearchResult = Message & { project_name: string; channel_name: string; topic_name: string; topic_kind: TopicKind };
 export type Session = { user_id: string; organization_id?: string; csrf_token?: string };
 export type KeyMetadata = { id: string; provider: string; label: string; fingerprint: string; disabled_at: number | null };
@@ -200,7 +205,8 @@ function abortable<T>(promise: Promise<T>, signal?: AbortSignal): Promise<T> {
 /**
  * A GET shared by every mounted view: concurrent callers share one request, and a result started less than
  * `maxAge` milliseconds ago is reused. Any write through `request` invalidates shared reads (durable catalogs
- * survive topic-scoped writes); failures are never reused. Private responses stay in memory only.
+ * survive topic-scoped writes; read-only mathematics operations are not writes); failures are never reused.
+ * Private responses stay in memory only.
  */
 export function sharedRequest<T>(path: string, options: { maxAge: number; signal?: AbortSignal; durable?: boolean }): Promise<T> {
   const now = Date.now(), existing = sharedReads.get(path);
@@ -212,8 +218,14 @@ export function sharedRequest<T>(path: string, options: { maxAge: number; signal
   return abortable(entry.promise as Promise<T>, options.signal);
 }
 
+/** `POST /mathematics` operations the server runs without writing (`READS` in server/workbench_tools.py). */
+export const MATHEMATICS_READS: ReadonlySet<string> = new Set(["ledger_status", "ledger_search", "ledger_graph", "ledger_blockers",
+  "ledger_blast_radius", "ledger_references", "ledger_search_references", "ledger_read"]);
+const readOnlyOperation = (path: string, body: unknown) => /^\/organizations\/[^/]+\/mathematics$/.test(path)
+  && MATHEMATICS_READS.has(String((body as { name?: unknown } | null)?.name));
+
 export async function request<T>(path: string, options: { method?: string; body?: unknown; signal?: AbortSignal } = {}): Promise<T> {
-  if (options.method && options.method !== "GET") {
+  if (options.method && options.method !== "GET" && !(options.method === "POST" && readOnlyOperation(path, options.body))) {
     try { return await send<T>(path, options); } finally { mutationCompleted(path); }
   }
   return send<T>(path, options);
