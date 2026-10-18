@@ -13,7 +13,7 @@ import { withBotModels } from "./botModels";
 import { availableEfforts } from "./ReasoningEffort";
 import { editMentions, encodeMentions, MentionBinding } from "./composerMentions";
 import { ComputeConversation } from "./ComputeConversation";
-import { DirectConversation, DirectMessageNavigation, directPath } from "./DirectMessages";
+import { DirectConversation, DirectMessageNavigation, directPath, directUnreadTotal } from "./DirectMessages";
 import { KnowledgeLinks, KnowledgeView } from "./KnowledgeLinks";
 import { LazyView } from "./LazyView";
 import { WorkflowConversation } from "./WorkflowConversation";
@@ -571,9 +571,11 @@ export function peopleWithBots(presence: Presence | null) {
   })).filter(person => person.online || person.bots.length > 0);
 }
 
-function PresenceSidebar({ organizationId, open, onClose, onAuthLost, userId, onMessage }: {
+function PresenceSidebar({ organizationId, open, onClose, onAuthLost, userId, onMessage, direct }: {
   organizationId: string; open: boolean; onClose: () => void; onAuthLost: () => void;
   userId?: string; onMessage?: (userId: string) => void;
+  /** The collapsible Direct messages section, shown above the people list. */
+  direct?: React.ReactNode;
 }) {
   const [presence, setPresence] = useState<Presence | null>(null);
   const [reviewBot, setReviewBot] = useState<Presence["bots"][number] | null>(null);
@@ -594,6 +596,7 @@ function PresenceSidebar({ organizationId, open, onClose, onAuthLost, userId, on
   const connected = (presence?.humans.filter(person => person.online).length ?? 0) + (presence?.bots.filter(bot => bot.online).length ?? 0);
   return <aside className="org-presence" aria-label="Online people and bots"><header><div><strong>People</strong><small>{connected} connected</small></div>
     <button aria-label="Collapse online sidebar" onClick={onClose}>×</button></header>
+    {direct}
     {!presence && <p role="status">Checking presence…</p>}
     {people.map(person => <section key={person.id} data-person-id={person.id}>
       <div className="org-presence-row"><span className="org-presence-avatar">{person.name.slice(0, 1).toUpperCase()}</span><strong title={person.role}>{onMessage && person.id !== userId ? <button type="button" className="org-presence-message"
@@ -1568,7 +1571,11 @@ export function OrganizationApp({ user, onAccount, onAuthenticated, onSignedOut,
   const showDirect = (id: string) => {
     setHelpOpen(false); setKnowledgeView(null); setDirect(id); setSearch(""); setResults(null);
     if (window.innerWidth <= 700) setNavOpen(false);
+    // On narrow screens the People panel covers the conversation it just opened.
+    if (window.innerWidth <= 1100) setPresenceOpen(false);
   };
+  // Shown on the People toggle, so unread direct messages are visible while the panel is closed.
+  const directTotal = directUnreadTotal(directConversations);
   const openDirect = (memberId: string) => {
     const existing = directConversations.find(item => item.other_user.id === memberId);
     if (existing) { showDirect(existing.id); return; }
@@ -1611,8 +1618,11 @@ export function OrganizationApp({ user, onAccount, onAuthenticated, onSignedOut,
       }}><summary aria-label="More topic actions" title="More topic actions">⋯</summary><div className="org-toolbar-content">
       <label className="org-search"><span className="org-visually-hidden">Search organization messages</span><input ref={searchInput} type="search" placeholder="Search messages · ⌘K" value={search} maxLength={200} disabled={!organization}
         onChange={(event) => setSearch(event.target.value)} /></label>
-      <div className="org-toolbar-icons"><ThemeToggle />{organization && <button className="org-icon-button org-presence-toggle" aria-label="Show online people and bots" title="People" aria-expanded={presenceOpen}
-        onClick={() => setPresenceOpen((value) => !value)}><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" aria-hidden="true"><circle cx="9" cy="7" r="3"/><path d="M3 21v-3a6 6 0 0 1 12 0v3M17 4a3 3 0 0 1 0 6M21 21v-3a6 6 0 0 0-3-5"/></svg></button>}
+      <div className="org-toolbar-icons"><ThemeToggle />{organization && <button className="org-icon-button org-presence-toggle"
+        aria-label={"Show online people and bots" + (directTotal ? `, ${directTotal} unread direct messages` : "")}
+        title={directTotal ? `People · ${directTotal} unread direct messages` : "People"} aria-expanded={presenceOpen}
+        onClick={() => setPresenceOpen((value) => !value)}><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" aria-hidden="true"><circle cx="9" cy="7" r="3"/><path d="M3 21v-3a6 6 0 0 1 12 0v3M17 4a3 3 0 0 1 0 6M21 21v-3a6 6 0 0 0-3-5"/></svg>
+        {directTotal > 0 && <span className="org-unread org-presence-unread" aria-hidden="true">{directTotal}</span>}</button>}
       {organization && topic && <TopicCopyButton key={organization.id + "/" + topic.id} organizationId={organization.id} topicId={topic.id} onAuthLost={authLost} />}
       {organization && <KnowledgeLinks organizationId={organization.id} topicId={topic?.id} onOpen={openKnowledge} onIntent={() => void loadKnowledgeWorkspace().catch(() => { /* The workspace view reports load failures. */ })} />}
       <a className="org-icon-button" href="/organization.html?view=help" aria-label="Help" title="Help" onClick={event => {
@@ -1641,8 +1651,6 @@ export function OrganizationApp({ user, onAccount, onAuthenticated, onSignedOut,
           onProjectSettings={(id) => setEntitySettings({ kind: "project", id })} onChannelSettings={(id) => setEntitySettings({ kind: "channel", id })}
           onTopicSettings={(id) => setEntitySettings({ kind: "topic", id })} />
         {!hierarchy.projects.length && organization && <p className="org-tree-empty">{organization.role === "viewer" ? "Projects will appear here." : "Create a project to begin."}</p>}
-        {organization && <DirectMessageNavigation conversations={directConversations} members={members} userId={user.id} selected={direct}
-          canStart={canCreate} onSelect={showDirect} onStart={openDirect} />}
         <footer><AccountMenu user={user} organization={organization} organizations={organizations} canCreateOrganization={canCreateOrganization}
           onSwitch={switchOrganization} onAccount={() => setInformation("user")} onOrganization={() => setInformation("organization")}
           onAdmin={() => setAdmin(true)} onCreate={() => beginCreation("organization")} onKnowledge={() => setTool("knowledge")} onBots={() => setTool("bots")}
@@ -1677,7 +1685,8 @@ export function OrganizationApp({ user, onAccount, onAuthenticated, onSignedOut,
           </section>}
       </main>
       {organization && <PresenceSidebar organizationId={organization.id} open={presenceOpen} onClose={() => setPresenceOpen(false)} onAuthLost={authLost}
-        userId={user.id} onMessage={openDirect} />}
+        userId={user.id} onMessage={openDirect} direct={<DirectMessageNavigation conversations={directConversations} members={members}
+          userId={user.id} selected={direct} canStart={canCreate} onSelect={showDirect} onStart={openDirect} />} />}
     </div>
     {information && <Dialog title={information === "user" ? "User information" : "Organization information"} onClose={() => setInformation(null)}>
       {information === "user" ? <><dl><dt>Name</dt><dd>{user.name}</dd><dt>Email</dt><dd>{user.email}</dd></dl>

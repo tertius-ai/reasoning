@@ -46,9 +46,13 @@ reply or its charges. Use **Stop current work** to cancel running work.
 ## Direct messages
 
 Click a person's name in **People** to send them a private message, or use `+`
-beside **Direct messages** in the left navigation to choose any member. The
+beside **Direct messages** at the top of the People panel to choose any member. The
 conversation opens in place of the topic. Your recipient finds it under **Direct
-messages** with an unread count, and can reply there. Only the two of you can read
+messages** in their People panel with an unread count, and can reply there. The
+People button in the toolbar shows the unread total while the panel is closed.
+Click the **Direct messages** heading to collapse the section to its heading and
+unread total; the browser remembers the choice, and a long list scrolls within
+the section. Only the two of you can read
 it: organization owners and administrators cannot, and it never appears in
 search, topic exports, shared knowledge, or bot and model context. Bots cannot be
 messaged or mentioned there. Viewers can receive and read direct messages but

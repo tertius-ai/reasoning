@@ -29,7 +29,9 @@ test("direct-message navigation shows unread counts except for muted conversatio
   assert.match(markup, /aria-label="Muted"/); assert.match(markup, />blocked</); assert.match(markup, />left</);
   assert.match(markup, /aria-current="page"[^>]*title="Direct messages with Ada"/);
   assert.match(markup, /aria-label="New direct message"/);
+  assert.match(markup, /<button type="button" class="org-direct-toggle" aria-expanded="true"/);
   assert.equal(direct.directUnread(conversations[1]), 0);
+  assert.equal(direct.directUnreadTotal(conversations), 2);
   assert.equal(direct.directPath("org", "a b"), "/organizations/org/direct-conversations/a%20b");
 });
 
@@ -38,5 +40,5 @@ test("viewers see their conversations without a control to start one", () => {
     conversations: [], members: [], userId: "me", selected: null, canStart: false, onSelect: () => {}, onStart: () => {},
   }));
   assert.doesNotMatch(markup, /New direct message/);
-  assert.match(markup, /Click a name in People to send a message/);
+  assert.match(markup, /Click a name below to send a message/);
 });

@@ -662,11 +662,13 @@ with its own budget, deliberate reuse copied into a separately encrypted
 organization record, or no credential, models, or budget. Members and viewers
 cannot create organizations. Bot and compute credentials are never inherited.
 The left navigation groups projects, alternating-color #channels, and typed
-topics with unread counts and an `@` marker for unread personal mentions. Below them,
-**Direct messages** lists the member's direct conversations, most recent first, with
-unread counts (hidden for muted conversations) and a total; `+` starts one with any
-member, and clicking a person's name in **People** opens or starts a conversation
-with them. A direct conversation replaces the topic view, with mute and block
+topics with unread counts and an `@` marker for unread personal mentions. The
+**People** panel starts with a collapsible **Direct messages** section listing the
+member's direct conversations, most recent first, with unread counts (hidden for
+muted conversations) and a total; its list scrolls within a bounded height, and the
+collapsed state is remembered per browser. The People toolbar button shows the
+unread total while the panel is closed. `+` starts a conversation with any member,
+and clicking a person's name in **People** opens or starts one with them. A direct conversation replaces the topic view, with mute and block
 controls and a confirmation before blocking; the app bar shows its participant. Topics are indented beneath their channels. Creation `+` controls appear on hover beside
 Projects, projects, and channels. Project, channel, and topic settings use adjacent
 centered `⋯` buttons that appear on hover or keyboard focus and remain visible on touch

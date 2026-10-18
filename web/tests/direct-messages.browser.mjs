@@ -45,7 +45,7 @@ test("a member messages a colleague from People, who finds, reads and replies, t
     await owner.getByRole("button", { name: "Create organization", exact: true }).click();
     await visible(owner.getByRole("button", { name: "Account menu", exact: true }));
     const ownerDirect = owner.getByRole("navigation", { name: "Direct messages" });
-    await visible(ownerDirect.getByText("Click a name in People to send a message."));
+    await visible(ownerDirect.getByText("Click a name below to send a message."));
 
     await owner.getByRole("button", { name: "Account menu", exact: true }).click();
     await owner.getByRole("button", { name: "Administration" }).click();
@@ -81,6 +81,22 @@ test("a member messages a colleague from People, who finds, reads and replies, t
     const memberDirect = member.getByRole("navigation", { name: "Direct messages" });
     const row = memberDirect.getByRole("button", { name: /Owner/ });
     await visible(row.getByLabel("1 unread direct messages"));
+
+    // The section belongs to the People panel, not the project navigation. It collapses to its heading and unread total,
+    // and the People toggle carries the count so it stays visible while the panel is closed.
+    const memberPeople = member.getByRole("complementary", { name: "Online people and bots" });
+    assert.equal(await memberPeople.getByRole("navigation", { name: "Direct messages" }).count(), 1);
+    assert.equal(await member.locator("#org-project-navigation").getByRole("navigation", { name: "Direct messages" }).count(), 0);
+    await visible(member.getByRole("button", { name: "Show online people and bots, 1 unread direct messages", exact: true }));
+    const sectionToggle = memberDirect.getByRole("button", { name: "Direct messages", exact: true });
+    await sectionToggle.click();
+    assert.equal(await sectionToggle.getAttribute("aria-expanded"), "false");
+    await row.waitFor({ state: "detached" });
+    await visible(memberDirect.getByLabel("1 unread direct messages in total"));
+    await member.reload();
+    await visible(memberDirect.getByLabel("1 unread direct messages in total"));
+    assert.equal(await sectionToggle.getAttribute("aria-expanded"), "false", "the collapsed state is remembered");
+    await sectionToggle.click();
     await row.click();
     const reply = member.getByRole("region", { name: "Direct messages with Owner" });
     await visible(reply.locator(".org-message").filter({ hasText: "section 3" }));
