@@ -573,10 +573,14 @@ def create_app(config: Config, *, provider: OpenRouter | None = None, mail_provi
     install_work_routes(app, store, authenticated)
     install_work_jobs_routes(app, store, authenticated, provider)
     install_compute_routes(app, compute, authenticated)
-    from .bot_diagnostics import deployment_identity
+    from .bot_diagnostics import release_identity
+    from .migrations import MIGRATIONS
 
+    # Read once: the release is immutable for this process, so health never touches the manifest.
+    release = release_identity(config.frontend_dir, config.deployment_release)
+    started = time.monotonic()
     install_bot_routes(app, BotStore(store), authenticated, compute=compute,
-                       deployment=deployment_identity(config.frontend_dir, config.deployment_release))
+                       deployment={key: release[key] for key in ("release_id", "source_revision")})
     install_cloud_bot_routes(app, store, config, authenticated)
     install_webhook_routes(app, webhooks, authenticated, webhook_worker)
     install_workflow_routes(app, app.state.workflows, authenticated)
@@ -602,6 +606,11 @@ def create_app(config: Config, *, provider: OpenRouter | None = None, mail_provi
             "status": "ok",
             "initialized": store.initialized(),
             **({"mail_worker_running": mail_worker.running} if config.mail is not None else {}),
+            "release_id": config.deployment_release,
+            "source_revision": release["source_revision"],
+            "source_modified": release["source_modified"],
+            "schema_version": len(MIGRATIONS),
+            "uptime_seconds": int(time.monotonic() - started),
         }
 
     @app.exception_handler(ProviderError)

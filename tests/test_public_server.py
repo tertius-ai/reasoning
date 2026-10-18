@@ -724,7 +724,11 @@ def test_public_server_cli_starts_and_serves_real_http(tmp_path):
                     if time.monotonic() >= deadline:
                         pytest.fail("public server did not become ready")
                     time.sleep(0.05)
-            assert result.json() == {"status": "ok", "initialized": False}
+            health = result.json()
+            assert type(health.pop("uptime_seconds")) is int and type(health.pop("schema_version")) is int
+            # A server started without --deployment-release reports no release or commit.
+            assert health == {"status": "ok", "initialized": False, "release_id": None,
+                              "source_revision": None, "source_modified": None}
             result = client.post(
                 "/api/setup",
                 json={

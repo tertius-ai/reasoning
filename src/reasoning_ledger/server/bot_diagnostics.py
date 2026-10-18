@@ -31,9 +31,18 @@ ERRORS = (
 
 def deployment_identity(frontend, release):
     """Expose only validated immutable identities, never manifest contents or file paths."""
-    result = {"release_id": release, "source_revision": None}
+    identity = release_identity(frontend, release)
+    return {"release_id": identity["release_id"], "source_revision": identity["source_revision"]}
+
+
+def release_identity(frontend, release):
+    """The deployment identity plus `source_modified`, the verified manifest's uncommitted-changes flag.
+
+    `source_revision` and `source_modified` are None unless the release's manifest SHA-256 equals `release`.
+    """
+    result = {"release_id": release, "source_revision": None, "source_modified": None}
     if not release or not re.fullmatch(r"[a-f0-9]{64}", release) or frontend is None:
-        return {"release_id": None, "source_revision": None}
+        return {"release_id": None, "source_revision": None, "source_modified": None}
     try:
         manifest = Path(frontend).parent / "manifest.json"
         descriptor = os.open(manifest, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
@@ -52,6 +61,8 @@ def deployment_identity(frontend, release):
         revision = document.get("source_revision")
         if isinstance(revision, str) and re.fullmatch(r"[a-f0-9]{40}|[a-f0-9]{64}", revision):
             result["source_revision"] = revision
+            if isinstance(document.get("dirty"), bool):
+                result["source_modified"] = document["dirty"]
     except (OSError, ValueError, TypeError, AttributeError):
         pass
     return result

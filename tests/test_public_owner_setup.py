@@ -579,10 +579,10 @@ def test_existing_public_app_observes_host_setup_and_supports_owner_login_and_in
 
     async def journey():
         async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url=origin) as client:
-            assert (await client.get("/api/health")).json() == {"status": "ok", "initialized": False}
+            assert (await client.get("/api/health")).json()["initialized"] is False
             local = Store(app.state.store.data_dir)
             receipt = local.bootstrap_host(local._setup_token, owner)
-            assert (await client.get("/api/health")).json() == {"status": "ok", "initialized": True}
+            assert (await client.get("/api/health")).json()["initialized"] is True
             response = await client.post(
                 "/api/auth/login", json={"email": owner["email"], "password": owner["password"], "transport": "bearer"}
             )

@@ -16,7 +16,7 @@ from reasoning_ledger.agents.tools import ToolRegistry
 from reasoning_ledger.deployment.private import read_document, write_document
 from reasoning_ledger.server import bot_testing
 from reasoning_ledger.server.bot_client import BotClientError
-from reasoning_ledger.server.bot_diagnostics import deployment_identity
+from reasoning_ledger.server.bot_diagnostics import deployment_identity, release_identity
 
 
 @pytest.fixture
@@ -197,6 +197,21 @@ def test_deployment_identity_requires_exact_release_hash_and_valid_revision(tmp_
     assert deployment_identity(frontend, release) == {"release_id": release, "source_revision": "b" * 40}
     assert deployment_identity(frontend, "c" * 64) == {"release_id": "c" * 64, "source_revision": None}
     assert deployment_identity(None, None) == {"release_id": None, "source_revision": None}
+
+
+@pytest.mark.parametrize("dirty", [True, False, "yes", None])
+def test_release_identity_reports_modified_source_only_for_a_verified_revision(tmp_path, dirty):
+    frontend = tmp_path / "web"
+    frontend.mkdir()
+    document = json.dumps({"source_revision": "b" * 40, **({} if dirty is None else {"dirty": dirty})}).encode()
+    (tmp_path / "manifest.json").write_bytes(document)
+    release = hashlib.sha256(document).hexdigest()
+    expected = dirty if isinstance(dirty, bool) else None
+    assert release_identity(frontend, release) == {"release_id": release, "source_revision": "b" * 40, "source_modified": expected}
+    assert release_identity(frontend, "c" * 64) == {"release_id": "c" * 64, "source_revision": None, "source_modified": None}
+    unverified = json.dumps({"source_revision": "unverified", "dirty": True}).encode()
+    (tmp_path / "manifest.json").write_bytes(unverified)
+    assert release_identity(frontend, hashlib.sha256(unverified).hexdigest())["source_modified"] is None
 
 
 @pytest.mark.parametrize("failure", ["missing", "linked", "directory", "fifo", "oversized", "invalid_json", "invalid_revision", "array"])
