@@ -119,6 +119,10 @@ for (const loss of ["network", "gateway-timeout"]) test(`shared beta responses s
     await api("/topics", { name: "Human notes", channel_id: channel.id, kind: "alpha" });
     browser = await chromium.launch({ headless: true });
     const pages = [];
+    // The member's topic event stream stays offline until the polling-recovery check below. While a stream is live
+    // the views poll only as a slow safety net, and an established stream outlives later request interception, so
+    // the connection warnings are exercised on the polling fallback.
+    let memberStreamOffline = true;
     for (const [email, name] of [["owner@example.org", "Owner"], ["member@example.org", "Member"], ["reviewer@example.org", "Reviewer"]]) {
       if (name !== "Owner") {
         const invitation = await api("/invitations", { email });
@@ -140,6 +144,7 @@ for (const loss of ["network", "gateway-timeout"]) test(`shared beta responses s
         assert.deepEqual(await page.evaluate(() => [typeof window.require, typeof window.process, typeof window.reasoningConnection]), ["undefined", "undefined", "undefined"]);
       } else page = await (await browser.newContext({ viewport: { width: 1200, height: 920 } })).newPage();
       page.on("pageerror", (error) => errors.push(error.message));
+      if (name === "Member") await page.route("**/topics/*/events", (route) => memberStreamOffline ? route.abort("failed") : route.continue());
       await page.goto(url); await page.getByLabel("Email", { exact: true }).fill(email);
       await page.getByLabel("Password", { exact: true }).fill(password); await page.getByRole("button", { name: "Sign in", exact: true }).click();
       await page.getByRole("navigation", { name: "Projects and channels" }).getByRole("button", { name: /^beta topic -Shared models\b/ }).click();
@@ -159,7 +164,7 @@ for (const loss of ["network", "gateway-timeout"]) test(`shared beta responses s
     for (const pattern of pollRoutes) await member.route(pattern, interruptPolling);
     await visible(member.getByText(/Unable to refresh agent activity; reconnecting/));
     await visible(member.getByText(/Unable to refresh research status; reconnecting/));
-    pollingOffline = false;
+    pollingOffline = false; memberStreamOffline = false;
     await until(async () => await member.getByText(/Unable to refresh .*; reconnecting/).count() === 0, "polling recovery clears connection warnings");
     for (const pattern of pollRoutes) await member.unroute(pattern, interruptPolling);
     await member.getByRole("button", { name: "Choose reply model", exact: true }).click();
