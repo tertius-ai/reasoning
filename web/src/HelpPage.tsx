@@ -1,6 +1,7 @@
 // Copyright Benjamin Antieau and Deven Manam. SPDX-License-Identifier: Apache-2.0
 import { TOPIC_COMMANDS } from "./TopicCommands";
 import { Fragment } from "react";
+import { ServerStatus } from "./ServerStatus";
 
 export function HelpPage({ onClose }: { onClose: () => void }) {
   return <section className="org-help-page" aria-label="Reasoning help"><header><h1>Help</h1><button onClick={onClose}>Back to chat</button></header>
@@ -27,5 +28,6 @@ export function HelpPage({ onClose }: { onClose: () => void }) {
       <dt>Alt+↑ / ↓</dt><dd>Previous / next topic</dd><dt>@ / /</dt><dd>Mention / commands</dd>
       <dt>↑ / ↓ · Enter / Tab</dt><dd>Select autocomplete</dd><dt>Escape</dt><dd>Dismiss dialogs and menus</dd></dl>
     <h2>Slash commands</h2><dl className="org-shortcut-list">{TOPIC_COMMANDS.map(command => <Fragment key={command.id}><dt>/{command.id}</dt><dd>{command.label} · {command.kinds.join(" / ")}</dd></Fragment>)}</dl>
+    <ServerStatus />
   </section>;
 }

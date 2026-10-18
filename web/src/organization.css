@@ -18,6 +18,13 @@
 .org-help-page > header { display:flex; align-items:center; justify-content:space-between; }
 .org-help-page h2 { font-size:16px; margin-top:24px; }
 .org-help-page code { overflow-wrap:anywhere; }
+.org-server-status { margin-top:32px; border-top:1px solid var(--border); color:var(--muted); font-size:13px; }
+.org-server-status h2 { font-size:14px; margin:12px 0 4px; }
+.org-server-status dl { display:grid; grid-template-columns:max-content minmax(0, 1fr); gap:2px 12px; margin:0; }
+.org-server-status dt { font-weight:600; color:var(--foreground); }
+.org-server-status dd { margin:0; overflow-wrap:anywhere; }
+.org-app .org-server-status button { min-height:24px; padding:1px 8px; margin-left:8px; font-size:12px; }
+.org-server-status-error { color:var(--red); }
 .org-wordmark { display: flex; align-items: center; gap: 8px; font: 500 15px var(--font-mono); white-space: nowrap; }
 .org-wordmark img { width: 28px; height: 28px; }
 .org-appbar { height: 44px; flex: none; display: flex; align-items: center; gap: 8px; padding: 6px 12px; border-bottom: 1px solid var(--border); }
