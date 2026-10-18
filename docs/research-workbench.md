@@ -270,7 +270,10 @@ No Jekyll/Ghost service or public content exposure is required. Raw author HTML
 and automatic external images are disabled; local KaTeX progressively enhances
 TeX while the article remains readable without JavaScript. Append `.md` to a
 post URL for its published Markdown. Project/topic permissions and authentication
-apply to HTML and source alike. The API index is
+apply to HTML and source alike. Topic and project references (`#[topic:ID]`,
+`#[project:ID]`) render as links with the current name for readers who can open
+the target and as *unavailable* for everyone else; the Markdown source keeps the
+tokens. The API index is
 `GET /api/organizations/{organization_id}/blog?project=ID&before=CURSOR`.
 `DELETE /api/organizations/{organization_id}/blog/{post_id}` accepts
 `client_id` and `expected_revision` for an authorized editor's deletion.

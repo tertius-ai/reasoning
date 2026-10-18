@@ -31,6 +31,7 @@ from .model_benchmarks import ModelBenchmarks, metadata_key
 from .model_recommendations import recommendations
 from .navigation_api import install_routes as install_navigation_routes
 from .openrouter import OPENROUTER_URL, OpenRouter, ProviderError, provider_origin
+from .references import install_routes as install_reference_routes
 from .request_input import RequestInput as Input
 from .research_api import install_routes as install_research_routes
 from .store import Store, StoreError
@@ -588,6 +589,7 @@ def create_app(config: Config, *, provider: OpenRouter | None = None, mail_provi
     install_usage_routes(app, usage, authenticated)
     install_feedback_routes(app, store, authenticated)
     install_navigation_routes(app, store, authenticated)
+    install_reference_routes(app, store, authenticated)
     install_topic_event_routes(app, topic_events, credentials)
 
     def session_response(result: dict, response: Response, transport: Transport) -> dict:

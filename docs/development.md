@@ -152,7 +152,7 @@ node --test --test-concurrency=1 web/tests/public-ledger.browser.mjs web/tests/p
   web/tests/model-selection.browser.mjs web/tests/chat-polish.browser.mjs \
   web/tests/invitations.browser.mjs web/tests/organization-responsiveness.browser.mjs \
   web/tests/organization-requests.browser.mjs web/tests/research-requests.browser.mjs \
-  web/tests/model-picker.browser.mjs
+  web/tests/model-picker.browser.mjs web/tests/chat-links.browser.mjs
 ```
 
 The batch runs serially because its Vite fixtures share a dependency optimizer
@@ -166,7 +166,8 @@ while secondary startup requests are held, and request budgets for opening and i
 topic, revisiting a topic, reopening model capabilities, revisiting a topic's tool receipts, and returning
 from the Bibliography, measured against a production build, and a 451-model catalog in the reply picker
 and capabilities browser: no rows while closed, then search, favorites, effort selection and the complete
-list once open.
+list once open. They also open copied message links into a long topic, check notices for unavailable
+links, and drive the `#` reference menu by keyboard through to the stored tokens and rendered names.
 The PostgreSQL shards repeat storage, permission, review, fork, feedback, blog
 deletion and navigation contracts against PostgreSQL 16. Organization-storage
 contracts and leases/project-compute contracts run in separate parallel jobs;

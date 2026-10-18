@@ -8,6 +8,7 @@ import {
 } from "./organization-api";
 import { normalizeMathDelimiters } from "./markdownMath";
 import { MathematicsBrowser, ResearchMarkdown } from "./MathematicsBrowser";
+import { MarkdownReferenceAnchor, remarkReferences } from "./references";
 import { ResearchBibliography } from "./ResearchBibliography";
 
 const LABELS: Record<KnowledgeKind, string> = { ledger: "Ledger", bibliography: "Bibliography", journal: "Research blog" };
@@ -135,8 +136,8 @@ export function KnowledgeBrowser({ organizationId, hierarchy, canWrite, onAuthLo
           <header><div><small>{selected.state} · {scopeLabel(selected, hierarchy)}</small><h2>{selected.title}</h2>
             <p>Revision {selected.revision} · {selected.author_name} · {new Date(selected.revised_at * 1000).toLocaleString()}</p></div>
             {canWrite && selected.revision === selected.head_revision && <button onClick={startEdit}>Edit</button>}</header>
-          <div className="org-knowledge-markdown"><ReactMarkdown remarkPlugins={[remarkGfm, remarkMath]} rehypePlugins={[rehypeKatex]} skipHtml>
-            {normalizeMathDelimiters(selected.body)}</ReactMarkdown></div>
+          <div className="org-knowledge-markdown"><ReactMarkdown remarkPlugins={[remarkGfm, remarkMath, remarkReferences]} rehypePlugins={[rehypeKatex]} skipHtml
+            components={{ a: MarkdownReferenceAnchor }}>{normalizeMathDelimiters(selected.body)}</ReactMarkdown></div>
           {selected.head_revision > 1 && <nav aria-label="Revision history">{Array.from({ length: Math.min(selected.head_revision, 10) }, (_, index) => selected.head_revision - index)
             .map((revision) => <button key={revision} aria-current={revision === selected.revision ? "true" : undefined}
               disabled={busy} onClick={() => void openRevision(revision)}>v{revision}</button>)}</nav>}

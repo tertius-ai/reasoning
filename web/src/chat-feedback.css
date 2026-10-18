@@ -43,7 +43,7 @@
 .chat-edit label,.chat-edit small { flex-basis:100%; }
 .chat-edit textarea { width:100%; resize:vertical; }
 .chat-edit-history pre { white-space:pre-wrap; overflow-wrap:anywhere; }
-.chat-edited { font-size:.65rem; color:var(--muted); }
+.chat-edited,.chat-link-status { font-size:.65rem; color:var(--muted); }
 .chat-feedback-table table { width:100%; border-collapse:collapse; font-size:.8rem; }
 .chat-feedback-table th,.chat-feedback-table td { padding:.2rem .4rem; text-align:right; border-bottom:1px solid #8883; }
 .chat-feedback-table th:first-child { text-align:left; overflow-wrap:anywhere; }

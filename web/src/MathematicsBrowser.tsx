@@ -11,6 +11,7 @@ import type { ClaimDetail, ClaimSummary, GraphPayload, ReferenceSummary } from "
 import { RichTextPolicy } from "./RichTextPolicy";
 import { LedgerHumanChecks } from "./LedgerHumanChecks";
 import { MarkdownMedia } from "./TopicMedia";
+import { MarkdownReferenceAnchor, remarkReferences } from "./references";
 
 const loadLedger = () => import("./Ledger");
 // Selecting or pointing at a statement starts loading the inspector alongside its record.
@@ -22,7 +23,8 @@ type Claim = ClaimSummary;
 type Detail = ClaimDetail;
 const label = (claim: Claim) => claim.authority === "review" ? "LLM-reviewed" : claim.kind === "definition" ? "Definition" : claim.status;
 export function ResearchMarkdown({ children }: { children: string }) {
-  return <ReactMarkdown remarkPlugins={[remarkGfm, remarkMath]} rehypePlugins={[rehypeKatex]} components={{ img: MarkdownMedia,
+  return <ReactMarkdown remarkPlugins={[remarkGfm, remarkMath, remarkReferences]} rehypePlugins={[rehypeKatex]} components={{ img: MarkdownMedia,
+    a: MarkdownReferenceAnchor,
     p: ({ node, children }) => node?.children.some(child => child.type === "element" && child.tagName === "img")
       ? <div className="topic-media-paragraph">{children}</div> : <p>{children}</p>,
   }} skipHtml>{normalizeMathDelimiters(children)}</ReactMarkdown>;

@@ -84,7 +84,7 @@ export function ShortcutsHelp({ onClose }: { onClose: () => void }) {
       <dt>Shift+Enter</dt><dd>New line</dd><dt>Ctrl/⌘+K</dt><dd>Search organization messages</dd>
       <dt>Ctrl/⌘+B</dt><dd>Toggle project navigation</dd>
       <dt>Ctrl/⌘+Shift+P</dt><dd>Toggle people and bots</dd>
-      <dt>@</dt><dd>Mention a person or bot</dd><dt>/</dt><dd>Open topic commands</dd>
+      <dt>@</dt><dd>Mention a person or bot</dd><dt>#</dt><dd>Reference a topic or project</dd><dt>/</dt><dd>Open topic commands</dd>
       <dt>↑ / ↓ · Enter / Tab</dt><dd>Choose an autocomplete option</dd><dt>Escape</dt><dd>Close dialogs and menus</dd></dl>
     <h3>Topic commands</h3><dl className="org-shortcut-list">{TOPIC_COMMANDS.map(command => <React.Fragment key={command.id}>
       <dt><code>/{command.id}</code></dt><dd>{command.label} <small>· {command.kinds.join(" / ")}</small></dd></React.Fragment>)}</dl>

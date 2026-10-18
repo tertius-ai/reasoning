@@ -434,6 +434,8 @@ Use the prefix `/api/organizations/{organization_id}` for organization resources
 | `{prefix}/topics/{topic_id}/events` | GET | Server-Sent Events: message watermarks and run, agent, goal and bot-invocation changes for one readable topic |
 | `{prefix}/topics/{topic_id}/messages/{message_id}` | PATCH | Human author's optimistic edit with the current revision |
 | `{prefix}/topics/{topic_id}/messages/{message_id}/history` | GET | Authorized immutable original and edited versions |
+| `{prefix}/topics/{topic_id}/messages/{message_id}/context` | GET | A page of history around one message, for message links |
+| `{prefix}/references` | GET | Access-checked current names of referenced topics and projects |
 | `{prefix}/topics/{topic_id}/subscription` | PUT | Current member's topic following preference |
 | `{prefix}/topics/{topic_id}/read` | PUT | Current member's monotonic read cursor |
 | `{prefix}/search` | GET | Literal substring search across organization messages |
@@ -519,6 +521,27 @@ read/follow state, unread count, unread mentions, and latest sequence per topic.
 Mention syntax is `@[user_id]`; only current members of the same organization
 receive mention records. Removing a membership clears its preferences and
 mention records without deleting account or message history.
+
+A message link is `/organization.html?organization=ID&topic=ID&message=ID`; it
+names the message by its identifier, which edits do not change.
+`GET {prefix}/topics/{topic_id}/messages/{message_id}/context` accepts `limit`
+(2–200, default 100) and returns `message_id`, a chronological `messages` page
+and `older`. At most half the page precedes the message, more when fewer later
+messages exist, and `older` reports whether earlier messages precede the page.
+A message that is absent or belongs to another topic returns 404, as does a topic
+the member cannot read.
+
+Messages reference a topic or project as `#[topic:ID]` or `#[project:ID]`; the
+stored text never contains the target's name. `GET {prefix}/references` accepts
+comma-separated `topics` and `projects` identifiers, at most 100 distinct
+32-character lowercase hexadecimal identifiers in total (otherwise 400), from an
+organization member (404 otherwise). It returns `{"topics": {ID: topic or null},
+"projects": {ID: project or null}}`: a topic has `id`, `name`, `kind`,
+`channel_id`, `channel_name`, `project_id` and `project_name`; a project has `id`
+and `name`. Every target passes the same per-member project and topic checks as
+the hierarchy and topic reads, so a target in a private project the member does
+not belong to is `null`, exactly like a deleted or absent one. Models, bots and
+search receive the stored tokens, not names.
 
 ### Topic event stream
 
@@ -607,8 +630,8 @@ The people, topic export, ledger, bibliography and blog controls form one evenly
 Ledger and bibliography open inside the chat shell in the current tab; the static blog and editor also use same-tab links and shared light/dark theme colors.
 The account menu offers keyboard shortcut help (`?` outside a text field). The sun toggle's default follows the operating system, including live changes; explicit light/dark overrides persist locally and apply to the static blog when its theme script is available.
 Consecutive alpha-topic messages by the same non-assistant author within five minutes and the same local day share an author header. Date separators label days; continuation timestamps appear on hover or keyboard focus, with full dates in their tooltips.
-Message hover actions appear in order: reaction, message actions (including beta
-forking when authorized), and copy. Copy places only that message's Markdown text
+Message hover actions appear in order: reaction, message actions (**Copy link**
+for every message, and beta forking when authorized), and copy. Copy places only that message's Markdown text
 on the clipboard; comparison answers and retained partial responses have their
 own copy controls. Read-only readers can copy without gaining write access.
 Active inference and bots show their latest recorded progress in one compact
@@ -706,7 +729,10 @@ Enter to send; Shift+Enter inserts a newline. Ctrl/Command+Enter also sends.
 Tab from the composer focuses Send, and Enter then
 submits it. Typing `@` at a word boundary opens member-name completion; arrow
 keys select a suggestion and Enter inserts the encoded mention. Tab or Escape
-dismisses suggestions; there is no mentions button. Composition/IME Enter is not intercepted.
+dismisses suggestions; there is no mentions button. Typing `#` at a word boundary
+opens the same kind of list for the topics and projects in the writer's hierarchy,
+with the same keys; choosing one inserts a readable label that is sent as a
+reference token. Composition/IME Enter is not intercepted.
 Escape closes dialogs, menus, and search results without changing project navigation.
 Model capabilities display intelligence and agentic indices compactly and coding
 in expanded model details, when Artificial Analysis publishes an exact model-ID

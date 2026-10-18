@@ -1,7 +1,8 @@
-import { ReactNode, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { ReactNode, useContext, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { ApiError, Message, errorMessage, organizationPath, request, topicPath } from "./organization-api";
 import { encodeMessageEdit, MessageEditDraft, readableMessageEdit, updateMessageEdit } from "./messageEditorMentions";
+import { ReferenceContext, messageLink } from "./references";
 import "./chat-feedback.css";
 
 const emojis = { up: "👍", down: "👎", upside_down: "🙃" } as const;
@@ -9,14 +10,14 @@ const labels = { up: "Thumbs up", down: "Thumbs down", upside_down: "Upside-down
 type Emoji = keyof typeof emojis;
 export type Feedback = { counts: Record<Emoji, number>; mine: Emoji[]; reactors?: Record<Emoji, { id: string; name: string }[]> };
 
-export function CopyOutputButton({ text }: { text: string }) {
+export function CopyOutputButton({ text }: { text: string | (() => string) }) {
   const [error, setError] = useState("");
   return <>
     <button type="button" className="chat-action-launcher chat-copy-launcher" aria-label="Copy message" title="Copy message"
       onClick={event => {
         event.preventDefault(); event.stopPropagation(); setError("");
         void (async () => {
-          try { await navigator.clipboard.writeText(text); }
+          try { await navigator.clipboard.writeText(typeof text === "function" ? text() : text); }
           catch { setError("Could not copy. Select the message text and copy it manually."); }
         })();
       }}><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" aria-hidden="true"><rect x="8" y="8" width="12" height="12" rx="2"/><path d="M16 8V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h3"/></svg></button>
@@ -164,20 +165,35 @@ export function MessageActions({ organizationId, topicId, messageId, kind, canWr
   const [editing, setEditing] = useState(false), [editContent, setEditContent] = useState<MessageEditDraft>({ text: "", bindings: [] });
   const [editRevision, setEditRevision] = useState(0), [showHistory, setShowHistory] = useState(false);
   const [history, setHistory] = useState<{ revision: number; content: string; created_at: number }[]>([]);
+  const [linkStatus, setLinkStatus] = useState("");
+  useEffect(() => {
+    if (!linkStatus) return;
+    const timer = setTimeout(() => setLinkStatus(""), 4000);
+    return () => clearTimeout(timer);
+  }, [linkStatus]);
+  const references = useContext(ReferenceContext);
+  const reference = (kind: "topic" | "project", id: string) => references?.text(kind, id) ?? "#reference";
   const path = topicPath(organizationId, topicId) + "/messages/" + encodeURIComponent(messageId);
   const fail = (cause: unknown) => {
     if (cause instanceof ApiError && cause.status === 401) onAuthLost?.(); else setError(errorMessage(cause));
   };
-  const hasMenu = (kind === "beta" && canWrite) || canEdit || Boolean(message?.revision);
+  // Every persisted message offers its link; forking, editing and history depend on access and revisions.
+  const hasMenu = Boolean(message) || (kind === "beta" && canWrite) || canEdit;
   return <div className={`chat-message-actions${hasMenu ? " chat-has-fork" : ""}${message ? " chat-has-copy" : ""}`}>
     <ReactionBar {...{ organizationId, topicId, canWrite, onAuthLost }} targetKind="message" targetId={messageId}
       batched={batchedReactions} preloaded={reactions} />
     {hasMenu && <ActionMenu label="Message actions" className="chat-fork-launcher" icon={<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" aria-hidden="true"><circle cx="7" cy="5" r="2"/><circle cx="17" cy="5" r="2"/><circle cx="7" cy="19" r="2"/><path d="M7 7v10m10-10v3a4 4 0 0 1-4 4H7"/></svg>}>
-      {close => <>{kind === "beta" && canWrite && <button type="button" role="menuitem" onClick={() => {
+      {close => <>{message && <button type="button" role="menuitem" onClick={() => {
+        close(); setLinkStatus("");
+        void navigator.clipboard.writeText(messageLink(window.location.origin, organizationId, topicId, messageId))
+          .then(() => setLinkStatus("Link copied."))
+          .catch(() => setLinkStatus("Could not copy the link."));
+      }}>Copy link</button>}
+      {kind === "beta" && canWrite && <button type="button" role="menuitem" onClick={() => {
         setOpen(true); if (!clientId) setClientId(crypto.randomUUID()); close();
       }}>Fork here</button>}
       {canEdit && message && <button type="button" role="menuitem" onClick={() => {
-        setEditContent(readableMessageEdit(message.content, people)); setEditRevision(message.revision ?? 0); setEditing(true); setError(""); close();
+        setEditContent(readableMessageEdit(message.content, people, reference)); setEditRevision(message.revision ?? 0); setEditing(true); setError(""); close();
       }}>Edit message</button>}
       {canEdit && onReplyAgain && <button type="button" role="menuitem" disabled={busy} onClick={() => {
         close(); setBusy(true); setError("");
@@ -188,7 +204,8 @@ export function MessageActions({ organizationId, topicId, messageId, kind, canWr
         void request<typeof history>(path + "/history").then(setHistory).catch(fail);
       }}>Version history</button>}</>}
     </ActionMenu>}
-    {message && <CopyOutputButton text={readableMessageEdit(message.content, people).text} />}
+    {message && <CopyOutputButton text={() => readableMessageEdit(message.content, people, reference).text} />}
+    {linkStatus && <small role="status" className="chat-link-status">{linkStatus}</small>}
     {Boolean(message?.revision) && <small className="chat-edited" title={message?.edited_at ? new Date(message.edited_at * 1000).toLocaleString() : undefined}>edited</small>}
     {editing && <form className="chat-edit" onSubmit={event => {
       event.preventDefault(); setBusy(true); setError("");
@@ -204,7 +221,7 @@ export function MessageActions({ organizationId, topicId, messageId, kind, canWr
     </form>}
     {showHistory && <div className="chat-edit-history" aria-label="Message version history">
       <button type="button" onClick={() => setShowHistory(false)}>Close history</button>
-      {history.map(version => <div key={version.revision}><small>{version.revision ? `Revision ${version.revision}` : "Original"} · {new Date(version.created_at * 1000).toLocaleString()}</small><pre>{readableMessageEdit(version.content, people).text}</pre></div>)}
+      {history.map(version => <div key={version.revision}><small>{version.revision ? `Revision ${version.revision}` : "Original"} · {new Date(version.created_at * 1000).toLocaleString()}</small><pre>{readableMessageEdit(version.content, people, reference).text}</pre></div>)}
       {error && <small role="alert" className="org-error">{error}</small>}
     </div>}
     {!editing && !showHistory && !open && error && <small role="alert" className="org-error">{error}</small>}

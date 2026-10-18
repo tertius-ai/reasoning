@@ -48,7 +48,7 @@ test("only writable beta messages expose branching", () => {
   assert.doesNotMatch(render({ canWrite: false }), /aria-label="Message actions"/);
 });
 
-test("single-message copy is available to readonly readers and follows reaction then fork", () => {
+test("single-message copy and links are available to readonly readers and follow reaction then actions", () => {
   const message = { content: "A single **answer**.", revision: 0 };
   const props = { organizationId: "org", topicId: "topic", messageId: "message", kind: "beta", canWrite: true, message };
   const writable = renderToStaticMarkup(React.createElement(components.MessageActions, props));
@@ -56,7 +56,8 @@ test("single-message copy is available to readonly readers and follows reaction 
   assert.ok(writable.indexOf('aria-label="Message actions"') < writable.indexOf('aria-label="Copy message"'));
   const readonly = renderToStaticMarkup(React.createElement(components.MessageActions, { ...props, canWrite: false }));
   assert.match(readonly, /aria-label="Copy message"/);
-  assert.doesNotMatch(readonly, /aria-label="Message actions"|aria-label="Add reaction"/);
+  assert.doesNotMatch(readonly, /aria-label="Add reaction"/);
+  assert.match(readonly, /aria-label="Message actions"/, "read-only readers can still copy a message link");
   const output = renderToStaticMarkup(React.createElement(components.OutputActions, {
     organizationId: "org", topicId: "topic", targetKind: "node", targetId: "run", nodeId: "node", text: "Answer", canWrite: true,
   }));
