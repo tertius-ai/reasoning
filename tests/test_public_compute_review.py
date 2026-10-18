@@ -73,7 +73,7 @@ def test_review_requires_explicit_human_approvals_and_encrypted_key(reviewed, tm
                        password=lambda _: "fixture-encrypted-passphrase") == result
 
 
-@pytest.mark.parametrize("change", ["unreviewed", "automated-approval", "cancel", "changed-archive", "changed-notice", "blank-password"])
+@pytest.mark.parametrize("change", ["unreviewed", "automated-approval", "cancel", "changed-archive", "changed-notice"])
 def test_review_does_not_silently_grant_approval(reviewed, tmp_path, change):
     args, audit, state, _ = prepared(reviewed, tmp_path)
     if change != "unreviewed":
@@ -91,8 +91,41 @@ def test_review_does_not_silently_grant_approval(reviewed, tmp_path, change):
     with pytest.raises((ValueError, review.tarfile.TarError)):
         review.sign(args[0], args[1], args[4], state, state / "private.pem", state / "public.pem",
                     ask=(lambda _: "") if change == "cancel" else approve,
-                    password=lambda _: "" if change == "blank-password" else "fixture-passphrase")
+                    password=lambda _: "fixture-passphrase")
     assert not (state / "source-review.ed25519").exists()
+
+
+def test_key_creation_retries_empty_and_mismatched_passphrases_without_leaking_them(tmp_path, capsys):
+    from cryptography.hazmat.primitives import serialization
+
+    path = tmp_path / "signing-key.pem"
+    answers = iter(["", "first-private-attempt", "wrong-confirmation", "saved-private-passphrase", "saved-private-passphrase"])
+
+    def password(message):
+        assert not path.exists()
+        return next(answers)
+
+    review.create_key(path, ask=approve, password=password)
+    key = serialization.load_pem_private_key(path.read_bytes(), password=b"saved-private-passphrase")
+    assert key is not None and path.stat().st_mode & 0o077 == 0
+    output = capsys.readouterr().out
+    assert "cannot be empty" in output and "did not match" in output and "password manager" in output
+    assert all(value not in output for value in ("first-private-attempt", "wrong-confirmation", "saved-private-passphrase"))
+
+
+def test_key_creation_can_be_cancelled_after_an_empty_passphrase(tmp_path):
+    path = tmp_path / "signing-key.pem"
+    answers = iter([""])
+
+    def password(message):
+        try:
+            return next(answers)
+        except StopIteration:
+            raise KeyboardInterrupt from None
+
+    with pytest.raises(KeyboardInterrupt):
+        review.create_key(path, ask=approve, password=password)
+    assert not path.exists()
 
 
 def complete(reviewed, monkeypatch, execute=None):

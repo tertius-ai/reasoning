@@ -194,14 +194,23 @@ def observe(root, archive, profile, repository, bundle, draft_path):
         "source_bundle_sha256", "source_bundle_bytes", "archive_sha256", "archive_bytes", "scope_caveats")}
 
 
+def write_private_matching(path, body):
+    """Keep resumable signing inputs private independently of the shell's umask."""
+    if path.exists() or path.is_symlink():
+        if read_private(path, LIMIT) != body:
+            raise ValueError("retained provenance differs; preserve original signing inputs")
+    else:
+        write_private(path, body, maximum=LIMIT)
+
+
 def prepare(root, archive, profile, repository, bundle, source_url, draft_path, state):
     audit = _prepare_audit(root, archive, profile, repository, bundle, source_url, draft_path)
     inputs = {"source_root": str(root.absolute()), "archive": str(archive.absolute()), "profile": profile,
               "repository": repository, "source_bundle": str(bundle.absolute()), "source_url": source_url,
               "draft": str(draft_path.absolute())}
     with locked_directory(state) as directory:
-        publication.write_matching(directory / "provenance-inputs.json", canonical(inputs).encode())
-        publication.write_matching(directory / "source-review.json", canonical(audit).encode())
+        write_private_matching(directory / "provenance-inputs.json", canonical(inputs).encode())
+        write_private_matching(directory / "source-review.json", canonical(audit).encode())
     return audit
 
 
@@ -235,7 +244,7 @@ def sign(state, key_path, trusted_key, *, ask=input, password=getpass.getpass):
         else:
             confirm("Enroll this exact provenance public key at the selected trust path?", "enroll provenance public key", ask=ask)
             write_private(trusted_key, public, maximum=16384)
-        publication.write_matching(signature, key.sign(DOMAIN + canonical(audit).encode()))
+        write_private_matching(signature, key.sign(DOMAIN + canonical(audit).encode()))
         return publication.load_audit(audit_path, signature, trusted_key)[0]
 
 

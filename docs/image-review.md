@@ -33,6 +33,9 @@ before prompting privately for a signing passphrase. Key creation and trust-key
 enrollment require separate confirmations; private keys remain encrypted and
 owner-only. Public source distribution, registry distribution and hosted Actions
 costs are confirmed in the CLI. Secrets never become argv or public artifacts.
+New signing-key prompts explain how to retain the passphrase and retry empty or
+mismatched entries in place. Prepared provenance, signing inputs and signatures
+are stored with mode `0600`, independently of the shell's umask.
 Preserve the private publication journal when retrying; inputs and dispatch/run
 identities are retained rather than silently repeated after an uncertain reply.
 
