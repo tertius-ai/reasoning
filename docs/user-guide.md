@@ -43,6 +43,23 @@ without creating a second request if the first was accepted. **Dismiss pending
 retry** only clears that retry from this browser; it does not stop an accepted
 reply or its charges. Use **Stop current work** to cancel running work.
 
+## Direct messages
+
+Click a person's name in **People** to send them a private message, or use `+`
+beside **Direct messages** in the left navigation to choose any member. The
+conversation opens in place of the topic. Your recipient finds it under **Direct
+messages** with an unread count, and can reply there. Only the two of you can read
+it: organization owners and administrators cannot, and it never appears in
+search, topic exports, shared knowledge, or bot and model context. Bots cannot be
+messaged or mentioned there. Viewers can receive and read direct messages but
+cannot start a conversation or reply.
+
+**Mute** hides a conversation's unread count. **Block** stops the other person
+from starting or continuing a conversation with you, and stops you from sending
+until you unblock them; they are told only that direct messages to you are
+unavailable. History stays readable to both of you and is retained like topic
+messages.
+
 ## Agents and bots
 
 A beta coordinator works through the same conversation tools as its delegates.

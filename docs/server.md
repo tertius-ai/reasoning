@@ -1,7 +1,8 @@
 # Public organization server
 
 `reasoning-server` provides an installation-owned, authenticated API for
-organizations, projects, channels, alpha/beta/gamma topics, and messages. Its
+organizations, projects, channels, alpha/beta/gamma topics, messages, and
+one-to-one [direct messages](#direct-messages) between members. Its
 state uses SQLite with WAL transactions by default, or operator-configured
 [PostgreSQL](postgresql.md). Both backends have atomic versioned migrations and
 foreign-key tenant constraints. It has no dependency on a hosted identity
@@ -257,7 +258,8 @@ Owners and admins manage invitations,
 provider credentials, policy, bots, and audit access. Only owners manage administrators
 and owners, or invite new administrators. Removing or demoting the last owner is
 rejected atomically. Removing a membership denies organization access even for an
-otherwise valid account session.
+otherwise valid account session. No organization role grants access to a
+[direct conversation](#direct-messages) the member does not take part in.
 
 Manual invitation creation returns a random token once. Lists expose metadata, not the
 token or its hash. Invitations expire after at most seven days and can be revoked.
@@ -422,7 +424,7 @@ Use the prefix `/api/organizations/{organization_id}` for organization resources
 | `/api/auth/me` | GET | Current account, without password material |
 | `/api/organizations` | GET, POST | Memberships and organization creation |
 | `/api/invitations/accept` | POST | One-time invitation acceptance |
-| `{prefix}/hierarchy` | GET | Projects, channels, and typed topics |
+| `{prefix}/hierarchy` | GET | Projects, channels, typed topics, the member's topic state and direct-conversation summaries |
 | `{prefix}/projects`, `{prefix}/channels`, `{prefix}/topics` | POST | Hierarchy creation; beta topics accept an eligible `default_model`, `default_effort` and `knowledge_tools` |
 | `{prefix}/projects/{project_id}`, `{prefix}/channels/{channel_id}` | PATCH | Project-owner or organization-administrator rename |
 | `{prefix}/{kind}/{entity_id}/deletion` | GET | Authorized deletion preview with descendant/activity counts and a plan token; kind is projects, channels, or topics |
@@ -438,7 +440,17 @@ Use the prefix `/api/organizations/{organization_id}` for organization resources
 | `{prefix}/references` | GET | Access-checked current names of referenced topics and projects |
 | `{prefix}/topics/{topic_id}/subscription` | PUT | Current member's topic following preference |
 | `{prefix}/topics/{topic_id}/read` | PUT | Current member's monotonic read cursor |
-| `{prefix}/search` | GET | Literal substring search across organization messages |
+| `{prefix}/direct-conversations` | GET, POST | The current member's [direct conversations](#direct-messages) with unread state; open or create one with another human member |
+| `{prefix}/direct-conversations/{conversation_id}` | GET | One direct conversation's summary, for its participants only |
+| `{prefix}/direct-conversations/{conversation_id}/messages` | GET, POST | Direct-message history and submission, with the topic message cursors and limits |
+| `{prefix}/direct-conversations/{conversation_id}/message-updates` | GET | Incremental edited direct messages with a revision-event cursor |
+| `{prefix}/direct-conversations/{conversation_id}/messages/{message_id}` | PATCH | Author's optimistic edit with the current revision |
+| `{prefix}/direct-conversations/{conversation_id}/messages/{message_id}/history` | GET | Immutable original and edited versions |
+| `{prefix}/direct-conversations/{conversation_id}/read`, `.../mute` | PUT | Current participant's monotonic read cursor; mute preference |
+| `{prefix}/direct-conversations/{conversation_id}/events` | GET | Server-Sent Events with the `messages` watermark only |
+| `{prefix}/direct-blocks` | GET | Members the current member has blocked from direct messages |
+| `{prefix}/direct-blocks/{member_id}` | PUT, DELETE | Block or unblock a member's direct messages |
+| `{prefix}/search` | GET | Literal substring search across organization topic messages |
 | `{prefix}/members` | GET | Organization members |
 | `{prefix}/presence` | GET | Active human and sponsored-bot presence; marks the requesting browser active |
 | `{prefix}/members/{member_id}` | PATCH, DELETE | Role change or membership removal |
@@ -580,6 +592,47 @@ limits (four signature reads and eight stream reads at a time), not the limit sh
 by ordinary requests. On SIGINT/SIGTERM streams end
 within about a second, so shutdown does not wait for them. `serve --no-topic-events`
 disables the route (503); browsers then keep polling.
+`GET {prefix}/direct-conversations/{conversation_id}/events` is the same stream for a
+direct conversation's participants, with only the `messages` channel; it shares the
+admission limits, lifetime and access re-checks.
+
+### Direct messages
+
+A direct conversation joins exactly two human members of one organization. It is
+not part of the project/channel/topic hierarchy and uses its own tables, so topic
+routes, organization search, knowledge, topic exports, bots (including bots that
+follow their owner's access), webhooks, inference, agent tools and workflows never
+read it. Every direct-conversation route requires the caller to be one of its two
+participants; anyone else, including organization owners and administrators,
+receives 404. `hierarchy.direct_conversations` contains only the caller's own
+summaries, without message content, so navigation refreshes their unread counts
+with topic state. Direct-message actions create no audit events.
+
+`POST {prefix}/direct-conversations` with `user_id` returns the existing
+conversation with that member (200) or creates one (201). Bots, non-members and the
+caller are refused. A conversation is listed for its recipient only once it holds a
+message. Summaries contain `other_user` (`id`, `name`), `other_member`, `muted`,
+`blocked` (whether the caller blocked the other participant), `last_read_sequence`,
+`last_message_sequence`, `last_message_at` and `unread_count`, which counts the other
+participant's messages after the read cursor. Sending advances the sender's own read
+cursor. Messages, edits, revision history, client-ID replay and cursors behave as for
+topic messages; direct messages carry `conversation_id` instead of `topic_id`, and
+mention syntax creates no mention records. Reactions and attachments are not
+available in direct conversations.
+
+Owners, administrators and members can start conversations and send messages.
+Viewers cannot write organization content, so they can read, mute and block in
+conversations others start with them but cannot start one or reply. Muting keeps
+the unread count in the summary; the interface hides it. A block is per organization:
+while either participant blocks the other, neither can start a conversation, send or
+edit. The blocked member receives `403 direct messages to this person are
+unavailable`, the same refusal as for a recipient who has left the organization;
+the member who blocked receives `403 unblock this person to send them direct
+messages`. Existing history stays readable to both participants. Removing a
+membership clears that member's read and mute state and ends their access; the
+remaining participant keeps the history. Direct messages are retained like topic
+messages: there is no separate expiry or deletion. They are not end-to-end
+encrypted; operators with database or backup access can read them.
 
 Search uses `q` (1–200 characters), with a limit of 1–100 (default 50). It searches
 message content literally, including percent and underscore characters, and
@@ -609,7 +662,12 @@ with its own budget, deliberate reuse copied into a separately encrypted
 organization record, or no credential, models, or budget. Members and viewers
 cannot create organizations. Bot and compute credentials are never inherited.
 The left navigation groups projects, alternating-color #channels, and typed
-topics with unread counts and an `@` marker for unread personal mentions. Topics are indented beneath their channels. Creation `+` controls appear on hover beside
+topics with unread counts and an `@` marker for unread personal mentions. Below them,
+**Direct messages** lists the member's direct conversations, most recent first, with
+unread counts (hidden for muted conversations) and a total; `+` starts one with any
+member, and clicking a person's name in **People** opens or starts a conversation
+with them. A direct conversation replaces the topic view, with mute and block
+controls and a confirmation before blocking; the app bar shows its participant. Topics are indented beneath their channels. Creation `+` controls appear on hover beside
 Projects, projects, and channels. Project, channel, and topic settings use adjacent
 centered `⋯` buttons that appear on hover or keyboard focus and remain visible on touch
 devices. Authorized settings expose deletion with descendant counts and typed
@@ -673,9 +731,9 @@ waits a minute, so polling reports the lost session or access. A scheduled end
 reconnects within a second without leaving the live state. A hidden tab closes its
 stream after a minute and reopens it when visible.
 Visible-tab message polling uses an exclusive sequence cursor every two seconds
-and retries after a network failure. The topic hierarchy (including unread state)
-refreshes every four seconds; members and the organization list refresh with every
-third hierarchy refresh. Hidden tabs make no scheduled refreshes; returning to a
+and retries after a network failure. The topic hierarchy (including unread state
+and direct-conversation summaries) refreshes every four seconds; members and the
+organization list refresh with every third hierarchy refresh. Hidden tabs make no scheduled refreshes; returning to a
 visible tab refreshes every paused view immediately. Each refresh waits for the
 previous request to finish before scheduling another.
 

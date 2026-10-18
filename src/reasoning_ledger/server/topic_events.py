@@ -13,6 +13,9 @@ store methods as the REST routes and sends the result:
   output only grew carries ``output_append`` instead of the full ``output_text``.
 * ``agents``, ``goal`` (beta topics) and ``bot-runs``: complete snapshots, sent when they change.
 
+A direct conversation has the same stream with only the ``messages`` channel, read through the
+participant-only direct-message access check.
+
 A (re)connected stream starts with every channel, so catch-up needs no server-side history.
 """
 
@@ -36,10 +39,12 @@ from fastapi.responses import StreamingResponse
 
 from .store import StoreError
 
-TOPIC_PATH = re.compile(r"/topics/([a-f0-9]{32})(?:/|$)")
+TOPIC_PATH = re.compile(r"/(?:topics|direct-conversations)/([a-f0-9]{32})(?:/|$)")
 SAFE_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
 BETA_CHANNELS = ("messages", "runs", "agents", "goal", "bot-runs")
 CHANNELS = ("messages", "bot-runs")
+DIRECT_CHANNELS = ("messages",)
+STREAM_CHANNELS = {"topic": CHANNELS, "beta": BETA_CHANNELS, "direct": DIRECT_CHANNELS}
 
 
 @dataclass(frozen=True)
@@ -123,6 +128,19 @@ def signature(db, organization_id: str, topic_id: str, beta: bool) -> dict[str, 
     return result
 
 
+def direct_signature(db, organization_id: str, conversation_id: str) -> dict[str, Any]:
+    """Content-free change markers for one direct conversation, read without a user identity."""
+    messages = db.execute(
+        "SELECT MAX(sequence) FROM direct_messages WHERE organization_id=? AND conversation_id=?", (organization_id, conversation_id)
+    ).fetchone()[0]
+    revisions = db.execute(
+        "SELECT MAX(r.sequence) FROM direct_message_revisions r JOIN direct_messages m ON m.id=r.message_id "
+        "WHERE r.organization_id=? AND m.conversation_id=?",
+        (organization_id, conversation_id),
+    ).fetchone()[0]
+    return {"messages": (messages or 0, revisions or 0), "active": False}
+
+
 class _Subscription:
     def __init__(self, channels: tuple[str, ...]):
         self.dirty: set[str] = set(channels)
@@ -136,8 +154,8 @@ class _Subscription:
 
 
 class _Watcher:
-    def __init__(self, hub: TopicEvents, organization_id: str, topic_id: str, beta: bool):
-        self.hub, self.organization_id, self.topic_id, self.beta = hub, organization_id, topic_id, beta
+    def __init__(self, hub: TopicEvents, organization_id: str, stream_id: str, kind: str):
+        self.hub, self.organization_id, self.stream_id, self.kind = hub, organization_id, stream_id, kind
         self.subscribers: set[_Subscription] = set()
         self.wake = asyncio.Event()
         self.task: asyncio.Task | None = None
@@ -146,8 +164,8 @@ class _Watcher:
         previous: dict[str, Any] | None = None
         while self.subscribers and not self.hub.closing:
             try:
-                current = await anyio.to_thread.run_sync(self.hub.read_signature, self.organization_id, self.topic_id,
-                                                         self.beta, limiter=self.hub.signature_limiter)
+                current = await anyio.to_thread.run_sync(self.hub.read_signature, self.organization_id, self.stream_id,
+                                                         self.kind, limiter=self.hub.signature_limiter)
             except Exception:  # noqa: BLE001 - a failed read is retried; subscribers keep their last state.
                 current = None
             if current is not None:
@@ -173,7 +191,7 @@ class TopicEvents:
         self.closing = False
         self.signature_limiter = anyio.CapacityLimiter(4)
         self.read_limiter = anyio.CapacityLimiter(8)
-        self._watchers: dict[tuple[str, str], _Watcher] = {}
+        self._watchers: dict[tuple[str, str, str], _Watcher] = {}
         self._users: Counter[str] = Counter()
         self._lock = threading.Lock()
         self._previous_signals: dict[int, Any] = {}
@@ -187,9 +205,11 @@ class TopicEvents:
     def watchers(self) -> int:
         return len(self._watchers)
 
-    def read_signature(self, organization_id: str, topic_id: str, beta: bool) -> dict[str, Any]:
+    def read_signature(self, organization_id: str, stream_id: str, kind: str) -> dict[str, Any]:
         with self.store.transaction() as db:
-            return signature(db, organization_id, topic_id, beta)
+            if kind == "direct":
+                return direct_signature(db, organization_id, stream_id)
+            return signature(db, organization_id, stream_id, kind == "beta")
 
     def admit(self, user: str):
         """Count one stream against the installation and account limits; the returned release is idempotent."""
@@ -217,20 +237,21 @@ class TopicEvents:
 
         return release
 
-    def subscribe(self, organization_id: str, topic_id: str, beta: bool) -> _Subscription:
-        subscription = _Subscription(BETA_CHANNELS if beta else CHANNELS)
-        key = (organization_id, topic_id)
+    def subscribe(self, organization_id: str, stream_id: str, kind: str) -> _Subscription:
+        """Watch a topic (kind ``topic`` or ``beta``) or a direct conversation (kind ``direct``)."""
+        subscription = _Subscription(STREAM_CHANNELS[kind])
+        key = (organization_id, stream_id, kind)
         watcher = self._watchers.get(key)
         if watcher is None or watcher.task is None or watcher.task.done():
-            watcher = _Watcher(self, organization_id, topic_id, beta)
+            watcher = _Watcher(self, organization_id, stream_id, kind)
             self._watchers[key] = watcher
         watcher.subscribers.add(subscription)
         if watcher.task is None:
             watcher.task = asyncio.get_running_loop().create_task(watcher.run())
         return subscription
 
-    def unsubscribe(self, organization_id: str, topic_id: str, subscription: _Subscription) -> None:
-        key = (organization_id, topic_id)
+    def unsubscribe(self, organization_id: str, stream_id: str, kind: str, subscription: _Subscription) -> None:
+        key = (organization_id, stream_id, kind)
         watcher = self._watchers.get(key)
         if watcher is None:
             return
@@ -241,10 +262,10 @@ class TopicEvents:
                 del self._watchers[key]
 
     def nudge(self, path: str) -> None:
-        """Re-read signatures at once after a write; a path naming a topic wakes only that topic."""
+        """Re-read signatures at once after a write; a path naming a topic or direct conversation wakes only that one."""
         match = TOPIC_PATH.search(path)
-        for (_, topic_id), watcher in list(self._watchers.items()):
-            if match is None or match[1] == topic_id:
+        for (_, stream_id, _), watcher in list(self._watchers.items()):
+            if match is None or match[1] == stream_id:
                 watcher.wake.set()
 
     def close(self) -> None:
@@ -309,11 +330,13 @@ class _RunPatches:
 def install_routes(app, hub: TopicEvents, credentials) -> None:
     from .bot_runtime import BotRuntime
     from .bot_store import BotStore
+    from .direct_messages import DirectMessages
     from .research_goals import ResearchGoals
     from .topic_agents import TopicAgents
 
     store, inference = hub.store, hub.inference
     bots, goals, agents = BotRuntime(BotStore(store)), ResearchGoals(inference), TopicAgents(inference)
+    direct = DirectMessages(store)
 
     def topic_kind(user: str, organization_id: str, topic_id: str) -> str:
         with store.transaction() as db:
@@ -333,21 +356,18 @@ def install_routes(app, hub: TopicEvents, credentials) -> None:
         "bot-runs": bots.listing,
     }
 
-    def revalidate(access: str, user: str, organization_id: str, topic_id: str) -> None:
-        if store.session(access)["user_id"] != user:
-            raise StoreError(401, "sign-in required")
-        topic_kind(user, organization_id, topic_id)
-
-    @app.get("/api/organizations/{organization_id}/topics/{topic_id}/events", include_in_schema=False)
-    async def topic_events(organization_id: str, topic_id: str, request: Request):
-        user, access = await anyio.to_thread.run_sync(lambda: credentials(request))
-        kind = await anyio.to_thread.run_sync(topic_kind, user, organization_id, topic_id)
+    def respond(user: str, access: str, organization_id: str, stream_id: str, kind: str, readers: dict, check) -> _EventResponse:
+        """Stream one readable topic or direct conversation; `check` repeats its access decision."""
         release = hub.admit(user)
-        beta = kind == "beta"
         limits = hub.limits
 
+        def revalidate() -> None:
+            if store.session(access)["user_id"] != user:
+                raise StoreError(401, "sign-in required")
+            check(user, organization_id, stream_id)
+
         async def stream():
-            subscription = hub.subscribe(organization_id, topic_id, beta)
+            subscription = hub.subscribe(organization_id, stream_id, kind)
             sent: dict[str, str] = {}
             runs = _RunPatches()
             started = time.monotonic()
@@ -365,18 +385,17 @@ def install_routes(app, hub: TopicEvents, credentials) -> None:
                     if now - recheck >= limits.recheck:
                         recheck = now
                         try:
-                            await anyio.to_thread.run_sync(revalidate, access, user, organization_id, topic_id,
-                                                           limiter=hub.read_limiter)
+                            await anyio.to_thread.run_sync(revalidate, limiter=hub.read_limiter)
                         except StoreError as exc:
                             yield _event("end", {"reason": "session" if exc.status == 401 else "access"})
                             return
                     if subscription.dirty:
                         channels, subscription.dirty = subscription.dirty, set()
-                        for channel in (BETA_CHANNELS if beta else CHANNELS):
+                        for channel in STREAM_CHANNELS[kind]:
                             if channel not in channels:
                                 continue
                             try:
-                                value = await anyio.to_thread.run_sync(readers[channel], user, organization_id, topic_id,
+                                value = await anyio.to_thread.run_sync(readers[channel], user, organization_id, stream_id,
                                                                        limiter=hub.read_limiter)
                             except StoreError as exc:
                                 yield _event("end", {"reason": "session" if exc.status == 401 else "access"})
@@ -401,10 +420,22 @@ def install_routes(app, hub: TopicEvents, credentials) -> None:
                         with contextlib.suppress(TimeoutError):
                             await asyncio.wait_for(subscription.wake.wait(), 1.0)
             finally:
-                hub.unsubscribe(organization_id, topic_id, subscription)
+                hub.unsubscribe(organization_id, stream_id, kind, subscription)
                 release()
 
         return _EventResponse(stream(), release)
+
+    @app.get("/api/organizations/{organization_id}/topics/{topic_id}/events", include_in_schema=False)
+    async def topic_events(organization_id: str, topic_id: str, request: Request):
+        user, access = await anyio.to_thread.run_sync(lambda: credentials(request))
+        kind = await anyio.to_thread.run_sync(topic_kind, user, organization_id, topic_id)
+        return respond(user, access, organization_id, topic_id, "beta" if kind == "beta" else "topic", readers, topic_kind)
+
+    @app.get("/api/organizations/{organization_id}/direct-conversations/{conversation_id}/events", include_in_schema=False)
+    async def direct_events(organization_id: str, conversation_id: str, request: Request):
+        user, access = await anyio.to_thread.run_sync(lambda: credentials(request))
+        await anyio.to_thread.run_sync(direct.watermarks, user, organization_id, conversation_id)
+        return respond(user, access, organization_id, conversation_id, "direct", {"messages": direct.watermarks}, direct.watermarks)
 
 
 class _EventResponse(StreamingResponse):

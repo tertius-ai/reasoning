@@ -576,6 +576,7 @@ Explicit grants apply to those topic identities, including readable history.
 For administrator-sponsored bots, public conversation access includes future topics
 in organization-visible projects; private topics still need explicit grants. Personal
 **Follow my access** includes future private conversations visible to the owner.
+It never includes the owner's [direct messages](server.md#direct-messages), which no bot can read.
 The interface identifies project, #channel, and
 topic, and supports renaming/grant changes, credential rotation, and permanent
 revocation. Credentials are displayed once, with explicit copy/show controls,

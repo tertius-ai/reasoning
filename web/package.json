@@ -10,6 +10,7 @@
     "build": "tsc -b && vite build",
     "test": "node --test tests/*.test.mjs",
     "test:public-chat": "node --test tests/public-chat.browser.mjs",
+    "test:direct-messages": "node --test tests/direct-messages.browser.mjs",
     "test:public-inference": "node --test tests/public-inference.browser.mjs",
     "test:dev": "node --test tests/development.browser.mjs",
     "test:public-compute": "node --test tests/public-compute.browser.mjs",

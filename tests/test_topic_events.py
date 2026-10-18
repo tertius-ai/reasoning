@@ -375,11 +375,14 @@ def test_nudges_wake_only_the_written_topic():
         def __init__(self):
             self.wake = threading.Event()
 
-    hub._watchers = {("o", "a" * 32): Watcher(), ("o", "b" * 32): Watcher()}
+    keys = ("o", "a" * 32, "topic"), ("o", "b" * 32, "beta"), ("o", "c" * 32, "direct")
+    hub._watchers = {key: Watcher() for key in keys}
     hub.nudge(f"/api/organizations/o/topics/{'a' * 32}/messages")
-    assert hub._watchers[("o", "a" * 32)].wake.is_set() and not hub._watchers[("o", "b" * 32)].wake.is_set()
+    assert [hub._watchers[key].wake.is_set() for key in keys] == [True, False, False]
+    hub.nudge(f"/api/organizations/o/direct-conversations/{'c' * 32}/messages")
+    assert hub._watchers[keys[2]].wake.is_set() and not hub._watchers[keys[1]].wake.is_set()
     hub.nudge("/api/organizations/o/inference-runs/r/cancel")
-    assert hub._watchers[("o", "b" * 32)].wake.is_set()
+    assert hub._watchers[keys[1]].wake.is_set()
 
 
 def test_managed_proxy_streams_events_without_buffering():

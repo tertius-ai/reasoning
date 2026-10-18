@@ -618,3 +618,7 @@ MIGRATIONS += (INFERENCE_ADMISSION_SCHEMA,)
 from .bot_run_timing_schema import SCHEMA as BOT_RUN_TIMING_SCHEMA  # noqa: E402
 
 MIGRATIONS += (BOT_RUN_TIMING_SCHEMA,)
+
+from .direct_messages_schema import SCHEMA as DIRECT_MESSAGES_SCHEMA  # noqa: E402
+
+MIGRATIONS += (DIRECT_MESSAGES_SCHEMA,)

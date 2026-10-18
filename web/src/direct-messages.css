@@ -1,0 +1,26 @@
+/* Copyright Benjamin Antieau and Deven Manam. SPDX-License-Identifier: Apache-2.0 */
+.org-direct-nav { flex: none; max-height: 34%; overflow-y: auto; padding: 6px 8px 8px; border-top: 1px solid var(--border); }
+.org-direct-heading { display: flex; align-items: center; gap: 6px; padding: 4px 4px 4px 8px; font-size: 13px; }
+.org-direct-heading > strong { flex: 1; }
+.org-direct-heading:hover .org-tree-add, .org-direct-heading .org-tree-add[aria-expanded="true"] { opacity: 1; }
+.org-direct-picker { display: block; padding: 2px 4px 6px 8px; }
+.org-direct-picker select { width: 100%; }
+.org-app .org-direct-row { display: flex; align-items: center; gap: 7px; width: 100%; min-height: 30px; padding: 4px 8px; border: none; text-align: left; font-size: 13px; }
+.org-app .org-direct-row[aria-current="page"] { background: var(--surface-raised); }
+.org-direct-row .org-presence-avatar { width: 20px; height: 20px; font-size: 10px; }
+.org-direct-row .org-private-mark { margin-left: 0; }
+.org-direct-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; flex-wrap: wrap;
+  padding: 10px max(16px, calc((100% - 900px) / 2)); border-bottom: 1px solid var(--border); }
+.org-direct-header h2 { margin: 0 0 2px; font-size: 15px; }
+.org-direct-header small { color: var(--muted); font-size: 12px; }
+.org-direct-controls { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.org-direct-confirm { display: inline-flex; align-items: center; gap: 6px; flex-wrap: wrap; font-size: 12px; }
+.org-direct-conversation .org-message { position: relative; }
+.org-direct-actions { position: absolute; top: 5px; right: 8px; display: flex; gap: 6px; }
+.org-direct-actions button { min-height: 22px; padding: 1px 7px; border-color: transparent; background: transparent; color: var(--muted); font-size: 11px; }
+.org-direct-actions button[aria-label="Edit message"] { opacity: 0; }
+.org-message:hover .org-direct-actions button, .org-direct-actions button:focus-visible { opacity: 1; }
+@media (hover: none) { .org-direct-actions button[aria-label="Edit message"] { opacity: 1; } }
+.org-direct-status { margin: 0 max(16px, calc((100% - 900px) / 2)) 6px; }
+.org-presence .org-presence-message { width: 100%; text-align: left; border: 0; padding: 0; background: transparent; color: inherit; font: inherit; font-weight: inherit; cursor: pointer; overflow: hidden; text-overflow: ellipsis; }
+.org-presence .org-presence-message:hover, .org-presence .org-presence-message:focus-visible { text-decoration: underline; }
