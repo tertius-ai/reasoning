@@ -143,7 +143,8 @@ The frontend job also checks the local development workflow in Chromium:
 login, simulated beta streaming, prompt inspection, and owned-process/state
 cleanup. Locally, prepare with `make dev-setup` and run
 `npm --prefix web run test:dev` after installing Playwright's Chromium browser.
-The production-browser checks run `npm --prefix web run test:topic-agents` and:
+The production-browser checks run `npm --prefix web run test:topic-agents`,
+`npm --prefix web run test:direct-messages` and:
 
 ```bash
 node --test --test-concurrency=1 web/tests/public-ledger.browser.mjs web/tests/public-blog.browser.mjs \
