@@ -34,6 +34,8 @@ import { TexRequestDialog, texRequest } from "./TexRequestDialog";
 import { EmailVerification, VerifyEmailBanner } from "./EmailVerification";
 import { BatchInvitations, InvitationDeliveryProgress } from "./BatchInvitations";
 import { ProviderKeyUsage } from "./ProviderKeyUsage";
+import { ReferenceCandidate, ReferenceContext, ReferenceLink, ReferenceResolver, ReferenceText, applicationHref, followApplicationLink, matchReferences,
+  referenceCandidates, referenceFromHref, referenceQuery, referenceToken, remarkReferences, topicLink } from "./references";
 import {
   Account, ApiError, Channel, EMPTY_HIERARCHY, Hierarchy, InferenceConfiguration, Invitation, InvitationMail, KeyMetadata, KIND_LABEL, KIND_SYMBOL, KnowledgeTool,
   BotModel, Member, MentionQuery, Message, ModelAttempt, Organization, OrganizationPrices, Policy, Presence, Project, ProjectMember, SearchResult, Session, Topic, TopicKind, aborted,
@@ -49,6 +51,10 @@ const ComputeAdministration = lazy(() => import("./ComputeAdministration").then(
 const OrganizationModelBrowser = lazy(() => import("./OrganizationUsage").then(module => ({ default: module.OrganizationModelBrowser })));
 const OrganizationUsagePanel = lazy(() => import("./OrganizationUsage").then(module => ({ default: module.OrganizationUsagePanel })));
 const HelpPage = lazy(() => import("./HelpPage").then(module => ({ default: module.HelpPage })));
+const UNAVAILABLE_LINK = "This link is unavailable. It may point to something that was removed, or that you cannot access.";
+/** The first topic of a project, which a project link opens. */
+const projectTopic = (hierarchy: Hierarchy, projectId: string) => hierarchy.topics.find(topic =>
+  hierarchy.channels.some(channel => channel.id === topic.channel_id && channel.project_id === projectId))?.id;
 
 type Draft = { text: string; clientId: string; attempted: boolean; mentions?: MentionBinding[] };
 type Creation = "organization" | "project" | "channel" | "topic";
@@ -56,9 +62,15 @@ const newDraft = (): Draft => ({ text: "", clientId: crypto.randomUUID(), attemp
 /** Keep the current value when a refresh returns equal data, so dependent views and effects do not restart. */
 export const unchanged = <T,>(current: T, next: T): T => JSON.stringify(current) === JSON.stringify(next) ? current : next;
 // Stable renderer types and plugin lists preserve DOM selection across activity and message polling.
-const messageRemarkPlugins = [remarkGfm, remarkMath], messageRehypePlugins = [rehypeKatex];
+const messageRemarkPlugins = [remarkGfm, remarkMath, remarkReferences], messageRehypePlugins = [rehypeKatex];
 const messageMarkdownComponents: Components = {
-  a: ({ children, href }) => <a href={href} target="_blank" rel="noopener noreferrer">{children}</a>,
+  a: ({ children, href }) => {
+    const reference = referenceFromHref(href);
+    if (reference) return <ReferenceLink kind={reference.kind} id={reference.id} />;
+    // Links into this application (message, topic and project links) navigate in place.
+    return applicationHref(href) ? <a href={href} onClick={followApplicationLink}>{children}</a>
+      : <a href={href} target="_blank" rel="noopener noreferrer">{children}</a>;
+  },
   p: ({ children, node }) => node?.children.some(child => child.type === "element" && child.tagName === "img")
     ? <div className="topic-media-paragraph">{children}</div> : <p>{children}</p>,
   img: ({ src, alt }) => <MarkdownMedia src={src} alt={alt} />,
@@ -95,8 +107,8 @@ export function alphaMessageGroups(messages: Message[]): Message[][] {
   return groups;
 }
 
-export function TopicBreadcrumb({ channel, topic, subscribed, onFollow, onSettings }: {
-  channel?: Channel; topic: Topic; subscribed: boolean; onFollow: () => void; onSettings?: () => void;
+export function TopicBreadcrumb({ channel, topic, subscribed, onFollow, onSettings, onCopyLink }: {
+  channel?: Channel; topic: Topic; subscribed: boolean; onFollow: () => void; onSettings?: () => void; onCopyLink?: () => void;
 }) {
   const menu = useRef<HTMLDetailsElement>(null);
   useEffect(() => {
@@ -114,6 +126,7 @@ export function TopicBreadcrumb({ channel, topic, subscribed, onFollow, onSettin
       <div className="org-topic-menu-options">
         <button type="button" onClick={() => { onFollow(); if (menu.current) menu.current.open = false; }}>
           {subscribed ? "Unfollow topic" : "Follow topic"}</button>
+        {onCopyLink && <button type="button" onClick={() => { onCopyLink(); if (menu.current) menu.current.open = false; }}>Copy topic link</button>}
         {onSettings && <button type="button" onClick={() => { onSettings(); if (menu.current) menu.current.open = false; }}>Topic settings</button>}
       </div>
     </details>
@@ -599,9 +612,13 @@ function PresenceSidebar({ organizationId, open, onClose, onAuthLost }: {
   </aside>;
 }
 
-function Conversation({ organizationId, topic, members, user, canWrite, canManage, draft, updateDraft, anchor, onPreference, onForked, onAuthLost, modelAttempt, onModelAttempt, computeAttempt, onComputeAttempt, workflowAttempt, onWorkflowAttempt, workflowExecutionAttempt, onWorkflowExecutionAttempt }: {
+function Conversation({ organizationId, topic, members, user, canWrite, canManage, draft, updateDraft, anchor, focus, referenceTargets = [], onPreference, onForked, onAuthLost, modelAttempt, onModelAttempt, computeAttempt, onComputeAttempt, workflowAttempt, onWorkflowAttempt, workflowExecutionAttempt, onWorkflowExecutionAttempt }: {
   organizationId: string; topic: Topic; members: Member[]; user: Account; canWrite: boolean; canManage: boolean;
   draft: Draft; updateDraft: (draft: Draft) => void; anchor: number | null;
+  /** A linked message: the conversation opens around it, scrolls to it and highlights it. */
+  focus?: string;
+  /** Topics and projects the writer can reference with `#`. */
+  referenceTargets?: ReferenceCandidate[];
   onPreference: () => void; onAuthLost: () => void;
   onForked: (topicId: string) => void;
   modelAttempt?: PendingModelAttempt; onModelAttempt: (attempt?: PendingModelAttempt) => void;
@@ -610,7 +627,7 @@ function Conversation({ organizationId, topic, members, user, canWrite, canManag
   workflowExecutionAttempt?: WorkflowExecutionAttempt; onWorkflowExecutionAttempt: (attempt?: WorkflowExecutionAttempt) => void;
 }) {
   // A recent visit's messages and cursors render at once; the poll then fetches only what changed.
-  const snapshotKey = anchor === null ? `${user.id}/${organizationId}/${topic.id}` : "";
+  const snapshotKey = anchor === null && !focus ? `${user.id}/${organizationId}/${topic.id}` : "";
   const [snapshot] = useState(() => snapshotKey ? readTopicSnapshot(snapshotKey) : undefined);
   const [messages, setMessages] = useState<Message[]>(snapshot?.messages ?? []);
   const [loading, setLoading] = useState(!snapshot);
@@ -619,8 +636,13 @@ function Conversation({ organizationId, topic, members, user, canWrite, canManag
   const [sending, setSending] = useState(false);
   const [older, setOlder] = useState(snapshot?.older ?? true);
   const [loadingOlder, setLoadingOlder] = useState(false);
-  const [atBottom, setAtBottom] = useState(anchor === null);
+  const [atBottom, setAtBottom] = useState(anchor === null && !focus);
   const [mention, setMention] = useState<MentionQuery | null>(null);
+  const [reference, setReference] = useState<MentionQuery | null>(null);
+  const [highlighted, setHighlighted] = useState<string | null>(null);
+  const [focusMissing, setFocusMissing] = useState(false);
+  const focusState = useRef<"pending" | "found" | "missing">(focus ? "pending" : "missing");
+  const pendingScroll = useRef<string | null>(null);
   const [mentionIndex, setMentionIndex] = useState(0);
   const [topicBots, setTopicBots] = useState<Pick<Member, "id" | "name">[]>([]);
   const [inferenceConfiguration, setInferenceConfiguration] = useState<InferenceConfiguration | null>(null);
@@ -670,7 +692,7 @@ function Conversation({ organizationId, topic, members, user, canWrite, canManag
   }, [snapshotKey]);
   const acknowledged = useRef(0);
   const alive = useRef(true);
-  const bottom = useRef(anchor === null);
+  const bottom = useRef(anchor === null && !focus);
   const currentDraft = useRef(draft);
   currentDraft.current = draft;
   const root = topicPath(organizationId, topic.id);
@@ -744,6 +766,23 @@ function Conversation({ organizationId, topic, members, user, canWrite, canManag
     setMention(null);
     requestAnimationFrame(() => { textarea.current?.focus(); textarea.current?.setSelectionRange(position, position); });
   };
+  const referenceMatches = reference && !mention ? matchReferences(referenceTargets, reference.query) : [];
+  const chooseReference = (target: ReferenceCandidate) => {
+    if (!reference) return;
+    const label = "#" + target.label, token = label + " ";
+    const text = draft.text.slice(0, reference.start) + token + draft.text.slice(reference.end);
+    updateDraft({ text, clientId: crypto.randomUUID(), attempted: false,
+      mentions: [...editMentions(draft.text, text, draft.mentions), { start: reference.start, end: reference.start + label.length,
+        id: target.id, label, wire: referenceToken(target.kind, target.id) }] });
+    const position = reference.start + token.length;
+    setReference(null);
+    requestAnimationFrame(() => { textarea.current?.focus(); textarea.current?.setSelectionRange(position, position); });
+  };
+  // One keyboard model serves both menus: `@` people and bots, or `#` topics and projects.
+  const completions = mentionMembers.length
+    ? mentionMembers.map(member => ({ id: "org-mention-" + (member.optionId ?? member.id), choose: () => chooseMention(member) }))
+    : referenceMatches.map(target => ({ id: `org-reference-${target.kind}-${target.id}`, choose: () => chooseReference(target) }));
+  const completionIndex = completions.length ? mentionIndex % completions.length : 0;
 
   useEffect(() => {
     alive.current = true;
@@ -802,9 +841,28 @@ function Conversation({ organizationId, topic, members, user, canWrite, canManag
     const poll = async (): Promise<number | null> => {
       const before = [cursor.current, editCursor.current];
       try {
-        const query = cursor.current ? `after=${cursor.current}&limit=200` : `before=${anchor === null ? Number.MAX_SAFE_INTEGER : anchor + 1}&limit=100`;
+        let olderPage: boolean | undefined;
+        const page = async (): Promise<Message[]> => {
+          if (cursor.current) return request<Message[]>(root + `/messages?after=${cursor.current}&limit=200`, { signal: controller.signal });
+          if (focus && focusState.current === "pending") {
+            try {
+              const around = await request<{ messages: Message[]; older: boolean }>(
+                root + "/messages/" + encodeURIComponent(focus) + "/context?limit=100", { signal: controller.signal });
+              focusState.current = "found"; pendingScroll.current = focus; olderPage = around.older;
+              return around.messages;
+            } catch (cause) {
+              // Deleted, inaccessible and absent messages are indistinguishable; the topic opens at its latest messages.
+              if (!(cause instanceof ApiError && (cause.status === 403 || cause.status === 404))) throw cause;
+              focusState.current = "missing"; bottom.current = true; setAtBottom(true); setFocusMissing(true);
+            }
+          }
+          const latest = await request<Message[]>(root + `/messages?before=${anchor === null ? Number.MAX_SAFE_INTEGER : anchor + 1}&limit=100`,
+            { signal: controller.signal });
+          olderPage = latest.length === 100;
+          return latest;
+        };
         const [incoming, updates] = await Promise.all([
-          request<Message[]>(root + "/messages?" + query, { signal: controller.signal }).then(incoming => {
+          page().then(incoming => {
             if (!controller.signal.aborted && !cursor.current) {
               setMessages(existing => mergeMessages(existing, incoming)); setLoading(false);
             }
@@ -815,7 +873,7 @@ function Conversation({ organizationId, topic, members, user, canWrite, canManag
         if (controller.signal.aborted) return null;
         if (!updates || !Array.isArray(updates.messages) || !Number.isSafeInteger(updates.after) || updates.after < editCursor.current)
           throw new Error("Invalid message update response; reconnecting.");
-        if (!cursor.current) setOlder(incoming.length === 100);
+        if (!cursor.current) setOlder(olderPage ?? incoming.length === 100);
         cursor.current = incoming.at(-1)?.sequence ?? cursor.current;
         editCursor.current = updates.after;
         setMessages((existing) => mergeMessages(mergeMessages(existing, incoming), updates.messages.filter(message =>
@@ -846,12 +904,19 @@ function Conversation({ organizationId, topic, members, user, canWrite, canManag
       messages: value => { watermark = value; if (loaded && behind()) poller.wake(); },
     });
     return () => { unsubscribe(); controller.abort(); messagePoller.current = null; };
-  }, [root, anchor, user.id, onAuthLost, organizationId, topic.id]);
+  }, [root, anchor, focus, user.id, onAuthLost, organizationId, topic.id]);
   const transcript = useMemo(() => ({ ids: new Set(messages.map(message => message.id)), from: messages[0]?.sequence ?? Infinity }), [messages]);
 
   useEffect(() => {
     if (bottom.current && viewport.current && !document.querySelector(".chat-action-menu") && !window.getSelection()?.toString())
       viewport.current.scrollTop = viewport.current.scrollHeight;
+  }, [messages]);
+  useEffect(() => {
+    const id = pendingScroll.current, element = id ? Array.from(viewport.current?.querySelectorAll<HTMLElement>("[data-message-id]") ?? [])
+      .find(item => item.dataset.messageId === id) : undefined;
+    if (!element) return;
+    pendingScroll.current = null; setHighlighted(id);
+    element.scrollIntoView({ block: "center" }); element.focus({ preventScroll: true });
   }, [messages]);
 
   // One permission-scoped request reads reactions for every newly loaded message; a reaction change then
@@ -885,7 +950,7 @@ function Conversation({ organizationId, topic, members, user, canWrite, canManag
   }, [messages, atBottom, root, onAuthLost]);
 
   const chooseCommand = (command: TopicCommand) => {
-    updateDraft(newDraft()); setMention(null);
+    updateDraft(newDraft()); setMention(null); setReference(null);
     dispatchTopicCommand(topic.id, command);
     textarea.current?.focus();
   };
@@ -964,8 +1029,9 @@ function Conversation({ organizationId, topic, members, user, canWrite, canManag
       id: "message:" + group[0].id, created_at: group[0].created_at, sequence: group[0].sequence, body: <>
       {topic.kind === "alpha" && (groupIndex === 0 || new Date(groups[groupIndex - 1][0].created_at * 1000).toDateString() !== new Date(group[0].created_at * 1000).toDateString())
         && <div className="org-message-day"><time dateTime={new Date(group[0].created_at * 1000).toISOString().slice(0, 10)}>{new Date(group[0].created_at * 1000).toLocaleDateString(undefined, { weekday: "long", month: "short", day: "numeric", year: "numeric" })}</time></div>}
-      <div className={topic.kind === "alpha" ? "org-message-group" : undefined}>{group.map((message, index) => <article className={"org-message " + (index ? "org-message-continuation " : "") + (message.author_kind !== "assistant" && message.author_id === user.id ? "org-message-own" : "")}
-        key={message.id} id={"message-" + message.sequence} data-sequence={message.sequence}>
+      <div className={topic.kind === "alpha" ? "org-message-group" : undefined}>{group.map((message, index) => <article className={"org-message " + (index ? "org-message-continuation " : "") + (message.author_kind !== "assistant" && message.author_id === user.id ? "org-message-own" : "") + (message.id === highlighted ? " org-message-linked" : "")}
+        key={message.id} id={"message-" + message.sequence} data-sequence={message.sequence} data-message-id={message.id}
+        tabIndex={message.id === focus ? -1 : undefined} aria-current={message.id === highlighted ? "location" : undefined}>
         <header>{!index && <strong>{authorLabel(message, members)}</strong>}
           <time dateTime={new Date(message.created_at * 1000).toISOString()} title={new Date(message.created_at * 1000).toLocaleString()}>{topic.kind === "alpha" ? new Date(message.created_at * 1000).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" }) : new Date(message.created_at * 1000).toLocaleString()}</time></header>
         <MessageMarkdown markdown={normalizeMathDelimiters(mentionMarkdown(message.content, mentionPeople))} />
@@ -989,7 +1055,7 @@ function Conversation({ organizationId, topic, members, user, canWrite, canManag
             onForked(id);
           }} onAuthLost={onAuthLost} />
       </article>)}</div></> }));
-  }, [messages, reactions, workflowRunKey, topic.kind, topic.id, mentionPeople, members, user.id, organizationId, canWrite, canReplyAgain, onAuthLost]);
+  }, [messages, reactions, workflowRunKey, topic.kind, topic.id, mentionPeople, members, user.id, organizationId, canWrite, canReplyAgain, onAuthLost, focus, highlighted]);
   return <MediaScope.Provider value={{ organizationId, topicId: topic.id }}><section className="org-conversation" aria-label="Topic conversation">
     {texOpen && <TexRequestDialog bots={botModels} names={botNames} onClose={() => setTexOpen(false)} onPrepare={(source, bot) => {
       const label = `@${botNames[bot.bot_id] ?? bot.name}`;
@@ -998,6 +1064,8 @@ function Conversation({ organizationId, topic, members, user, canWrite, canManag
       setTexOpen(false); setMention(null); requestAnimationFrame(() => textarea.current?.focus());
     }} />}
     {topic.kind === "beta" && <ForkOrigin organizationId={organizationId} topicId={topic.id} />}
+    {focusMissing && <p role="status" className="org-link-notice">The linked message is unavailable. It may have been removed, or you may not have access to it.
+      <button type="button" aria-label="Dismiss notice" onClick={() => setFocusMissing(false)}>×</button></p>}
     <div className="org-stream">
     <div className="org-transcript" ref={viewport} tabIndex={0} aria-label="Message history" onScroll={() => {
       const view = viewport.current;
@@ -1048,28 +1116,32 @@ function Conversation({ organizationId, topic, members, user, canWrite, canManag
         disabled={!canWrite || sending || (topic.kind === "beta" && !!modelAttempt)} maxLength={16000} rows={1} onChange={(event) => {
           updateDraft({ text: event.target.value, clientId: draft.attempted || !draft.clientId ? crypto.randomUUID() : draft.clientId,
             attempted: false, mentions: editMentions(draft.text, event.target.value, draft.mentions) });
-          setMention(mentionQuery(event.target.value, event.target.selectionStart, topicBots.map(bot => bot.name))); setMentionIndex(0);
-        }} onSelect={(event) => setMention(mentionQuery(event.currentTarget.value, event.currentTarget.selectionStart, topicBots.map(bot => bot.name)))}
-        aria-autocomplete="list" aria-controls={mentionMembers.length ? "org-mention-list" : undefined}
-        aria-activedescendant={mentionMembers.length ? "org-mention-" + (mentionMembers[mentionIndex % mentionMembers.length].optionId ?? mentionMembers[mentionIndex % mentionMembers.length].id) : undefined}
+          setMention(mentionQuery(event.target.value, event.target.selectionStart, topicBots.map(bot => bot.name)));
+          setReference(referenceQuery(event.target.value, event.target.selectionStart)); setMentionIndex(0);
+        }} onSelect={(event) => {
+          setMention(mentionQuery(event.currentTarget.value, event.currentTarget.selectionStart, topicBots.map(bot => bot.name)));
+          setReference(referenceQuery(event.currentTarget.value, event.currentTarget.selectionStart));
+        }}
+        aria-autocomplete="list" aria-controls={completions.length ? mentionMembers.length ? "org-mention-list" : "org-reference-list" : undefined}
+        aria-activedescendant={completions.length ? completions[completionIndex].id : undefined}
         onKeyDown={(event) => {
           if (event.nativeEvent.isComposing) return;
-          if (event.key === "Escape") { setMention(null); return; }
-          if (event.key === "Tab" && mention && !event.shiftKey && !event.ctrlKey && !event.metaKey && !event.altKey) {
+          if (event.key === "Escape") { setMention(null); setReference(null); return; }
+          if (event.key === "Tab" && (mention || reference) && !event.shiftKey && !event.ctrlKey && !event.metaKey && !event.altKey) {
             event.preventDefault();
-            if (mentionMembers.length) chooseMention(mentionMembers[mentionIndex % mentionMembers.length]);
+            if (completions.length) completions[completionIndex].choose();
             return;
           }
-          if (event.key === "Tab") { setMention(null); return; }
-          if (event.key === "Enter" && (event.ctrlKey || event.metaKey)) { event.preventDefault(); setMention(null); void send(); return; }
+          if (event.key === "Tab") { setMention(null); setReference(null); return; }
+          if (event.key === "Enter" && (event.ctrlKey || event.metaKey)) { event.preventDefault(); setMention(null); setReference(null); void send(); return; }
           if (event.key === "Enter" && event.shiftKey) return;
-          if (mentionMembers.length && ["ArrowDown", "ArrowUp", "Enter"].includes(event.key)) {
+          if (completions.length && ["ArrowDown", "ArrowUp", "Enter"].includes(event.key)) {
             event.preventDefault();
-            if (event.key === "Enter") chooseMention(mentionMembers[mentionIndex % mentionMembers.length]);
-            else setMentionIndex((index) => (index + (event.key === "ArrowDown" ? 1 : -1) + mentionMembers.length) % mentionMembers.length);
+            if (event.key === "Enter") completions[completionIndex].choose();
+            else setMentionIndex((index) => (index + (event.key === "ArrowDown" ? 1 : -1) + completions.length) % completions.length);
             return;
           }
-          if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); setMention(null); void send(); }
+          if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); setMention(null); setReference(null); void send(); }
         }} />
       <div className="org-composer-controls">
         <div className="org-composer-actions">
@@ -1097,6 +1169,10 @@ function Conversation({ organizationId, topic, members, user, canWrite, canManag
         {mentionMembers.map((member, index) => <button type="button" role="option" tabIndex={-1} id={"org-mention-" + (member.optionId ?? member.id)}
           aria-selected={index === mentionIndex % mentionMembers.length} key={member.optionId ?? member.id}
           onMouseDown={(event) => event.preventDefault()} onClick={() => chooseMention(member)}>{member.name}{member.model ? "-" + member.model : ""}{member.effort ? "!" + member.effort : ""}{member.owner ? " · " + member.owner : ""}</button>)}</div>}
+      {!mentionMembers.length && referenceMatches.length > 0 && <div id="org-reference-list" role="listbox" className="org-mention-menu" aria-label="Reference a topic or project">
+        {referenceMatches.map((target, index) => <button type="button" role="option" tabIndex={-1} id={`org-reference-${target.kind}-${target.id}`}
+          aria-selected={index === completionIndex} key={target.kind + ":" + target.id}
+          onMouseDown={(event) => event.preventDefault()} onClick={() => chooseReference(target)}>{target.label}<small> · {target.detail}</small></button>)}</div>}
     </form>
   </section></MediaScope.Provider>;
 }
@@ -1230,15 +1306,29 @@ export function OrganizationApp({ user, onAccount, onAuthenticated, onSignedOut,
 }) {
   const [pairCode, setPairCode] = useState(() => typeof window === "undefined" ? undefined : new URLSearchParams(window.location.search).get("bot_connect") ?? undefined);
   const [organizations, setOrganizations] = useState<Organization[]>([]);
-  const [workspace, setWorkspace] = useState(() => {
+  const [workspace, setWorkspace] = useState<{ organization: string | null; view: string | null; topic?: string; project?: string; message?: string }>(() => {
     const query = new URLSearchParams(typeof window === "undefined" ? "" : window.location.search);
-    return { organization: query.get("organization"), view: query.get("view"), topic: query.get("topic") ?? undefined, project: query.get("project") ?? undefined };
+    return { organization: query.get("organization"), view: query.get("view"), topic: query.get("topic") ?? undefined, project: query.get("project") ?? undefined,
+      message: query.get("message") ?? undefined };
   });
   const [organizationId, setOrganizationId] = useState<string | null>(workspace.organization ?? sessionOrganization);
   const [hierarchy, setHierarchy] = useState<Hierarchy>(EMPTY_HIERARCHY);
   const [navigationUsage, setNavigationUsage] = useState<NavigationUsage>();
   const [members, setMembers] = useState<Member[]>([]);
-  const [selection, setSelection] = useState<{ topic: string; anchor: number | null } | null>(null);
+  const [selection, setSelection] = useState<{ topic: string; anchor: number | null; message?: string } | null>(null);
+  // A topic or project link is checked against the reader's hierarchy once it loads.
+  const [linkNotice, setLinkNotice] = useState("");
+  const pendingLink = useRef<{ organization: string | null; topic?: string; project?: string } | null>(
+    !workspace.view && (workspace.topic || workspace.project) ? { organization: workspace.organization, topic: workspace.topic,
+      project: workspace.topic ? undefined : workspace.project } : null);
+  const loadedHierarchy = useRef<{ organization: string; tree: Hierarchy } | null>(null);
+  const checkLink = (organization: string, tree: Hierarchy) => {
+    const link = pendingLink.current;
+    if (!link || (link.organization && link.organization !== organization)) return;
+    pendingLink.current = null;
+    const available = link.topic ? tree.topics.some(item => item.id === link.topic) : !link.project || tree.projects.some(item => item.id === link.project);
+    setLinkNotice(available ? "" : UNAVAILABLE_LINK);
+  };
   const [drafts, setDrafts] = useState<Record<string, Draft>>({});
   const [modelAttempts, setModelAttempts] = useState<Record<string, PendingModelAttempt | undefined>>({});
   const [computeAttempts, setComputeAttempts] = useState<Record<string, ComputeAttempt | undefined>>({});
@@ -1255,10 +1345,17 @@ export function OrganizationApp({ user, onAccount, onAuthenticated, onSignedOut,
   const [helpOpen, setHelpOpen] = useState(() => new URLSearchParams(window.location.search).get("view") === "help");
   useEffect(() => {
     const changed = () => { const query = new URLSearchParams(window.location.search), view = query.get("view");
-      setWorkspace({organization:query.get("organization"),view,topic:query.get("topic") ?? undefined,project:query.get("project") ?? undefined});
+      const topicId = query.get("topic") ?? undefined, projectId = query.get("project") ?? undefined, message = query.get("message") ?? undefined;
+      setWorkspace({organization:query.get("organization"),view,topic:topicId,project:projectId,message});
       setKnowledgeView(["ledger", "bibliography", "journal"].includes(view ?? "") ? view as KnowledgeView : null);
       if(query.get("organization")) setOrganizationId(query.get("organization"));
-      if(query.get("topic")) setSelection({topic:query.get("topic")!,anchor:null});
+      const loaded = loadedHierarchy.current, sameOrganization = loaded && (!query.get("organization") || query.get("organization") === loaded.organization);
+      const linked = topicId ?? (projectId && !view && sameOrganization ? projectTopic(loaded.tree, projectId) : undefined);
+      if (linked) { setHelpOpen(false); setSearch(""); setSelection({ topic: linked, anchor: null, message: topicId ? message : undefined }); }
+      if (!view && (topicId || projectId)) {
+        pendingLink.current = { organization: query.get("organization"), topic: topicId, project: topicId ? undefined : projectId };
+        if (sameOrganization) checkLink(loaded.organization, loaded.tree);
+      }
     };
     window.addEventListener("popstate", changed); return () => window.removeEventListener("popstate", changed);
   }, []);
@@ -1337,11 +1434,13 @@ export function OrganizationApp({ user, onAccount, onAuthenticated, onSignedOut,
           sharedRequest<Hierarchy>(organizationPath(organizationId) + "/hierarchy", { maxAge: 1000, signal: controller.signal }).then(tree => {
             if (controller.signal.aborted) return tree;
             setHierarchy(current => unchanged(current, tree));
+            loadedHierarchy.current = { organization: organizationId, tree }; checkLink(organizationId, tree);
             setSelection((current) => {
               if (current && tree.topics.some(item => item.id === current.topic)) return current;
-              const saved = workspace.topic ?? readNavigation(user.id, organizationId).topic;
+              const saved = workspace.topic ?? (workspace.project && !workspace.view ? projectTopic(tree, workspace.project) : undefined)
+                ?? readNavigation(user.id, organizationId).topic;
               const initial = tree.topics.find(item => item.id === saved) ?? tree.topics[0];
-              return initial ? { topic: initial.id, anchor: null } : null;
+              return initial ? { topic: initial.id, anchor: null, message: initial.id === workspace.topic ? workspace.message : undefined } : null;
             });
             return tree;
           }),
@@ -1436,16 +1535,24 @@ export function OrganizationApp({ user, onAccount, onAuthenticated, onSignedOut,
     window.addEventListener("keydown", keyboard); return () => window.removeEventListener("keydown", keyboard);
   }, [hierarchy.topics, selection, creation, admin, helpOpen]);
 
+  // Reference names come only from the server's access-checked resolution, refreshed after hierarchy changes
+  // such as renames and membership changes; the writer's own hierarchy supplies `#` completion.
+  const references = useMemo(() => organizationId ? new ReferenceResolver(organizationId) : null, [organizationId]);
+  const structure = useMemo(() => JSON.stringify([hierarchy.projects, hierarchy.channels, hierarchy.topics]), [hierarchy]);
+  const referenceTargets = useMemo(() => referenceCandidates(hierarchy), [structure]);
+  const seenStructure = useRef(structure);
+  useEffect(() => { if (seenStructure.current !== structure) references?.invalidate(); seenStructure.current = structure; }, [structure, references]);
+
   const authenticated = async (session: Session) => {
     await onAuthenticated(session); setError("");
     if (session.organization_id) setOrganizationId(workspace.organization ?? session.organization_id);
   };
 
-  const select = (id: string, anchor: number | null = null) => {
+  const select = (id: string, anchor: number | null = null, message?: string) => {
     setHelpOpen(false);
     if (knowledgeView) { setKnowledgeView(null); const url = new URL(window.location.href); url.searchParams.delete("view"); url.searchParams.set("topic", id); window.history.pushState(null, "", url); }
-    setWorkspace(current=>({...current,topic:id,view:null,project:undefined}));
-    setSelection({ topic: id, anchor });
+    setWorkspace(current=>({...current,topic:id,view:null,project:undefined,message:undefined}));
+    setSelection({ topic: id, anchor, message });
     if (window.innerWidth <= 700) setNavOpen(false);
     setSearch(""); setResults(null);
   };
@@ -1461,7 +1568,7 @@ export function OrganizationApp({ user, onAccount, onAuthenticated, onSignedOut,
   const openKnowledge = (view: KnowledgeView) => { setHelpOpen(false); setKnowledgeView(view); setWorkspace(current=>({...current,view,topic:topic?.id,project:undefined})); setSearch(""); setResults(null);
     const query = new URLSearchParams({ organization: organizationId!, view }); if (topic) query.set("topic", topic.id);
     window.history.pushState(null, "", "/organization.html?" + query); };
-  return <div className={"org-app org-tree-tone-" + Math.max(0, hierarchy.topics.filter(value => value.channel_id === topic?.channel_id).findIndex(value => value.id === topic?.id)) % 4}>
+  return <ReferenceContext.Provider value={references}><div className={"org-app org-tree-tone-" + Math.max(0, hierarchy.topics.filter(value => value.channel_id === topic?.channel_id).findIndex(value => value.id === topic?.id)) % 4}>
     <header className="org-appbar org-topic-color"><button type="button" className="org-icon-button org-nav-toggle" aria-label="Toggle project navigation"
       title="Toggle project navigation · Ctrl/⌘B" aria-controls="org-project-navigation" aria-expanded={navOpen} onClick={() => setNavOpen(open => !open)}>
       <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2" /><path d="M9 4v16" /></svg></button>
@@ -1474,7 +1581,9 @@ export function OrganizationApp({ user, onAccount, onAuthenticated, onSignedOut,
           if (cause instanceof ApiError && cause.status === 401) authLost(); else setError(errorMessage(cause));
         })}
         onSettings={organization.role === "owner" || organization.role === "admin" || selectedProject?.project_role === "owner"
-          ? () => setEntitySettings({ kind: "topic", id: topic.id }) : undefined} />}
+          ? () => setEntitySettings({ kind: "topic", id: topic.id }) : undefined}
+        onCopyLink={() => void navigator.clipboard.writeText(topicLink(window.location.origin, organization.id, topic.id))
+          .catch(() => setError("Could not copy the topic link."))} />}
       <details className="org-toolbar-actions" open={toolbarOpen} onToggle={event => {
         if (event.target === event.currentTarget) setToolbarOpen(window.innerWidth > 600 || event.currentTarget.open);
       }}><summary aria-label="More topic actions" title="More topic actions">⋯</summary><div className="org-toolbar-content">
@@ -1491,6 +1600,7 @@ export function OrganizationApp({ user, onAccount, onAuthenticated, onSignedOut,
       </div></details>
     </header>
     {error && <div className="org-banner" role="alert">{error}<button aria-label="Dismiss error" onClick={() => setError("")}>×</button></div>}
+    {linkNotice && <div className="org-banner" role="status">{linkNotice}<button aria-label="Dismiss notice" onClick={() => setLinkNotice("")}>×</button></div>}
     {verificationToken && <VerifyEmailBanner token={verificationToken} onDone={() => {
       setVerificationToken(""); window.history.replaceState(null, "", window.location.pathname + window.location.search);
       void request<Account>("/auth/me").then(onAccount).catch(cause => setError(errorMessage(cause)));
@@ -1519,10 +1629,11 @@ export function OrganizationApp({ user, onAccount, onAuthenticated, onSignedOut,
       <main className="org-main">
         {helpOpen ? <LazyView label="Help"><HelpPage onClose={() => setHelpOpen(false)} /></LazyView> : knowledgeView && organization ? <MediaScope.Provider value={{ organizationId: organization.id }}><LazyView label="Research workspace"><KnowledgeWorkspace key={organization.id + knowledgeView} organization={organization} hierarchy={hierarchy} view={knowledgeView}
           embedded initialTopicId={workspace.topic ?? topic?.id} initialProjectId={workspace.project} onAuthLost={authLost} /></LazyView></MediaScope.Provider> : searching || results !== null ? <section className="org-search-results"><header><h1>Search messages</h1><button onClick={() => setSearch("")}>Close search</button></header>
-          {searching ? <p role="status">Searching…</p> : !results?.length ? <p>No matching messages.</p> : <ol>{results.map((result) => <li key={result.id}><button onClick={() => select(result.topic_id, result.sequence)}>
+          {searching ? <p role="status">Searching…</p> : !results?.length ? <p>No matching messages.</p> : <ol>{results.map((result) => <li key={result.id}><button onClick={() => select(result.topic_id, null, result.id)}>
             <small>{result.project_name} / #{result.channel_name} / {KIND_SYMBOL[result.topic_kind]}-{result.topic_name}</small>
-            <p>{mentionText(result.content, members)}</p></button></li>)}</ol>}
-        </section> : organization && topic ? <Conversation key={organization.id + "/" + topic.id + "/" + selection?.anchor} organizationId={organization.id} topic={topic} members={members} user={user}
+            <p><ReferenceText text={mentionText(result.content, members)} /></p></button></li>)}</ol>}
+        </section> : organization && topic ? <Conversation key={organization.id + "/" + topic.id + "/" + selection?.anchor + "/" + (selection?.message ?? "")} organizationId={organization.id} topic={topic} members={members} user={user}
+          focus={selection?.message} referenceTargets={referenceTargets}
           canWrite={canWriteSelected} canManage={["owner", "admin"].includes(organization.role)} draft={draft}
           modelAttempt={modelAttempts[draftKey]} onModelAttempt={(value) => setModelAttempts((existing) => ({ ...existing, [draftKey]: value }))}
           computeAttempt={computeAttempts[draftKey]} onComputeAttempt={(value) => setComputeAttempts((existing) => ({ ...existing, [draftKey]: value }))}
@@ -1586,5 +1697,5 @@ export function OrganizationApp({ user, onAccount, onAuthenticated, onSignedOut,
       <DeletionControl organizationId={organization.id} kind="topic" entityId={entitySettings.id} onDeleted={() => { preferenceRefresh(); setEntitySettings(null); }} />
     </Dialog>}
     {admin && organization && <Administration key={organization.id} organization={organization} onClose={() => setAdmin(false)} onRefresh={preferenceRefresh} onAuthLost={authLost} />}
-  </div>;
+  </div></ReferenceContext.Provider>;
 }

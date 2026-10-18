@@ -2,13 +2,16 @@
 type Binding = { start: number; end: number; label: string; wire: string };
 export type MessageEditDraft = { text: string; bindings: Binding[] };
 
-export function readableMessageEdit(content: string, people: { id: string; name: string }[]): MessageEditDraft {
+/** Readable text for editing or copying; `reference` labels `#[topic:ID]` and `#[project:ID]` tokens. */
+export function readableMessageEdit(content: string, people: { id: string; name: string }[],
+  reference: (kind: "topic" | "project", id: string) => string = () => "#reference"): MessageEditDraft {
   const names = new Map(people.map(person => [person.id, person.name]));
   const bindings: Binding[] = [];
   let text = "", end = 0;
-  for (const match of content.matchAll(/@\[([a-f0-9]{32})(?::([^\]]+))?\]/g)) {
+  for (const match of content.matchAll(/@\[([a-f0-9]{32})(?::([^\]]+))?\]|#\[(topic|project):([a-f0-9]{32})\]/g)) {
     text += content.slice(end, match.index);
-    const label = "@" + (names.get(match[1]) ?? "departed member") + (match[2] ? "-" + match[2] : "");
+    const label = match[3] ? reference(match[3] as "topic" | "project", match[4])
+      : "@" + (names.get(match[1]) ?? "departed member") + (match[2] ? "-" + match[2] : "");
     bindings.push({ start: text.length, end: text.length + label.length, label, wire: match[0] });
     text += label; end = match.index + match[0].length;
   }

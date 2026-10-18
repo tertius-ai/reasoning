@@ -23,8 +23,18 @@ search and person-specific favorites saved on the server across devices and
 organizations. Effort choices depend on the advertised
 model capabilities; default leaves the provider's effort unchanged.
 Markdown, code blocks, tables, and TeX render in messages. Raw HTML is not executed.
-The fork icon opens beta-topic forking and available message actions. Forked
-conversations have a captured history, not access to future origin messages.
+The fork icon opens the message actions: **Copy link**, and where allowed beta-topic
+forking, editing and version history. Forked conversations have a captured
+history, not access to future origin messages.
+
+A copied message link opens the topic at that message and highlights it, also in
+long topics and in another member's browser. The topic title menu's **Copy topic
+link** links to the whole topic. Type `#` in the message box to reference a topic
+or project you can open. A message stores the reference by identifier, so it
+shows the target's current name after a rename. Members who cannot open the
+target see *unavailable* instead of its name. A link to a removed or inaccessible
+message, topic or project opens with a notice instead. References also render in
+knowledge entries and the published research blog.
 
 If a beta reply request is sent but the server's answer is lost, the
 conversation shows **Reply request not confirmed**: the message is saved, and
@@ -100,10 +110,11 @@ Record actual run IDs, tool outputs, and artifacts when reporting acceptance.
 
 Ctrl/⌘+B toggles navigation; Ctrl/⌘+Shift+P toggles people and bots;
 Ctrl/⌘+K searches; Alt+↑/↓ changes topics. `?` toggles help outside text fields.
-`@` and `/` open autocomplete; arrows and Enter/Tab select; Escape dismisses menus.
+`@` (people and bots), `#` (topics and projects) and `/` open autocomplete;
+arrows and Enter/Tab select; Escape dismisses menus.
 On a phone, **More topic actions** reveals the compact toolbar.
-Hover or keyboard-focus a message for reaction, fork/edit, and single-message
-copy controls. The upward triangle attaches a picture or PDF.
+Hover or keyboard-focus a message for reaction, message actions (copy link,
+fork, edit), and single-message copy controls. The upward triangle attaches a picture or PDF.
 
 Deleting a project or channel includes its children in one confirmation. Active
 work is cancelled, pending approvals revoked, and late effects fenced. Unknown

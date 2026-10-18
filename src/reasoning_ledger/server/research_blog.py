@@ -14,6 +14,7 @@ from mdit_py_plugins.dollarmath import dollarmath_plugin
 from mdit_py_plugins.texmath import texmath_plugin
 
 from .knowledge_store import KnowledgeStore
+from .references import link_references
 from .store import StoreError
 
 # Shared by the static reader and the React editor; never interpolate author text.
@@ -58,6 +59,7 @@ body[data-research-blog] .blog-shell-header { display:flex; align-items:center; 
 .blog-entry h2 a, .blog-entry h3 a { text-decoration: none; }
 .blog-meta { color: var(--blog-muted); font-size: 11px; gap: 6px 10px; }
 .blog-meta time { margin-left: auto; }
+.blog-reference-unavailable { color: var(--blog-muted); font-style: italic; }
 .blog-tag { padding: 1px 7px; border: 1px solid var(--blog-line); border-radius: 4px; }
 .blog-excerpt { color: var(--blog-muted); font-size: 13px; margin: 6px 0; }
 .blog-pages { margin-top: 18px; font-size: 12px; }
@@ -283,6 +285,7 @@ def install_routes(app, store, authenticated, *, frontend=None):
         renderer.renderer.rules["image"] = lambda tokens, index, *_: escape(tokens[index].content)
         content = f"<article class='blog-article'><h1>{escape(value['title'])}</h1>{post_metadata(value)}"
         tokens = renderer.parse(value["body"])
+        link_references(store, user, organization_id, tokens)
         content += renderer.renderer.render(tokens, renderer.options, {})
         content += f"</article><nav class='blog-pages'><a href='{blog_path(organization_id, post_id)}.md'>Markdown source</a></nav>"
         math = has_math(tokens) or MATH_DELIMITERS.search(value["title"]) is not None
