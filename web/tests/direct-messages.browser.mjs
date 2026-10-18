@@ -44,8 +44,9 @@ test("a member messages a colleague from People, who finds, reads and replies, t
     await owner.getByLabel("Organization name").fill("Mathematics");
     await owner.getByRole("button", { name: "Create organization", exact: true }).click();
     await visible(owner.getByRole("button", { name: "Account menu", exact: true }));
-    const ownerDirect = owner.getByRole("navigation", { name: "Direct messages" });
-    await visible(ownerDirect.getByText("Click a name below to send a message."));
+    // People doubles as the inbox: there is no separate conversation list, and + messages any member.
+    await visible(owner.getByRole("complementary", { name: "Online people and bots" }).getByRole("button", { name: "New direct message", exact: true }));
+    assert.equal(await owner.getByRole("navigation", { name: "Direct messages" }).count(), 0);
 
     await owner.getByRole("button", { name: "Account menu", exact: true }).click();
     await owner.getByRole("button", { name: "Administration" }).click();
@@ -75,39 +76,28 @@ test("a member messages a colleague from People, who finds, reads and replies, t
     await owner.getByLabel("Message", { exact: true }).fill("Could you read section 3 before Friday?");
     await owner.keyboard.press("Enter");
     await visible(conversation.locator(".org-message").filter({ hasText: "Could you read section 3 before Friday?" }));
-    await visible(ownerDirect.getByRole("button", { name: /Researcher/ }));
+    await visible(people.locator('button[aria-current="page"]').filter({ hasText: "Researcher" }));
 
     // The recipient finds the conversation by its unread count, reads it, and replies.
-    const memberDirect = member.getByRole("navigation", { name: "Direct messages" });
-    const row = memberDirect.getByRole("button", { name: /Owner/ });
-    await visible(row.getByLabel("1 unread direct messages"));
-
-    // The section belongs to the People panel, not the project navigation. It collapses to its heading and unread total,
-    // and the People toggle carries the count so it stays visible while the panel is closed.
     const memberPeople = member.getByRole("complementary", { name: "Online people and bots" });
-    assert.equal(await memberPeople.getByRole("navigation", { name: "Direct messages" }).count(), 1);
-    assert.equal(await member.locator("#org-project-navigation").getByRole("navigation", { name: "Direct messages" }).count(), 0);
+    const ownerRow = memberPeople.locator(".org-presence-row").filter({ has: member.getByRole("button", { name: "Owner", exact: true }) });
+    await visible(ownerRow.getByLabel("1 unread direct messages"));
+    assert.equal(await member.getByRole("navigation", { name: "Direct messages" }).count(), 0, "no separate conversation list");
+    assert.equal((await memberPeople.locator(".org-presence-row strong").first().textContent())?.trim(), "Owner",
+      "conversation partners are listed first");
+    // The People toggle carries the count, so it stays visible while the panel is closed.
     await visible(member.getByRole("button", { name: "Show online people and bots, 1 unread direct messages", exact: true }));
-    const sectionToggle = memberDirect.getByRole("button", { name: "Direct messages", exact: true });
-    await sectionToggle.click();
-    assert.equal(await sectionToggle.getAttribute("aria-expanded"), "false");
-    await row.waitFor({ state: "detached" });
-    await visible(memberDirect.getByLabel("1 unread direct messages in total"));
-    await member.reload();
-    await visible(memberDirect.getByLabel("1 unread direct messages in total"));
-    assert.equal(await sectionToggle.getAttribute("aria-expanded"), "false", "the collapsed state is remembered");
-    await sectionToggle.click();
-    await row.click();
+    await ownerRow.getByRole("button", { name: "Owner", exact: true }).click();
     const reply = member.getByRole("region", { name: "Direct messages with Owner" });
     await visible(reply.locator(".org-message").filter({ hasText: "section 3" }));
-    await row.getByLabel("1 unread direct messages").waitFor({ state: "detached", timeout: 15000 });
+    await ownerRow.getByLabel("1 unread direct messages").waitFor({ state: "detached", timeout: 15000 });
     await member.getByLabel("Message", { exact: true }).fill("Yes, I will send comments tomorrow.");
     await member.getByRole("button", { name: "Send", exact: true }).click();
     await visible(conversation.locator(".org-message").filter({ hasText: "comments tomorrow" }));
 
     // Muting hides the unread count; blocking stops the other person's messages with a neutral refusal.
     await reply.getByRole("button", { name: "Mute", exact: true }).click();
-    await visible(memberDirect.getByLabel("Muted"));
+    await visible(ownerRow.getByLabel("Muted"));
     await reply.getByRole("button", { name: "Block", exact: true }).click();
     await reply.getByRole("group", { name: "Block Owner?" }).getByRole("button", { name: "Block", exact: true }).click();
     await visible(reply.getByText("You blocked Owner."));

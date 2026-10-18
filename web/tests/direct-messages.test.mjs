@@ -14,31 +14,42 @@ after(async () => { await server?.close(); });
 
 const conversation = (id, name, extra = {}) => ({ id, created_at: 1, other_user: { id: "user-" + id, name }, other_member: true,
   muted: false, blocked: false, last_read_sequence: 0, last_message_sequence: 3, last_message_at: 2, unread_count: 0, ...extra });
+const person = (id, name) => ({ id, name, online: true, bots: [] });
 
-test("direct-message navigation shows unread counts except for muted conversations", () => {
-  const conversations = [conversation("a", "Ada", { unread_count: 2 }), conversation("b", "Grace", { unread_count: 5, muted: true }),
-    conversation("c", "Emmy", { blocked: true, other_member: false })];
-  const markup = renderToStaticMarkup(React.createElement(direct.DirectMessageNavigation, {
-    conversations, members: [{ id: "me", name: "Me" }, { id: "user-a", name: "Ada" }], userId: "me", selected: "a", canStart: true,
-    onSelect: () => {}, onStart: () => {},
-  }));
-  assert.match(markup, /aria-label="Direct messages"/);
-  assert.match(markup, /aria-label="2 unread direct messages"/);
-  assert.doesNotMatch(markup, /5 unread direct messages/);
-  assert.match(markup, /aria-label="2 unread direct messages in total"/);
-  assert.match(markup, /aria-label="Muted"/); assert.match(markup, />blocked</); assert.match(markup, />left</);
-  assert.match(markup, /aria-current="page"[^>]*title="Direct messages with Ada"/);
-  assert.match(markup, /aria-label="New direct message"/);
-  assert.match(markup, /<button type="button" class="org-direct-toggle" aria-expanded="true"/);
-  assert.equal(direct.directUnread(conversations[1]), 0);
-  assert.equal(direct.directUnreadTotal(conversations), 2);
+test("People is the inbox: conversation partners first by recency, then everyone else in order", () => {
+  const people = [person("user-x", "Xavier"), person("user-a", "Ada"), person("user-y", "Yara"), person("user-g", "Grace")];
+  const conversations = [conversation("a", "Ada", { last_message_at: 5 }), conversation("g", "Grace", { last_message_at: 9 }),
+    conversation("e", "Emmy", { last_message_at: null, created_at: 7, other_member: false })];
+  const inbox = direct.peopleInbox(people, conversations, item => person(item.other_user.id, item.other_user.name));
+  assert.deepEqual(inbox.map(item => item.name), ["Grace", "Emmy", "Ada", "Xavier", "Yara"]);
+  assert.equal(inbox[0].conversation.id, "g");
+  assert.equal(inbox[1].conversation.id, "e", "a partner missing from presence is added through the placeholder");
+  assert.equal(inbox[3].conversation, undefined);
+  assert.deepEqual(direct.peopleInbox(people, [], () => assert.fail("no placeholder without conversations")).map(item => item.id),
+    people.map(item => item.id));
+});
+
+test("marks show unread counts except for muted conversations, and the conversation's state", () => {
+  const marks = (extra) => renderToStaticMarkup(React.createElement(direct.DirectMessageMarks, { conversation: conversation("a", "Ada", extra) }));
+  assert.match(marks({ unread_count: 2 }), /aria-label="2 unread direct messages"/);
+  assert.doesNotMatch(marks({ unread_count: 0 }), /unread direct messages/);
+  const muted = marks({ unread_count: 5, muted: true });
+  assert.doesNotMatch(muted, /5 unread/); assert.match(muted, /aria-label="Muted"/);
+  const gone = marks({ blocked: true, other_member: false });
+  assert.match(gone, />left</); assert.match(gone, />blocked</);
+  assert.equal(direct.directUnread(conversation("b", "Grace", { unread_count: 5, muted: true })), 0);
+  assert.equal(direct.directUnreadTotal([conversation("a", "Ada", { unread_count: 2 }),
+    conversation("b", "Grace", { unread_count: 5, muted: true })]), 2);
   assert.equal(direct.directPath("org", "a b"), "/organizations/org/direct-conversations/a%20b");
 });
 
-test("viewers see their conversations without a control to start one", () => {
-  const markup = renderToStaticMarkup(React.createElement(direct.DirectMessageNavigation, {
-    conversations: [], members: [], userId: "me", selected: null, canStart: false, onSelect: () => {}, onStart: () => {},
+test("the member picker lists everyone except the signed-in member", () => {
+  const markup = renderToStaticMarkup(React.createElement(direct.DirectMessagePicker, {
+    members: [{ id: "me", name: "Me" }, { id: "user-a", name: "Ada" }], userId: "me", onStart: () => {}, onClose: () => {},
   }));
-  assert.doesNotMatch(markup, /New direct message/);
-  assert.match(markup, /Click a name below to send a message/);
+  assert.match(markup, /aria-label="Message a member"/);
+  assert.match(markup, /<option value="user-a">Ada<\/option>/);
+  assert.doesNotMatch(markup, />Me</);
+  assert.match(renderToStaticMarkup(React.createElement(direct.NewDirectMessageButton, { open: false, onToggle: () => {} })),
+    /aria-label="New direct message"[^>]*aria-expanded="false"/);
 });

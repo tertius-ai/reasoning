@@ -46,13 +46,12 @@ reply or its charges. Use **Stop current work** to cancel running work.
 ## Direct messages
 
 Click a person's name in **People** to send them a private message, or use `+`
-beside **Direct messages** at the top of the People panel to choose any member. The
-conversation opens in place of the topic. Your recipient finds it under **Direct
-messages** in their People panel with an unread count, and can reply there. The
-People button in the toolbar shows the unread total while the panel is closed.
-Click the **Direct messages** heading to collapse the section to its heading and
-unread total; the browser remembers the choice, and a long list scrolls within
-the section. Only the two of you can read
+in the People header to choose any member, including people who are offline. The
+conversation opens in place of the topic. **People** doubles as your inbox: everyone
+you have a conversation with is listed first, most recent first, with a message
+icon and the unread count beside their name, even when they are offline. Your
+recipient finds you there and can reply by clicking your name. The People button in
+the toolbar shows the unread total while the panel is closed. Only the two of you can read
 it: organization owners and administrators cannot, and it never appears in
 search, topic exports, shared knowledge, or bot and model context. Bots cannot be
 messaged or mentioned there. Viewers can receive and read direct messages but
