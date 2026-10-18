@@ -57,6 +57,9 @@ class FakeServices:
     def repository(self, root):
         return "research/bench"
 
+    def current_history(self, root, repository, revision):
+        self.calls.append("history")
+
     def git(self, root, arguments):
         return "a" * 40 if arguments == ["rev-parse", "HEAD"] else ""
 
@@ -171,6 +174,79 @@ def test_hosted_consent_refusal_makes_no_branch_push_or_dispatch(tmp_path):
         wizard.run(tmp_path, tmp_path / "private", handoff_path=handoff(tmp_path), ask=lambda message: "",
                    password=lambda message: "fixture-secret-not-real", services=service)
     assert "sign" in service.calls and "push" not in service.calls and not service.dispatches
+
+
+def test_resuming_a_rewritten_history_refuses_before_upload_signing_or_new_branches(tmp_path):
+    service = FakeServices()
+    state = tmp_path / "private"
+    wizard.run(tmp_path, state, handoff_path=handoff(tmp_path), ask=prompt,
+               password=lambda _: "fixture-secret-not-real", services=service)
+    original = (state / "operation.json").read_bytes()
+    service.calls.clear()
+
+    def refuse(*args):
+        raise ValueError("publication tooling does not belong to the current default-branch history")
+
+    service.current_history = refuse
+    with pytest.raises(ValueError, match="current default-branch history"):
+        wizard.run(tmp_path, state, ask=prompt, password=lambda _: pytest.fail("must not ask for a key"), services=service)
+    assert not service.calls and (state / "operation.json").read_bytes() == original
+
+
+def test_history_is_rechecked_before_the_next_publication_branch_push(tmp_path):
+    service = FakeServices()
+    checks = []
+
+    def check(root, repository, revision):
+        checks.append(revision)
+        if len(checks) > 1:
+            raise ValueError("publication tooling does not belong to the current default-branch history")
+
+    service.current_history = check
+    with pytest.raises(ValueError, match="current default-branch history"):
+        wizard.run(tmp_path, tmp_path / "private", handoff_path=handoff(tmp_path), ask=prompt,
+                   password=lambda _: "fixture-secret-not-real", services=service)
+    assert checks == ["a" * 40, "e" * 40]
+    assert "sign" in service.calls and "push" not in service.calls and not service.dispatches
+
+
+@pytest.mark.parametrize("history", ["current", "stale", "mixed"])
+def test_history_check_uses_complete_git_roots_and_detects_an_unrelated_merge(tmp_path, history):
+    service = wizard.Services()
+    repo = tmp_path / "history"
+    repo.mkdir()
+    service.git(repo, ["init", "-q"])
+    service.git(repo, ["-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid",
+                       "commit", "--allow-empty", "-qm", "first history"])
+    old = service.git(repo, ["rev-parse", "HEAD"])
+    service.git(repo, ["checkout", "--orphan", "current"])
+    service.git(repo, ["-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid",
+                       "commit", "--allow-empty", "-qm", "current history"])
+    current = service.git(repo, ["rev-parse", "HEAD"])
+    selected = current if history == "current" else old
+    if history == "mixed":
+        service.git(repo, ["-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "merge",
+                           "--allow-unrelated-histories", "--no-ff", old, "-m", "mixed ancestry"])
+        selected = service.git(repo, ["rev-parse", "HEAD"])
+    original_git = service.git
+    fetches = []
+
+    def git(root, arguments):
+        if "fetch" in arguments:
+            fetches.append(arguments)
+            return ""  # Both exact fixture heads already exist locally; no remote service is contacted.
+        return original_git(root, arguments)
+
+    service.git = git
+    service.gh = lambda arguments: {"default_branch": "main"} if arguments[-1] == "repos/research/bench" else {
+        "commit": {"sha": current}}
+    if history == "current":
+        service.current_history(repo, "research/bench", selected)
+    else:
+        with pytest.raises(ValueError, match="current default-branch history"):
+            service.current_history(repo, "research/bench", selected)
+    assert len(fetches) == 1 and fetches[0][-2:] == ["https://github.com/research/bench.git", current]
+    assert "--no-write-fetch-head" in fetches[0] and "--no-tags" in fetches[0]
 
 
 def test_private_state_rejects_group_writable_parent_without_changing_it(tmp_path):

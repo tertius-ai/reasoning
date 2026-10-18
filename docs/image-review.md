@@ -38,6 +38,12 @@ mismatched entries in place. Prepared provenance, signing inputs and signatures
 are stored with mode `0600`, independently of the shell's umask.
 Preserve the private publication journal when retrying; inputs and dispatch/run
 identities are retained rather than silently repeated after an uncertain reply.
+Before uploading sources or signing, and immediately before each publication
+branch push, the wizard checks the tooling's complete Git roots against the
+authenticated current default branch. An unrelated or mixed history is refused.
+After a history rewrite, preserve retained archives, signatures, keys and journals;
+prepare new work from the current default branch with separate publication state.
+Signed candidate identities must not be edited to substitute replacement commits.
 
 The public attestations and enrolled key are placed on isolated publication
 branches. `compute-publish.yml` copies each original candidate to GHCR, verifies
