@@ -6,6 +6,7 @@ Copyright Benjamin Antieau and Deven Manam. SPDX-License-Identifier: Apache-2.0
 import copy
 import hashlib
 import io
+import os
 import tarfile
 
 import pytest
@@ -139,6 +140,25 @@ def test_signing_is_explicit_encrypted_idempotent_and_domain_separated(candidate
     signature.write_bytes(private.sign(publication.DOMAIN + canonical(audit).encode()))
     with pytest.raises(ValueError, match="signature"):
         publication.load_audit(state / "source-review.json", signature, public)
+
+
+@pytest.mark.parametrize("umask", [0o000, 0o002, 0o022])
+def test_prepared_and_signed_state_is_readable_by_private_staging_under_any_umask(candidate, umask):
+    from reasoning_ledger.deployment.private import read_private
+
+    state = candidate[2]
+    old = os.umask(umask)
+    try:
+        audit = prepare(candidate)
+        signed = provenance.sign(state, state / "private.pem", state / "public.pem",
+                                 ask=approve, password=lambda _: "fixture-passphrase")
+        assert signed == audit and prepare(candidate) == audit
+        for name in ("source-review.json", "source-review.ed25519", "provenance-inputs.json"):
+            path = state / name
+            assert path.stat().st_mode & 0o077 == 0
+            assert read_private(path, provenance.LIMIT) == path.read_bytes()
+    finally:
+        os.umask(old)
 
 
 def test_sign_rechecks_exact_sources_before_key_creation(candidate):

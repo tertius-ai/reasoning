@@ -115,9 +115,16 @@ def confirm(message, phrase, *, ask=input):
 def create_key(path, *, ask=input, password=getpass.getpass):
     """Never generate a maintainer identity merely by preparing candidate evidence."""
     confirm("Create an encrypted maintainer signing key at this exact private path?", "create review key", ask=ask)
-    phrase = password("New signing-key passphrase (hidden): ")
-    if not phrase or phrase != password("Confirm signing-key passphrase (hidden): "):
-        raise ValueError("a matching nonempty signing-key passphrase is required")
+    print("Choose a passphrase for the compute-image signing key and save it in your password manager. "
+          "Input stays hidden. Press Ctrl-C to pause.")
+    while True:
+        phrase = password("New signing-key passphrase (hidden): ")
+        if not phrase:
+            print("The passphrase cannot be empty. Try again.")
+        elif phrase != password("Confirm signing-key passphrase (hidden): "):
+            print("The passphrases did not match. Try again.")
+        else:
+            break
     key = Ed25519PrivateKey.generate()
     write_private(path, key.private_bytes(serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8,
                                          serialization.BestAvailableEncryption(phrase.encode())), maximum=16384)
