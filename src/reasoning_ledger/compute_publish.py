@@ -20,6 +20,7 @@ import uuid
 import webbrowser
 import zipfile
 from pathlib import Path, PurePosixPath
+from urllib.parse import quote
 
 from rich.panel import Panel
 from rich.text import Text
@@ -247,6 +248,40 @@ class Services:
 
     def repository(self, root):
         return json_body(command(["gh", "repo", "view", "--json", "nameWithOwner"], cwd=root))["nameWithOwner"]
+
+    def current_history(self, root, repository, revision):
+        """Reject unrelated or mixed roots before old ancestry can be published again."""
+        if not isinstance(revision, str) or not REVISION.fullmatch(revision):
+            raise ValueError("publication tooling requires a complete immutable Git revision")
+        metadata = self.gh(["api", f"repos/{repository}"])
+        branch = metadata.get("default_branch")
+        if not isinstance(branch, str) or not 1 <= len(branch) <= 255:
+            raise ValueError("cannot establish the publication repository's current default branch")
+        current = self.gh(["api", f"repos/{repository}/branches/{quote(branch, safe='')}"])
+        head = current.get("commit", {}).get("sha")
+        if not isinstance(head, str) or not REVISION.fullmatch(head):
+            raise ValueError("cannot establish the publication repository's current default-branch revision")
+        if self.git(root, ["rev-parse", "--is-shallow-repository"]) != "false":
+            raise ValueError("publication ancestry checks require a complete checkout; fetch full history before resuming")
+        # Fetch only the authenticated current head; do not move the caller's branch,
+        # adopt an old remote publication branch, or change signed candidate identities.
+        self.git(root, ["-c", "credential.helper=", "-c", "credential.helper=!gh auth git-credential",
+                        "fetch", "--no-tags", "--no-write-fetch-head", f"https://github.com/{repository}.git", head])
+
+        def roots(commit):
+            values = self.git(root, ["rev-list", "--max-parents=0", commit]).splitlines()
+            if not 1 <= len(values) <= 32 or any(not REVISION.fullmatch(value) for value in values):
+                raise ValueError("publication history has missing or unbounded roots")
+            return set(values)
+
+        try:
+            matches = roots(revision) == roots(head)
+        except ValueError:
+            matches = False
+        if not matches:
+            raise ValueError("publication tooling does not belong to the current default-branch history. "
+                             "Preserve the original journal, archives, signatures and keys; start new work from the updated "
+                             "default branch and prepare a separate publication operation. Do not replace hashes in signed records")
 
     def artifact(self, repository, run, name, directory, allowed):
         document = self.gh(["api", f"repos/{repository}/actions/runs/{run}/artifacts?per_page=100"])
@@ -570,6 +605,7 @@ def run(root, state, *, handoff_path=None, profiles=None, source_state=None, rep
         if (operation["source_revision"] != revision or operation["candidate_run_id"] != candidate_run
                 or operation["source_state"] != str(source_state)):
             raise ValueError("retained publication identity differs; resume with original candidate/source state")
+        services.current_history(root, repository, operation["tooling_revision"])
         if "key_path" not in operation:
             key = ask(f"Encrypted signing key path [{directory / 'signing-key.pem'}]: ").strip()
             trusted = ask(f"Enrolled public key path [{directory / 'review-key.pem'}]: ").strip()
@@ -624,6 +660,7 @@ def run(root, state, *, handoff_path=None, profiles=None, source_state=None, rep
         for label in [*profiles, "catalog"]:
             branch = f"reasoning-publication/{operation['operation_id']}/{label}"
             if label not in operation["pushed"]:
+                services.current_history(root, repository, head)
                 services.push(root, repository, head, branch)
                 operation["pushed"].append(label)
                 write_document(journal, operation)
