@@ -9,6 +9,7 @@ from test_public_server import invited, structure
 
 from reasoning_ledger.server.bot_store import BotStore
 from reasoning_ledger.server.direct_messages import SENDER_BLOCKED, UNAVAILABLE
+from reasoning_ledger.server.store import Store, StoreError
 
 SECRET = "Private note about the referee report"
 
@@ -142,6 +143,25 @@ def test_only_participants_can_reach_a_direct_conversation_on_any_route(people, 
         assert db.execute("SELECT COUNT(*) FROM messages").fetchone()[0] == 0
         assert db.execute("SELECT COUNT(*) FROM bot_webhook_deliveries").fetchone()[0] == 0
         assert db.execute("SELECT COUNT(*) FROM message_mentions").fetchone()[0] == 0
+
+
+def test_topic_and_project_access_never_resolve_a_direct_conversation(people):
+    """Topic-scoped features (links, references, exports, streams) authorize through these helpers."""
+    root, store, org = people["root"], people["store"], people["org"]
+    direct = conversation(people)
+    message = post(people, direct["id"], SECRET, "dm-helpers").json()
+    with store.transaction() as db:
+        for who in ("owner_id", "admin_id", "first_id", "second_id"):
+            for check in (Store._topic_access, Store._channel_access, Store._project_access):
+                with pytest.raises(StoreError) as refused:
+                    check(db, people[who], org, direct["id"])
+                assert refused.value.status == 404
+    for who in ("owner", "admin", "first", "second"):
+        topic = root + f"/topics/{direct['id']}"
+        for response in (people[who].get(topic + "/messages"), people[who].get(topic + "/events"),
+                         people[who].get(topic + f"/messages/{message['id']}/history"), people[who].get(topic + "/export")):
+            assert response.status_code == 404, (who, response.request.url)
+            assert SECRET not in response.text
 
 
 def test_bots_cannot_participate_or_read_direct_conversations(people):
