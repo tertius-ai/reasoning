@@ -27,7 +27,7 @@ The full extracted toolchain, including its upstream notices, is retained under
 /opt/lean. Core Lean is installed; mathlib is not installed.
 
 Noether 0.3.2 default CPU wheel: MIT and separately licensed dependencies.
-Source commit 4c92c269c59da02a4d32c833c2ee093407f8e22f.
+Source commit eebc33d4f37ed47af83c88dbc9f8886b254f72c6.
 https://github.com/tertius-ai/noether
 The upstream distribution name is tertius-noether. Its wheel retains upstream
 copyrights, MIT license, native notices, license texts and native/Rust dependency

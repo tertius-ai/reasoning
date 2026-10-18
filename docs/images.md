@@ -10,7 +10,7 @@ workers are supported. Noether requires x86-64-v3 (AVX2, FMA and BMI2) CPUs and
 excludes MPI and optional GPL subprocess bridges. Its fixed declarative worker
 is installed at `/opt/reasoning/noether_worker.py` in both profiles.
 
-Noether is built from public release `v0.3.2`, commit `4c92c269c59da02a4d32c833c2ee093407f8e22f`, using
+Noether is built from public release `v0.3.2`, commit `eebc33d4f37ed47af83c88dbc9f8886b254f72c6`, using
 the upstream `make wheel` release path and locked Rust/manylinux/uv inputs.
 Build tooling anonymously fetches its checksum-pinned public GitHub commit archive before Docker and stages
 a credential-free `noether-source` context. Git metadata, tokens and SSH agents

@@ -22,7 +22,7 @@ from .server.compute_catalog import canonical
 
 MAXIMUM_ARCHIVE = 64 * 1024**2
 MAXIMUM_EXPANDED = 256 * 1024**2
-NOETHER_PUBLIC_COMMIT = "4c92c269c59da02a4d32c833c2ee093407f8e22f"
+NOETHER_PUBLIC_COMMIT = "eebc33d4f37ed47af83c88dbc9f8886b254f72c6"
 NOETHER_VERSION = "0.3.2"
 # The image lock names the public repository; the pinned commit, not the repository name, is the trust anchor.
 NOETHER_REPOSITORY = re.compile(r"https://github\.com/([A-Za-z0-9](?:[A-Za-z0-9-]{0,38}))/noether")

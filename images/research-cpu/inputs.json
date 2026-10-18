@@ -21,15 +21,15 @@
   "noether": {
     "distribution": "tertius-noether",
     "version": "0.3.2",
-    "commit": "4c92c269c59da02a4d32c833c2ee093407f8e22f",
+    "commit": "eebc33d4f37ed47af83c88dbc9f8886b254f72c6",
     "source_repository": "https://github.com/tertius-ai/noether",
     "build_context": "noether-source",
     "source_archive": {
-      "url": "https://codeload.github.com/tertius-ai/noether/tar.gz/4c92c269c59da02a4d32c833c2ee093407f8e22f",
-      "sha256": "47fcae0a4decf996f98b3840810c818716cb38defdbfa637c703e4347b5904d2",
-      "bytes": 3186852,
+      "url": "https://codeload.github.com/tertius-ai/noether/tar.gz/eebc33d4f37ed47af83c88dbc9f8886b254f72c6",
+      "sha256": "8b49e6fe6a93d3072e97b9885a699eae2fee13842f65f9cfda6a0a5fd9c84779",
+      "bytes": 3187122,
       "transport": "https",
-      "strip_prefix": "noether-4c92c269c59da02a4d32c833c2ee093407f8e22f"
+      "strip_prefix": "noether-eebc33d4f37ed47af83c88dbc9f8886b254f72c6"
     },
     "rust_image": "docker.io/library/rust:1.94.0-bookworm@sha256:365468470075493dc4583f47387001854321c5a8583ea9604b297e67f01c5a4f",
     "rust_version": "1.94.0",

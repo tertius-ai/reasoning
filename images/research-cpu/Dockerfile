@@ -20,7 +20,7 @@ RUN tar -xzf /tmp/uv.tar.gz -C /tmp \
 COPY --from=noether-source . /work/noether
 WORKDIR /work/noether
 RUN test "$SOURCE_DATE_EPOCH" -gt 0 \
-    && python -c 'import json; p=json.load(open("reasoning-source-pin.json")); assert p == {"commit":"4c92c269c59da02a4d32c833c2ee093407f8e22f","version":"0.3.2"}' \
+    && python -c 'import json; p=json.load(open("reasoning-source-pin.json")); assert p == {"commit":"eebc33d4f37ed47af83c88dbc9f8886b254f72c6","version":"0.3.2"}' \
     && test "$(sed -n 's/^version = "\([^"]*\)"/\1/p' pyproject.toml | head -n 1)" = "0.3.2" \
     && test "$(sed -n 's/^channel = "\([^"]*\)"/\1/p' rust-toolchain.toml)" = "1.94.0" \
     && test -f Cargo.lock && test -f uv.lock \
