@@ -40,8 +40,16 @@ The public attestations and enrolled key are placed on isolated publication
 branches. `compute-publish.yml` copies each original candidate to GHCR, verifies
 anonymous source delivery, pulls the exact public digest, and runs real worker
 acceptance. GHCR packages may need a one-time owner action to change visibility
-to **Public**; a successful private push is not a completed publication. Resume
-the same CLI state after making that change. `compute-combine.yml` then repeats
+to **Public**. Open the package from the owner's Packages page, then choose
+**Package settings → Danger Zone → Change visibility → Public**. The package
+administrator must make this change; repository visibility does not set package
+visibility. A missing package may indicate a failed upload. Workflow logs report
+registry upload, anonymous manifest verification, anonymous pull and worker
+execution as separate stages, without printing credential-bearing command output.
+After correcting a failed stage, rerun the original failed Actions run and resume
+the same CLI state. The wizard shows the saved run URL while waiting; reaching
+the local wait limit leaves that workflow running and retains its identity for
+the next invocation. `compute-combine.yml` then repeats
 anonymous source/digest/pull/execution checks and binds the completed catalog to
 the selected successful publication run IDs. Modal remains a separate operator
 step, `make compute-setup`; publication never enables a paid compute relay.

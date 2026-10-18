@@ -468,6 +468,7 @@ def hosted(services, repository, workflow, branch, head, inputs, state, operatio
         raise ValueError("hosted verification inputs differ from the retained operation")
     write_document(journal, operation)
     deadline = time.monotonic() + wait_seconds
+    next_notice = 0
     while True:
         if "run_id" not in record:
             listing = services.runs(repository, workflow, branch)
@@ -502,17 +503,29 @@ def hosted(services, repository, workflow, branch, head, inputs, state, operatio
                                   f"run https://github.com/{repository}/actions/runs/{run['id']} and resume. "
                                   "No automatic retry or spending-limit change was attempted")
                 console.print(Text(f"Verification failed: https://github.com/{repository}/actions/runs/{run['id']}\n"
-                                   "No approved catalog was accepted. Inspect the failure; GHCR packages may need Public visibility.\n"
-                                   "Open package settings in GitHub, enable Public for the exact image if appropriate, "
-                                   "then retry this run.",
+                                   "No approved catalog was accepted. Inspect the failed publication stage first.\n"
+                                   "If upload completed and anonymous access failed, check the package's visibility: "
+                                   "Package settings > Danger Zone > Change visibility > Public.\n"
+                                   "A missing package may mean the upload failed; do not assume visibility is the cause.",
                                    style="yellow"))
-                value = ask("Open GitHub packages in your browser? [y/N]: ").strip().lower()
+                value = ask("Open the failed workflow run in your browser? [y/N]: ").strip().lower()
                 if value == "y":
-                    webbrowser.open(f"https://github.com/{repository.split('/')[0]}?tab=packages")
+                    webbrowser.open(f"https://github.com/{repository}/actions/runs/{run['id']}")
                 raise Pending("original hosted run failed; preserve state, inspect it and rerun that exact Actions run before resuming")
         if time.monotonic() >= deadline:
-            raise Pending("hosted verification is pending or its dispatch is unverified; resume the same wizard/state, do not redispatch")
-        console.print(Text(f"Waiting for {label} verification…", style="dim"))
+            if "run_id" in record:
+                raise Pending(f"The local wait ended; {label} verification is still {run['status']} on GitHub. "
+                              f"The workflow was not cancelled: https://github.com/{repository}/actions/runs/{record['run_id']}. "
+                              "Resume the same wizard/state to reconnect to this saved run")
+            raise Pending("The local wait ended before the dispatch could be confirmed. Preserve the same wizard/state "
+                          "and resume discovery; do not dispatch another workflow")
+        if time.monotonic() >= next_notice:
+            if "run_id" in record:
+                notice = f"{label} verification: {run['status']} — https://github.com/{repository}/actions/runs/{record['run_id']}"
+            else:
+                notice = f"Waiting to confirm the saved {label} workflow dispatch…"
+            console.print(Text(notice, style="dim"))
+            next_notice = time.monotonic() + 30
         time.sleep(min(5, max(0, deadline - time.monotonic())))
 
 

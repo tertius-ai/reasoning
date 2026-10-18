@@ -250,6 +250,54 @@ def test_ambiguous_existing_runs_do_not_adopt_or_dispatch(tmp_path):
     assert not service.dispatches
 
 
+def test_local_wait_expiry_reports_and_resumes_the_known_running_workflow(tmp_path):
+    service = FakeServices()
+    record = {"workflow": "compute-publish.yml", "branch": "isolated", "head": "e" * 40, "run_id": 200, "inputs": {}}
+    service.records[200] = hosted_run(record) | {"status": "in_progress", "conclusion": None}
+    with locked_directory(tmp_path / "private") as state:
+        operation = {"runs": {"research-cpu": record}}
+        write_document(state / "operation.json", operation, new=True)
+        with pytest.raises(wizard.Pending, match="still in_progress on GitHub") as raised:
+            wizard.hosted(service, "research/bench", record["workflow"], record["branch"], record["head"], {},
+                          state, operation, "research-cpu", wait_seconds=0)
+        assert "https://github.com/research/bench/actions/runs/200" in str(raised.value)
+        assert "not cancelled" in str(raised.value) and "unverified" not in str(raised.value)
+        service.records[200] = hosted_run(record, identity=200)
+        operation = read_document(state / "operation.json")
+        assert wizard.hosted(service, "research/bench", record["workflow"], record["branch"], record["head"], {},
+                             state, operation, "research-cpu", wait_seconds=0) == 200
+    assert not service.dispatches
+
+
+def test_unconfirmed_dispatch_has_separate_resume_guidance_without_redispatch(tmp_path):
+    service = FakeServices()
+    record = {"workflow": "compute-publish.yml", "branch": "isolated", "head": "e" * 40,
+              "dispatch_requested": True, "inputs": {}}
+    with locked_directory(tmp_path / "private") as state:
+        operation = {"runs": {"research-cpu": record}}
+        write_document(state / "operation.json", operation, new=True)
+        with pytest.raises(wizard.Pending, match="before the dispatch could be confirmed"):
+            wizard.hosted(service, "research/bench", record["workflow"], record["branch"], record["head"], {},
+                          state, operation, "research-cpu", wait_seconds=0)
+    assert not service.dispatches
+
+
+def test_long_workflow_wait_reports_the_run_every_thirty_seconds(tmp_path, monkeypatch, capsys):
+    service = FakeServices()
+    elapsed = [0.0]
+    monkeypatch.setattr(wizard.time, "monotonic", lambda: elapsed[0])
+    monkeypatch.setattr(wizard.time, "sleep", lambda seconds: elapsed.__setitem__(0, elapsed[0] + seconds))
+    record = {"workflow": "compute-publish.yml", "branch": "isolated", "head": "e" * 40, "run_id": 200, "inputs": {}}
+    service.run = lambda *_: hosted_run(record, identity=200) | (
+        {"status": "in_progress", "conclusion": None} if elapsed[0] < 65 else {})
+    with locked_directory(tmp_path / "private") as state:
+        operation = {"runs": {"research-cpu": record}}
+        write_document(state / "operation.json", operation, new=True)
+        assert wizard.hosted(service, "research/bench", record["workflow"], record["branch"], record["head"], {},
+                             state, operation, "research-cpu", wait_seconds=90) == 200
+    assert capsys.readouterr().out.count("research-cpu verification: in_progress") == 3
+
+
 @pytest.mark.parametrize("field, value", [("head_sha", "f" * 40), ("event", "pull_request"),
                                           ("path", ".github/workflows/other.yml"), ("head_branch", "main")])
 def test_hosted_receipts_must_match_isolated_exact_tooling_dispatch(field, value):

@@ -17,6 +17,7 @@ import subprocess
 import tarfile
 import tempfile
 import time
+from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
 from urllib.parse import urljoin, urlsplit
@@ -37,6 +38,32 @@ HEX = re.compile(r"[a-f0-9]{64}")
 AUDIT_FIELDS = {"format", "reviewer", "reviewed_at", "profile", "source_revision", "recipe_sha256", "image_digest",
                 "source_bundle_sha256", "source_bundle_bytes", "source_bundle_url", "files", "coverage",
                 "dependency_closure_reviewed", "source_delivery_approved", "public_binary_distribution_approved"}
+
+PUBLICATION_FAILURES = {
+    "registry-upload": "Registry upload failed; it may be incomplete. Check registry permissions and availability.",
+    "anonymous-manifest": "Registry upload completed, but anonymous manifest verification failed. "
+                          "If the package is private, open Package settings > Danger Zone > Change visibility > Public.",
+    "anonymous-pull": "Registry upload and anonymous manifest verification passed, but the anonymous Docker pull failed.",
+    "worker-execution": "The exact public image was pulled, but worker execution acceptance failed.",
+}
+
+
+class PublicationStepFailure(ValueError):
+    """A fixed public stage description without subprocess output or credentials."""
+
+    def __init__(self, stage):
+        self.stage = stage
+        super().__init__(PUBLICATION_FAILURES[stage])
+
+
+@contextmanager
+def publication_step(stage):
+    print(f"Publication step: {stage}", flush=True)
+    try:
+        yield
+    except (ValueError, KeyError, TypeError, OSError, subprocess.SubprocessError, tarfile.TarError, httpx.HTTPError, RuntimeFault):
+        raise PublicationStepFailure(stage) from None
+    print(f"Publication step completed: {stage}", flush=True)
 
 
 def hash_file(path, maximum=MAX_BUNDLE):
@@ -348,17 +375,20 @@ def publish(root, archive, profile, repository, bundle, audit_path, signature, t
         anonymous.chmod(0o600)
         environment = {"PATH": os.defpath, "HOME": str(private), "DOCKER_CONFIG": str(private), "REGISTRY_AUTH_FILE": str(anonymous)}
         tag = repository + ":sha256-" + audit["image_digest"][7:]
-        run(["skopeo", "copy", "--all", "--preserve-digests", "--src-authfile", str(anonymous), "--dest-authfile", str(auth),
-             "oci-archive:" + str(archive), "docker://" + tag], environment)
-        raw = run(["skopeo", "inspect", "--raw", "--authfile", str(anonymous), "docker://" + image["reference"]], environment)
-        if len(raw) > 1024**2 or digest(raw) != audit["image_digest"]:
-            raise ValueError("anonymous public registry digest differs from the reviewed image")
+        with publication_step("registry-upload"):
+            run(["skopeo", "copy", "--all", "--preserve-digests", "--src-authfile", str(anonymous), "--dest-authfile", str(auth),
+                 "oci-archive:" + str(archive), "docker://" + tag], environment)
+        with publication_step("anonymous-manifest"):
+            raw = run(["skopeo", "inspect", "--raw", "--authfile", str(anonymous), "docker://" + image["reference"]], environment)
+            if len(raw) > 1024**2 or digest(raw) != audit["image_digest"]:
+                raise ValueError("anonymous public registry digest differs from the reviewed image")
         # The Docker client gets a separate empty config: no ambient login can turn a private image into public proof.
         docker_config = private / "docker"
         docker_config.mkdir(mode=0o700)
         (docker_config / "config.json").write_text('{"auths":{}}')
         environment["DOCKER_CONFIG"] = str(docker_config)
-        run(["docker", "--host", "unix:///var/run/docker.sock", "pull", image["reference"]], environment)
+        with publication_step("anonymous-pull"):
+            run(["docker", "--host", "unix:///var/run/docker.sock", "pull", image["reference"]], environment)
         internal = output / "candidate-catalog.json"
         write_matching(internal, canonical([image]).encode())
         acceptance = output / "acceptance"
@@ -370,10 +400,11 @@ def publish(root, archive, profile, repository, bundle, audit_path, signature, t
                     break
             else:
                 raise ValueError("publication exceeds its bounded acceptance retry allowance")
-        accepted = verify_execution(internal, acceptance, profile)
-        if accepted.get("execution_verified") is not True or accepted.get("image") != image or not accepted.get("cases"):
-            raise ValueError("public-digest execution did not return complete matching acceptance evidence")
-        sanitized = public_acceptance(accepted, image)
+        with publication_step("worker-execution"):
+            accepted = verify_execution(internal, acceptance, profile)
+            if accepted.get("execution_verified") is not True or accepted.get("image") != image or not accepted.get("cases"):
+                raise ValueError("public-digest execution did not return complete matching acceptance evidence")
+            sanitized = public_acceptance(accepted, image)
     # Only now may operators receive a usable catalog. The authenticated
     # attestation purpose retains its human/machine assurance distinction.
     catalog = (canonical([image]) + "\n").encode()
@@ -451,7 +482,12 @@ def main(argv=None):
             username=os.environ.get("REASONING_IMAGE_REGISTRY_USER"))
         print(json.dumps({"published": True, "image": result["image"]["reference"], "catalog": str(args.output / "compute-images.json")}))
         return 0
-    except (ValueError, KeyError, TypeError, OSError, subprocess.SubprocessError, tarfile.TarError, httpx.HTTPError, RuntimeFault):
+    except (ValueError, KeyError, TypeError, OSError, subprocess.SubprocessError, tarfile.TarError, httpx.HTTPError, RuntimeFault) as error:
+        if isinstance(error, PublicationStepFailure):
+            owner = args.repository.split("/")[1]
+            parser.exit(1, f"{error}\nPackages: https://github.com/{owner}?tab=packages\n"
+                           "Preserve original source/archive/review and intent; no completion catalog was accepted. "
+                           "After resolving the failed stage, retry the original workflow run.\n")
         uncertain = (args.output / "publication-intent.json").exists()
         message = ("image publication is unverified; the registry may have changed. Preserve original source/archive/review and intent; "
                    "no new completion catalog is accepted. If the exact upload exists but anonymous pull is refused, "

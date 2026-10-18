@@ -195,6 +195,58 @@ def test_external_gate_failure_never_emits_approved_catalog(reviewed, monkeypatc
     assert not (args[-1] / "compute-images.json").exists() and not (args[-1] / "publication.json").exists()
 
 
+@pytest.mark.parametrize("stage", ["registry-upload", "anonymous-manifest", "anonymous-pull", "worker-execution"])
+def test_publication_failure_identifies_the_stage_without_disclosing_command_output(reviewed, monkeypatch, capsys, stage):
+    from reasoning_ledger.image_release import OCIArchive
+
+    args, _, _, report, _ = reviewed
+
+    def run(argv, environment):
+        current = "registry-upload" if argv[1] == "copy" else "anonymous-manifest" if argv[1] == "inspect" else "anonymous-pull"
+        if stage == current:
+            raise ValueError("private-registry-token-and-command-output")
+        if argv[1] == "inspect":
+            archive = OCIArchive(args[1])
+            try:
+                return archive.read("blobs/sha256/" + report["image"]["reference"].split("@sha256:")[1], 1024**2)
+            finally:
+                archive.close()
+        return b""
+
+    def execute(*args):
+        raise ValueError("private-execution-output")
+
+    monkeypatch.setattr(publication, "run", run)
+    monkeypatch.setattr(publication, "verify_execution", execute)
+    with pytest.raises(publication.PublicationStepFailure) as raised:
+        publication.publish(*args, token="fixture-private-token", username="fixture-user")
+    assert raised.value.stage == stage
+    output = capsys.readouterr().out + str(raised.value)
+    assert "private-registry-token-and-command-output" not in output and "private-execution-output" not in output
+    assert "fixture-private-token" not in output
+    assert not (args[-1] / "compute-images.json").exists()
+
+
+@pytest.mark.parametrize("stage", ["registry-upload", "anonymous-manifest"])
+def test_cli_distinguishes_failed_upload_from_failed_anonymous_access(reviewed, monkeypatch, capsys, stage):
+    args = reviewed[0]
+
+    def fail(*args, **kwargs):
+        raise publication.PublicationStepFailure(stage)
+
+    monkeypatch.setattr(publication, "publish", fail)
+    argv = ["--source-root", str(args[0]), "--archive", str(args[1]), "--profile", args[2], "--repository", args[3],
+            "--source-bundle", str(args[4]), "--audit", str(args[5]), "--signature", str(args[6]),
+            "--trusted-key", str(args[7]), "--output", str(args[8])]
+    with pytest.raises(SystemExit) as raised:
+        publication.main(argv)
+    assert raised.value.code == 1
+    output = capsys.readouterr().err
+    assert publication.PUBLICATION_FAILURES[stage] in output
+    assert ("Change visibility" in output) == (stage == "anonymous-manifest")
+    assert "retry the original workflow run" in output
+
+
 def test_source_bundle_rejects_signed_symlinks_and_unreviewed_members(reviewed):
     args, audit, sign, _, sbom = reviewed
     with tarfile.open(args[4], "w") as archive:
