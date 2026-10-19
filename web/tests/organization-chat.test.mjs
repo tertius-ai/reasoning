@@ -12,6 +12,21 @@ before(async () => {
 });
 after(async () => { await server?.close(); });
 
+test("private projects say when they are visible through an organization owner or admin role", () => {
+  const hierarchy = { projects: [
+      { id: "mine", name: "Roster", visibility: "private", project_role: "member" },
+      { id: "theirs", name: "Developers", visibility: "private" },
+      { id: "open", name: "Algebra", visibility: "organization" }],
+    channels: [], topics: [], topic_state: [] };
+  const markup = renderToStaticMarkup(React.createElement(TopicNavigation, {
+    hierarchy, organizationId: "org", selected: null, canCreate: true, canManageOrganization: true, onSelect: () => {},
+    onCreateChannel: () => {}, onCreateTopic: () => {}, onProjectSettings: () => {}, onChannelSettings: () => {},
+  }));
+  assert.equal((markup.match(/· private · admin access/g) ?? []).length, 1, "only the project seen through the organization role");
+  assert.match(markup, /aria-label="Private project, visible to you as an organization owner or admin"/);
+  assert.equal((markup.match(/aria-label="Private project"/g) ?? []).length, 1, "the rostered project keeps the plain marker");
+});
+
 test("first send gets a stable retry identifier before asynchronous draft initialization", () => {
   const attempt = prepareMessageAttempt({ text: "Immediate first message", clientId: "", attempted: false });
   assert.match(attempt.clientId, /^[0-9a-f-]{36}$/);

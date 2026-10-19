@@ -189,7 +189,10 @@ export function TopicNavigation({ hierarchy, organizationId = "", userId = "", u
         const open = event.currentTarget.open;
         setCollapsedProjects(current => { if (current.has(project.id) === !open) return current; const next = new Set(current); if (open) next.delete(project.id); else next.add(project.id); return next; });
       }} className={`org-project org-project-tone-${projectIndex % 6}`}>
-      <summary title={project.name} {...reveal("projects", project.id, project.name)}><span className="org-tree-label">{project.name}</span>{project.visibility === "private" && <span className="org-private-mark" aria-label="Private project" title="Private project">· private</span>}{spend("projects", project.id)}</summary>
+      <summary title={project.name} {...reveal("projects", project.id, project.name)}><span className="org-tree-label">{project.name}</span>{project.visibility === "private" && (project.project_role
+        ? <span className="org-private-mark" aria-label="Private project" title="Private project · visible to its members and to organization owners and admins">· private</span>
+        : <span className="org-private-mark" aria-label="Private project, visible to you as an organization owner or admin"
+            title="Private project · you are not on its roster; you see it because you are an organization owner or admin">· private · admin access</span>)}{spend("projects", project.id)}</summary>
       <span className="org-project-actions">{canWriteProject && <button type="button" className="org-tree-add" aria-label={`New channel in ${project.name}`}
         title={`New channel in ${project.name}`} onClick={() => onCreateChannel(project.id)}>+</button>}
         {canManageProject && <button type="button" className="org-tree-more" aria-label={`Settings for ${project.name}`} title={`Settings for ${project.name}`} onClick={() => onProjectSettings(project.id)}>⋯</button>}</span>
@@ -349,7 +352,7 @@ function CreationDialog({ kind, hierarchy, organizationId, parentId, members, us
         onChange={(event) => setProjectMembers((current) => event.target.checked ? [...current, member.id] : current.filter((id) => id !== member.id))} />{member.name}<small>{member.email}</small></label>)}
       <label>Project owner<select value={projectOwner} onChange={(event) => { setProjectOwner(event.target.value); setProjectMembers((current) => current.includes(event.target.value) ? current : [...current, event.target.value]); }}>
         {members.map((member) => <option key={member.id} value={member.id}>{member.name}</option>)}</select></label>
-      <p className="org-help">Only selected members and organization administrators can see this project. Its owner can change this list later.</p>
+      <p className="org-help">Only selected members and organization owners and admins can see this project; owners and admins can also open its topics. Its owner can change this list later.</p>
     </fieldset>}
     {kind === "channel" && <label>Project<select value={parent} required onChange={(event) => setParent(event.target.value)}>
       {hierarchy.projects.map((project) => <option key={project.id} value={project.id}>{project.name}</option>)}
@@ -429,13 +432,16 @@ function ProjectSettingsDialog({ organizationId, project, members, canDelete, on
     } finally { setBusy(false); }
   };
   const available = members.filter((member) => !projectMembers.some((item) => item.id === member.id));
+  // Organization owners and admins see and can open every private project, whether or not they are on its roster.
+  const administrators = project.visibility === "private"
+    ? members.filter((member) => ["owner", "admin"].includes(member.role) && !projectMembers.some((item) => item.id === member.id)) : [];
   return <Dialog title="Project settings" onClose={onClose}>
     {error && <p role="alert" className="org-error">{error}</p>}
     <form onSubmit={(event) => { event.preventDefault(); void action(() => request(root, { method: "PATCH", body: { name } })); }}>
       <label>Project name<input required maxLength={200} value={name} onChange={(event) => setName(event.target.value)} /></label>
       <button disabled={busy || name === project.name}>Save name</button>
     </form>
-    <p className="org-help">{project.visibility === "private" ? "Private · visible only to this roster and organization administrators." : "Organization project · visible to every organization member."}</p>
+    <p className="org-help">{project.visibility === "private" ? "Private · visible to this roster and to organization owners and admins, who can also open its topics." : "Organization project · visible to every organization member."}</p>
     {project.visibility === "private" && <section className="org-project-members"><h3>Members</h3>
       {!!available.length && <form onSubmit={(event) => { event.preventDefault(); if (!candidate) return; void action(async () => {
         await request(root + "/members/" + encodeURIComponent(candidate), { method: "PUT", body: { role: candidateRole } }); setCandidate("");
@@ -448,6 +454,8 @@ function ProjectSettingsDialog({ organizationId, project, members, canDelete, on
           <option value="owner">Owner</option><option value="member">Member</option></select>
         <button disabled={busy} onClick={() => { if (window.confirm(`Remove ${member.name} from ${project.name}?`)) void action(() => request(root + "/members/" + member.id, { method: "DELETE" })); }}>Remove</button>
       </li>)}</ul>
+      {!!administrators.length && <p className="org-help org-project-admins">Also visible through their organization role: {administrators.map(member =>
+        `${member.name} (${member.role})`).join(", ")}.</p>}
     </section>}
     {canDelete && <DeletionControl organizationId={organizationId} kind="project" entityId={project.id} onDeleted={() => { onChanged(); onClose(); }} />}
   </Dialog>;

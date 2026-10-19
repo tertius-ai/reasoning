@@ -147,6 +147,11 @@ On a phone, **More topic actions** reveals the compact toolbar.
 Hover or keyboard-focus a message for reaction, message actions (copy link,
 fork, edit), and single-message copy controls. The upward triangle attaches a picture or PDF.
 
+A private project is visible to its roster and to every organization owner and
+admin, who can also open its topics. If you see a project marked
+`private · admin access`, you are not on its roster and see it through your
+organization role; its settings list everyone who has access that way.
+
 Deleting a project or channel includes its children in one confirmation. Active
 work is cancelled, pending approvals revoked, and late effects fenced. Unknown
 charges and execution receipts remain retained; deletion cannot erase provider
