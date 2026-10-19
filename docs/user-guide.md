@@ -85,7 +85,9 @@ Claude Code runner. Run `make bot-doctor` for read-only setup diagnostics, and
 `make bot-run` to restart a saved pairing. Only the bot's owner can invoke it until
 the owner changes **Who can use this bot** in My bots to specific members or to
 everyone who can write in its topics; another member's request outside that setting
-shows a bot activity explaining that it was not run.
+shows a bot activity explaining that it was not run. Making sure you may share a bot,
+for example under your CLI subscription or API terms, is your responsibility;
+Reasoning does not check how a bot authenticates.
 The account menu's **My bots** controls access. Requests awaiting your approval appear as **!** beside the bot in **People**; click the
 bot's name or **!** to review the exact command, computation, or GitHub issue.
 Closing the dialog leaves the request pending. Type `@` for a bot, or `@Bot-` to select one of its

@@ -72,7 +72,11 @@ test("existing bot access is editable despite a retained pairing URL and model m
     await card.getByText("Used only by you", { exact: true }).waitFor();
     const sharing = card.locator(".org-bot-sharing");
     await sharing.getByText("Who can use this bot · Only me", { exact: true }).click();
+    const remark = sharing.getByRole("note").filter({ hasText: "Reasoning does not check how the bot authenticates." });
+    assert.equal(await remark.count(), 0, "keeping a bot to its owner needs no sharing remark");
     await sharing.getByLabel("Specific members", { exact: true }).check();
+    await remark.waitFor();
+    assert.match(await remark.innerText(), /You are responsible for making sure you may share this bot/);
     assert.equal(await sharing.getByLabel("Alice", { exact: true }).count(), 0, "the owner is always included");
     assert.ok(await sharing.getByRole("button", { name: "Save who can use this bot" }).isDisabled());
     await sharing.getByLabel("Bob", { exact: true }).check();
@@ -81,7 +85,9 @@ test("existing bot access is editable despite a retained pairing URL and model m
     assert.deepEqual(writes.find(write => write.path.endsWith("/sharing")).body, { policy: "members", members: [colleague] });
     await card.getByText("Used by you and 1 member", { exact: true }).waitFor();
     await sharing.getByLabel("Everyone who can write in its topics", { exact: true }).check();
+    await remark.waitFor();
     await sharing.getByLabel("Only me", { exact: true }).check();
+    assert.equal(await remark.count(), 0);
     holdCatalog = true;
     await page.goto(server.resolvedUrls.local[0] + "organization.html");
     const composer = page.getByLabel("Message", { exact: true }); await composer.fill("@Math Bot-");

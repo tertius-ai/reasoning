@@ -375,6 +375,11 @@ waiting requests from requesters it no longer includes (each audited as
 `bot.inference.withdraw`) and denies their pending and approved, unconsumed
 approvals; a stopped running request has an unknown local outcome.
 
+It is the bot owner's responsibility to make sure they may share the bot, for
+example that their CLI subscription or API terms allow use by other people.
+Reasoning does not check how a bot authenticates. My bots shows this reminder
+whenever the setting is not **Only me**.
+
 The runner flag `--allow-other-users` (`make bot-run BOT_ALLOW_OTHER_USERS=1`) is
 deprecated. The runner still reports it, but this server ignores it, so it never
 widens who can use a bot. Cloud bots are set up without it.

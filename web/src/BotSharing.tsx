@@ -53,6 +53,10 @@ export function BotSharing({ organizationId, bot, path, administrator = false, o
             setSelected(value => checked ? [...value, member.id] : value.filter(id => id !== member.id)); }} />{member.name}</label>)}
       <small>Members removed from the organization lose access.</small>
     </div>}
+    {policy !== "owner" && <p className="org-help" role="note">
+      {administrator ? "The bot's owner is responsible for making sure it may be shared, for example that its CLI subscription or API terms allow use by other people."
+        : "You are responsible for making sure you may share this bot, for example that your CLI subscription or API terms allow use by other people."}
+      {" "}Reasoning does not check how the bot authenticates.</p>}
     {error && <p role="alert">{error}</p>}{saved && <p role="status">Who can use this bot saved.</p>}
     <button type="button" disabled={busy || policy === "members" && !selected.length} onClick={() => {
       setBusy(true); setError(""); setSaved(false);
