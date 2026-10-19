@@ -80,8 +80,9 @@ def runtime_step(client, directory, configuration, agent, binding, *, runner=inv
     advertised = client._request("POST", "/api/bot/runtime", {"engine": agent["engine"], "models": models,
                                  "allow_other_users": binding["allow_other_users"], "local_tools": agent["local_tools"],
                                  "capabilities": capabilities})
-    # A server with mention feedback records a visible refusal for requesters this policy excludes.
-    # Older servers would reject those mentions, so the runner then keeps skipping them locally.
+    # allow_other_users reports the deprecated --allow-other-users flag; a server advertising sharing "server"
+    # ignores it. A server with mention feedback records a visible refusal for requesters its policy excludes.
+    # Servers without it would reject those mentions, so the runner then keeps skipping them locally.
     feedback = isinstance(advertised, dict) and advertised.get("mention_feedback") is True
     # Only a server that advertises run timing accepts a completion's timing field.
     reports_timing = isinstance(advertised, dict) and advertised.get("run_timing") is True

@@ -79,7 +79,10 @@ export type InferenceCall = { id: string; sequence: number; run_id: string; requ
   context_sha256: string | null; workflow_run_id: string | null; workflow_node_id: string | null;
   receipts?: { sequence: number; kind: string; recorded_at: number; data: Record<string, unknown> }[] };
 export type InferenceCallPage = { calls: InferenceCall[]; next_before: number | null };
+/** Who may invoke a bot besides its owner: nobody, listed organization members, or everyone who can write in its topics. */
+export type BotSharingPolicy = "owner" | "members" | "topic_writers";
 export type BotMetadata = { id: string; name: string; organization_id: string; created_by: string; authorized_by: string;
+  sharing?: { policy: BotSharingPolicy; members: string[] };
   developer?: { enabled: boolean; repositories: string[]; requesters: string[]; issue_self_approvers?: string[]; issue_daily_limit?: number };
   runtime?: { engine: string; models: string[]; local_tools: boolean; online: boolean } | null;
   public_access?: boolean; explicit_topic_ids?: string[];

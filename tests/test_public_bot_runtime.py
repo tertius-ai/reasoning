@@ -8,7 +8,7 @@ import asyncio
 import httpx
 import pytest
 from test_public_bots import fixture as bot_fixture
-from test_public_bots import member
+from test_public_bots import member, share
 
 from reasoning_ledger.server.api import Config, create_app
 from reasoning_ledger.server.bot_runtime import BotRuntime
@@ -26,6 +26,8 @@ def setup(fixture, *, other_users=False, local_tools=False):
                       ["messages:read", "messages:write", "knowledge:read", "knowledge:write"], personal=True)
     runtime = BotRuntime(bots)
     runtime.advertise(bot["token"], "codex", ["default", "test-model"], other_users, local_tools)
+    if other_users:
+        share(fixture, bot["id"])
     message = store.post_message(owner["user_id"], owner["organization_id"], topics[1], "Explain 2=2", "request")
     model = f"bot/{bot['id']}/default"
     run = runtime.enqueue(owner["user_id"], owner["organization_id"], topics[1], model, "inference", through=message["sequence"])
@@ -122,7 +124,7 @@ def test_owner_only_requests_and_exact_approval_single_consumption(fixture):
     other = member(fixture)
     runtime, bot, model, run, _ = setup(fixture, local_tools=True)
     assert runtime.models(other, owner["organization_id"], topics[1]) == []
-    with pytest.raises(StoreError, match="only from its owner"):
+    with pytest.raises(StoreError, match="Who can use this bot"):
         runtime.enqueue(other, owner["organization_id"], topics[1], model, "outsider", prompt="execute")
     claimed = runtime.claim(bot["token"])
     command = ["python3", "-c", "print(2 + 2)"]
@@ -307,7 +309,8 @@ def test_on_demand_search_never_delegates_the_bot_owners_private_access(fixture)
     bot = bots.create(user, org, "Research", [secret["id"]], ["messages:read", "messages:write"],
                       personal=True, public_access=True)
     runtime = BotRuntime(bots)
-    runtime.advertise(bot["token"], "codex", ["default"], True, False)
+    runtime.advertise(bot["token"], "codex", ["default"], False, False)
+    share(fixture, bot["id"])
     store.post_message(user, org, secret["id"], "Needle private", "secret")
     store.post_message(user, org, topics[0], "Needle public", "public")
     run = runtime.enqueue(other, org, topics[1], f"bot/{bot['id']}/default", "search-request", prompt="Find Needle")

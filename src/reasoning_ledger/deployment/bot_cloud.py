@@ -33,11 +33,12 @@ LOGIN = {"codex": "codex login --device-auth", "claude": "claude auth login"}
 
 def validate_spec(value):
     try:
-        if set(value) != {"server", "engine", "models", "cas", "lean", "allow_other_users", "wheel_sha256"}:
+        # A retained setup may carry allow_other_users; it is ignored, since who can use the bot is set in My bots.
+        if set(value) - {"allow_other_users"} != {"server", "engine", "models", "cas", "lean", "wheel_sha256"}:
             raise ValueError
         if value["engine"] not in LOGIN or public_origin(value["server"]) != value["server"]:
             raise ValueError
-        if any(type(value[key]) is not bool for key in ("cas", "lean", "allow_other_users")):
+        if any(type(value[key]) is not bool for key in {"cas", "lean"} | {"allow_other_users"} & set(value)):
             raise ValueError
         if (not isinstance(value["models"], list) or not 1 <= len(value["models"]) <= 20
                 or any(not isinstance(item, str) or not MODEL.fullmatch(item) for item in value["models"])

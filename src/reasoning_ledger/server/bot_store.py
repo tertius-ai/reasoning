@@ -114,6 +114,8 @@ class BotStore:
 
     @staticmethod
     def _public(db, row) -> dict:
+        from .bot_sharing import setting
+
         try:
             BotStore._authority(db, row)
             authorized = True
@@ -141,6 +143,7 @@ class BotStore:
             "public_access": bool(row["public_access"]),
             "developer": BotStore._developer(db, row["id"]),
             "runtime": BotStore._runtime(db, row["id"]),
+            "sharing": setting(db, row["id"]),
             "enabled": row["revoked_at"] is None
             and row["expires_at"] > int(time.time())
             and authorized,
@@ -296,6 +299,7 @@ class BotStore:
             value = self._public(db, self._authenticate(db, credential))
             value.pop("developer", None)  # Human management metadata is not part of the stable bot identity wire contract.
             value.pop("runtime", None)
+            value.pop("sharing", None)
             return value
 
     def topics(self, credential: str) -> list[dict]:

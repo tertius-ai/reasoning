@@ -8,6 +8,7 @@ import json
 import math
 import os
 import re
+import sys
 import time
 import webbrowser
 from contextlib import ExitStack
@@ -418,7 +419,8 @@ def main(argv=None) -> int:
         if name in {"run", "start"}:
             command.add_argument("--once", action="store_true")
             command.add_argument(
-                "--allow-other-users", action="store_true", help="trust other humans in the granted topics to invoke this bot"
+                "--allow-other-users", action="store_true",
+                help="deprecated: choose who can use this bot in My bots; only servers without that setting read this flag",
             )
     recovery = commands.add_parser("recover", help="explicitly retry or skip a retained CLI invocation with an unknown outcome")
     recovery.add_argument("--state-dir", type=Path, required=True)
@@ -518,6 +520,10 @@ def main(argv=None) -> int:
         if args.command in {"doctor", "run"}:
             from .bot_agent import doctor
             from .bot_runner import runtime_step
+
+            if getattr(args, "allow_other_users", False):
+                print("reasoning-bot: --allow-other-users is deprecated; choose who can use this bot in My bots.",
+                      file=sys.stderr)
 
             with locked_directory(args.state_dir) as directory, ExitStack() as display:
                 agent = read_document(directory / "agent.json")

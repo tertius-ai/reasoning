@@ -71,9 +71,10 @@ Tokens need `account:read`, `sizes:read`, `ssh_key:read`, `ssh_key:create`,
 `tag:read`, `tag:create`, `firewall:read`, `firewall:create`, `droplet:read`, and
 `droplet:create`. Select the Team that will own the bot. Follow-my-access bot
 permissions include conversation and shared-knowledge reads/writes; owners can
-edit them in My bots. Other users cannot request this bot unless explicitly
-enabled, and local execution always requires the bot owner's exact-command
-approval, including requests originating from another person.
+edit them in My bots. Only you can request this bot until you change
+[Who can use this bot](#who-can-use-a-bot) in My bots, and local execution always
+requires the bot owner's exact-command approval, including requests originating
+from another person.
 
 Local CAS installs SymPy, GAP, PARI/GP and Singular (minimum 4 GiB RAM).
 Lean installs Lean 4.24.0 and a pinned, offline-probed mathlib tree matching the
@@ -162,13 +163,13 @@ uv run --locked reasoning-bot connect --server https://chat.example.org \
 
 `--no-browser` prints the approval URL for another computer. This does not skip
 human approval. Local tools remain disabled unless explicitly requested.
-Keep the runner process running, then type `@` and select the bot in a granted topic. By
-default only its owner's mentions invoke it; `make bot-run BOT_ALLOW_OTHER_USERS=1`
-(`reasoning-bot run --allow-other-users`) explicitly trusts other humans in those
-topics. Without it, another member's mention is not run: the topic shows a
-cancelled bot activity under that message saying the bot accepts requests only
-from its owner. No CLI is invoked, the request text is not retained in the bot
-run, and the bot posts no reply. Bot/assistant messages never invoke it.
+Keep the runner process running, then type `@` and select the bot in a granted topic.
+Who else may invoke it is the owner's server-side setting
+[Who can use this bot](#who-can-use-a-bot); it starts as **Only me**. A request
+from a member outside that setting is not run: the topic shows a cancelled bot
+activity under that message naming the owner's setting. No CLI is invoked, the
+request text is not retained in the bot run, and the bot posts no reply.
+Bot/assistant messages never invoke it.
 Each invocation starts with the current human request or workflow node prompt,
 the latest twenty authorized messages through its captured sequence, and the
 beta topic's system instructions. Forks use their own copied history, never the
@@ -348,12 +349,49 @@ not private reasoning text. Unknown outcomes are held, never automatically rerun
 
 ## Personal access and custom bots
 
+### Who can use a bot
+
+In **My bots**, every bot that reads and responds in its topics has the setting
+**Who can use this bot**:
+
+- **Only me**: only the owner. A bot without a saved choice uses this.
+- **Specific members**: the owner and up to 64 selected organization members who
+  can write. Removing a member from the organization removes them from the list.
+- **Everyone who can write in its topics**: any member with current write access
+  to a topic the bot is granted.
+
+Every choice also requires the requester's current write access to the topic.
+The owner of a personal bot sets it; for administrator-sponsored bots,
+administrators set it in **Administration → Bots**. The server checks the setting
+when it admits any request (mentions, a beta topic's default bot model, workflow
+nodes, goals and delegated workers) and again on every leased bot operation,
+including developer tools, local execution, computation and GitHub issue
+approvals. Members whom the owner lets approve their own GitHub issues must also
+be included. A request outside the setting is recorded as a cancelled bot
+activity with error code `requester_not_permitted`, shown in the topic as "Not
+run" with the setting's name; it never lists who is included. A change takes
+effect immediately and is audited as `bot.sharing`. It stops queued, running and
+waiting requests from requesters it no longer includes (each audited as
+`bot.inference.withdraw`) and denies their pending and approved, unconsumed
+approvals; a stopped running request has an unknown local outcome.
+
+The runner flag `--allow-other-users` (`make bot-run BOT_ALLOW_OTHER_USERS=1`) is
+deprecated. The runner still reports it, but this server ignores it, so it never
+widens who can use a bot. Cloud bots are set up without it.
+
+`PUT /api/organizations/{organization_id}/my-bots/{bot_id}/sharing` sets the
+choice for the owner, and `PUT /api/organizations/{organization_id}/bots/{bot_id}/sharing`
+for administrators of administrator-sponsored bots. The body is `policy`
+(`owner`, `members` or `topic_writers`) and `members`, a list of user IDs that
+is non-empty for `members` and empty otherwise. Bot metadata includes
+`sharing: {policy, members}`.
+
 ### Developer bots
 
 In **My bots → Developer tools**, enable a bot and specify exact GitHub
 `owner/repository` allowlists and other permitted organization requesters.
-The owner is always permitted; other requesters also need the runner's
-other-user policy (`BOT_ALLOW_OTHER_USERS=1`) and current topic write access.
+The owner is always permitted; other requesters must also be included in
+[Who can use this bot](#who-can-use-a-bot) and have current topic write access.
 For any other requester the developer tools are absent, and `topic_context`
 returns a notice telling the bot to explain that the owner must add that person
 as a permitted requester; it does not disclose the repositories. Disabling or changing
@@ -468,7 +506,8 @@ sanitized diagnostics, and tracked development source and test results on the
 bot computer. Enable it only for members trusted with that. The allowlisted repositories, exact request hash,
 consume-once publication, unknown-outcome handling and the owner's local `gh`
 credentials are unchanged. Approval and consumption recheck that the member is
-still a permitted, self-approving requester with current topic access. Requests
+still a permitted, self-approving requester included in
+[Who can use this bot](#who-can-use-a-bot), with current topic access. Requests
 beyond the limit, counting approved and pending ones, go to the owner instead,
 and approval past the limit is refused. Any developer-access change denies
 pending and approved, unconsumed issue requests. Each decision records who made
@@ -621,6 +660,7 @@ authentication under `/api/organizations/{organization_id}/bots`:
 | empty | POST | `name`, `topic_ids`, `scopes`, optional `public_access` (default false) and `lifetime_seconds`; metadata and one-time `token` |
 | `/{bot_id}` | PUT | `name`, `topic_ids`, `scopes`, optional `public_access` (default false); replace grants and approve sponsorship |
 | `/{bot_id}/token` | POST | Optional `lifetime_seconds`; metadata and one-time replacement `token` |
+| `/{bot_id}/sharing` | PUT | `policy` and `members`; [who can use](#who-can-use-a-bot) an administrator-sponsored bot |
 | `/{bot_id}` | DELETE | Permanently revoke; 204 |
 
 For `/my-bots`, `public_access=true` means follow all current owner-visible

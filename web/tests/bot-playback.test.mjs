@@ -46,9 +46,13 @@ test("a requester reviewing their own issue preview is told the owner delegated 
   assert.doesNotMatch(render("owner"), /You requested this issue/);
 });
 
-test("a mention the owner's policy excludes explains why it was not run", () => {
-  const html = renderToStaticMarkup(React.createElement(conversation.BotRunStatus, { run: { status: "cancelled", error_code: "requester_not_permitted" } }));
-  assert.match(html, /Not run: this bot accepts requests only from its owner/); assert.doesNotMatch(html, /<button|org-working/);
+test("a request the owner's sharing setting excludes explains why it was not run", () => {
+  const status = run => renderToStaticMarkup(React.createElement(conversation.BotRunStatus, { run }));
+  const html = status({ status: "cancelled", error_code: "requester_not_permitted" });
+  assert.match(html, /Not run: the bot owner(&#x27;|')s “Who can use this bot” setting does not include you/);
+  assert.doesNotMatch(html, /<button|org-working/);
+  assert.match(status({ status: "outcome_unknown", error_code: "requester_not_permitted" }),
+    /Stopped: the bot owner(&#x27;|')s “Who can use this bot” setting no longer includes you\. The local outcome is unknown/);
 });
 
 test("stopped bot outcomes stay explicitly unknown without restart or per-run cancel buttons", () => {

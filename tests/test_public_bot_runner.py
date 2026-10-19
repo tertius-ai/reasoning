@@ -7,6 +7,7 @@ import json
 
 import pytest
 from test_public_bots import fixture as bot_fixture
+from test_public_bots import share
 
 from reasoning_ledger.deployment.private import read_document
 from reasoning_ledger.server.bot_client import BotClientError, BotUnavailable
@@ -150,8 +151,8 @@ def test_owner_only_policy_records_a_visible_refusal_without_invoking_the_cli(fi
     # A lost response is retried idempotently and never queues work.
     assert runtime.from_message(bot["token"], message["id"])["id"] == declined["id"]
     assert runtime.claim(bot["token"]) is None
-    # When the owner trusts other members, a new mention is admitted normally.
-    runtime.advertise(bot["token"], "codex", ["default"], True, False)
+    # Once the owner's server-side setting includes the requester, a new mention is admitted normally.
+    share(fixture, bot["id"], "members", [requester])
     admitted = store.post_message(requester, org, topics[1], f"@[{bot['id']}] Now please", "other-mention-2")
     queued = runtime.from_message(bot["token"], admitted["id"])
     assert queued["status"] == "queued" and queued["requested_by"] == requester

@@ -9,6 +9,7 @@ import json
 import re
 import time
 
+from .bot_sharing import DECLINED, permits, require
 from .bot_store import BotStore
 from .security import digest, token
 from .store import StoreError, _id, _row
@@ -26,8 +27,6 @@ APPROVAL_BY = (
     "(SELECT CASE WHEN a.approver_id IS NOT NULL AND a.approver_id<>a.owner_id THEN 'requester' ELSE 'owner' END "
     "FROM bot_issue_approvals a WHERE a.run_id=r.id AND a.status='pending' ORDER BY a.created_at DESC LIMIT 1) AS approval_by"
 )
-# A mention whose author the bot owner's runner policy excludes; recorded so the requester sees why.
-DECLINED = "requester_not_permitted"
 # Runner-reported stages: whole milliseconds on the runner's monotonic clock,
 # measured from the runner's receipt of the claim response.
 RUNNER_STAGES = ("cli_started_ms", "cli_ready_ms", "first_text_ms", "final_text_ms", "cli_exited_ms")
@@ -73,6 +72,7 @@ class BotRuntime:
         return BotStore._personal_grants(db, bot["created_by"], bot["organization_id"], [topic], list(scopes))
 
     def advertise(self, credential, engine, models, allow_other_users, local_tools, capabilities=None):
+        """``allow_other_users`` is the runner's flag, retained as reported; the bot's sharing setting decides access."""
         if engine not in {"codex", "claude"} or type(allow_other_users) is not bool or type(local_tools) is not bool:
             raise StoreError(400, "invalid local-agent policy")
         if (not isinstance(models, list) or not 1 <= len(models) <= 20 or len(set(models)) != len(models)
@@ -98,21 +98,22 @@ class BotRuntime:
                 (bot["id"], engine, json.dumps(models), allow_other_users, local_tools, int(time.time()), "topic-v1",
                  json.dumps(capabilities or {})),
             )
-            # mention_feedback: from_message records a visible refusal for a requester the policy excludes.
+            # mention_feedback: from_message records a visible refusal for a requester the sharing setting excludes.
             # run_timing: completions may carry the runner's content-free wait stages.
-            return {"models": models, "policy": "topic-v1", "mention_feedback": True, "run_timing": True}
+            # sharing: who may invoke the bot is its server-side setting, not the runner's flag.
+            return {"models": models, "policy": "topic-v1", "mention_feedback": True, "run_timing": True, "sharing": "server"}
 
     def models(self, user, org, topic):
         with self.store.transaction() as db:
             self.store._topic_access(db, user, org, topic)
             values = []
-            for row in db.execute("SELECT b.*,r.engine,r.models_json,r.allow_other_users,r.last_seen_at,r.local_tools,r.capabilities_json "
+            for row in db.execute("SELECT b.*,r.engine,r.models_json,r.last_seen_at,r.local_tools,r.capabilities_json "
                                   "FROM bots b JOIN bot_runtimes r ON r.bot_id=b.id WHERE b.organization_id=?", (org,)):
                 try:
                     self.access(db, row, topic, write=True)
                 except StoreError:
                     continue
-                if user != row["created_by"] and not row["allow_other_users"]:
+                if not permits(db, row, user):
                     continue
                 name = db.execute("SELECT name FROM users WHERE id=?", (row["id"],)).fetchone()[0]
                 values.extend({"id": f"bot/{row['id']}/{model}", "name": f"{name} · {model}", "bot_id": row["id"],
@@ -130,14 +131,14 @@ class BotRuntime:
                 return self.channel_models(user, org, channel, db=transaction)
         project = self.store._channel_access(db, user, org, channel, write=True)[1]
         values = []
-        for row in db.execute("SELECT b.*,r.engine,r.models_json,r.allow_other_users,r.last_seen_at,r.local_tools,r.capabilities_json "
+        for row in db.execute("SELECT b.*,r.engine,r.models_json,r.last_seen_at,r.local_tools,r.capabilities_json "
                               "FROM bots b JOIN bot_runtimes r ON r.bot_id=b.id WHERE b.organization_id=?", (org,)):
             try:
                 BotStore._authority(db, row)
                 scopes = set(json.loads(row["scopes_json"]))
                 if (not row["public_access"] or row["revoked_at"] is not None or row["expires_at"] <= int(time.time())
                     or not {"messages:read", "messages:write"}.issubset(scopes)
-                    or user != row["created_by"] and not row["allow_other_users"]):
+                    or not permits(db, row, user)):
                     continue
                 if row["delegation_kind"] == "personal":
                     self.store._channel_access(db, row["created_by"], org, channel, write=True)
@@ -154,11 +155,13 @@ class BotRuntime:
                           for model in json.loads(row["models_json"]))
         return values
 
-    def enqueue(self, user, org, topic, model, client_id, *, through=None, prompt=None, db=None, mention=False, effort=None):
+    def enqueue(self, user, org, topic, model, client_id, *, through=None, prompt=None, db=None, mention=False, effort=None,
+                decline=False):
+        """Admit a bot request. With ``decline``, a requester the sharing setting excludes gets a visible "Not run" record."""
         if db is None:
             with self.store.transaction(write=True) as transaction:
                 return self.enqueue(user, org, topic, model, client_id, through=through, prompt=prompt, db=transaction,
-                                    mention=mention, effort=effort)
+                                    mention=mention, effort=effort, decline=decline)
         parsed = bot_model(model)
         if parsed is None or not isinstance(client_id, str) or not 1 <= len(client_id) <= 128:
             raise StoreError(400, "select a connected bot model and stable request identity")
@@ -168,8 +171,20 @@ class BotRuntime:
         bot = _row(db.execute("SELECT * FROM bots WHERE id=? AND organization_id=?", (parsed[0], org)).fetchone())
         self.access(db, bot, topic, write=True)
         runtime = _row(db.execute("SELECT * FROM bot_runtimes WHERE bot_id=?", (bot["id"],)).fetchone())
-        if user != bot["created_by"] and not runtime["allow_other_users"]:
-            raise StoreError(403, "this bot accepts requests only from its owner")
+        if not permits(db, bot, user):
+            if not decline or prompt is not None:
+                require(db, bot, user)
+            previous = db.execute("SELECT * FROM bot_runs WHERE requested_by=? AND organization_id=? AND client_id=?",
+                                  (user, org, client_id)).fetchone()
+            if previous:
+                if previous["topic_id"] != topic:
+                    raise StoreError(409, "bot request identity was reused with different inputs")
+                return self.public(previous)
+            if type(through) is not int or db.execute(
+                    "SELECT 1 FROM messages WHERE organization_id=? AND topic_id=? AND sequence=? AND sender_kind='human' "
+                    "AND author_id=?", (org, topic, through, user)).fetchone() is None:
+                raise StoreError(404, "human request message unavailable")
+            return self._decline(db, bot, user, topic, through, client_id, parsed[1])
         if parsed[1] not in json.loads(runtime["models_json"]):
             raise StoreError(400, "this model was not advertised by the bot owner")
         from .reasoning_effort import checked
@@ -235,9 +250,9 @@ class BotRuntime:
             if not selections:
                 raise StoreError(403, "this message does not mention the bot")
             runtime = _row(db.execute("SELECT * FROM bot_runtimes WHERE bot_id=?", (bot["id"],)).fetchone())
-            if message["author_id"] != bot["created_by"] and not runtime["allow_other_users"]:
-                return self._decline(db, bot, message, client_id, sorted(filter(None, selections)) or json.loads(
-                    runtime["models_json"])[:1])
+            if not permits(db, bot, message["author_id"]):
+                return self._decline(db, bot, message["author_id"], message["topic_id"], message["sequence"], client_id,
+                                     (sorted(filter(None, selections)) or json.loads(runtime["models_json"])[:1])[0])
             explicit = {selection for selection in selections if selection is not None}
             if len(explicit) > 1:
                 raise StoreError(400, "select one model per bot invocation")
@@ -249,19 +264,18 @@ class BotRuntime:
                                 client_id, through=message["sequence"],
                                 prompt=message["content"], db=db, mention=True, effort=next(iter(efforts), None))
 
-    def _decline(self, db, bot, message, client_id, models):
+    def _decline(self, db, bot, requester, topic, sequence, client_id, model):
         """A terminal, visible refusal: the requester sees why, no CLI is invoked and no prompt is retained."""
-        self.access(db, bot, message["topic_id"])
+        self.access(db, bot, topic)
         scope = db.execute("SELECT t.channel_id,c.project_id FROM topics t JOIN channels c ON c.id=t.channel_id "
-                           "WHERE t.id=?", (message["topic_id"],)).fetchone()
+                           "WHERE t.id=?", (topic,)).fetchone()
         run_id, now = _id(), int(time.time())
         db.execute("INSERT INTO bot_runs(id,organization_id,project_id,channel_id,topic_id,bot_id,requested_by,model,client_id,"
                    "request_json,prompt,status,phase,created_at,updated_at,context_through_sequence,error_code) "
                    "VALUES(?,?,?,?,?,?,?,?,?,?,'','cancelled','finishing',?,?,?,?)",
-                   (run_id, bot["organization_id"], scope["project_id"], scope["channel_id"], message["topic_id"], bot["id"],
-                    message["author_id"], models[0], client_id, json.dumps({"declined": DECLINED}), now, now,
-                    message["sequence"], DECLINED))
-        self.store._audit(db, bot["organization_id"], message["author_id"], "bot.inference.decline", run_id)
+                   (run_id, bot["organization_id"], scope["project_id"], scope["channel_id"], topic, bot["id"],
+                    requester, model, client_id, json.dumps({"declined": DECLINED}), now, now, sequence, DECLINED))
+        self.store._audit(db, bot["organization_id"], requester, "bot.inference.decline", run_id)
         return self.public(db.execute("SELECT * FROM bot_runs WHERE id=?", (run_id,)).fetchone())
 
     @staticmethod
@@ -394,9 +408,8 @@ class BotRuntime:
         ).fetchone()
         if stopped_parent:
             raise StoreError(409, "the delegating invocation was stopped or has an unknown outcome")
+        require(db, bot, run["requested_by"])
         runtime = _row(db.execute("SELECT * FROM bot_runtimes WHERE bot_id=?", (bot["id"],)).fetchone())
-        if run["requested_by"] != bot["created_by"] and not runtime["allow_other_users"]:
-            raise StoreError(403, "bot owner no longer permits other users")
         if run["model"] not in json.loads(runtime["models_json"]):
             raise StoreError(403, "bot model is no longer advertised")
 

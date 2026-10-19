@@ -53,7 +53,7 @@ help:
 		'make bot-connect Prompt for the server, pair a personal CLI bot, and keep it online' \
 		'make bot-connect BOT_PAIR_ONLY=1  Pair without starting the runner' \
 		'make bot-run    Start a paired bot with automatic reconnection; Ctrl-C to stop' \
-		'make bot-run BOT_ALLOW_OTHER_USERS=1  Also accept mentions from other members of granted topics' \
+		'make bot-run BOT_ALLOW_OTHER_USERS=1  Deprecated; choose who can use a bot in My bots' \
 		'make bot-status Inspect connection and retained invocation state' \
 		'make dev-bot-config DEV_REPOSITORY=owner/repository  Enable local offline test profiles' \
 		'make dev-bot-test DEV_PROFILE=smoke  Run an isolated development-box test with consent' \

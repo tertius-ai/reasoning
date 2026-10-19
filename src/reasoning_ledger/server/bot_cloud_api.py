@@ -37,7 +37,6 @@ class QuoteInput(RequestInput):
     maximum_hourly_usd: Annotated[str, Field(pattern=r"^[0-9]{1,3}(\.[0-9]{1,6})?$")]
     cas: bool = False
     lean: bool = False
-    allow_other_users: bool = False
 
 
 class ConfirmInput(RequestInput):
@@ -86,7 +85,7 @@ class CloudBots:
 
     def public(self, job):
         value = {key: job[key] for key in ("id", "name", "engine", "phase", "quote", "created_at", "bot_id", "error",
-                                         "console_url", "login_command", "tools", "allow_other_users")}
+                                         "console_url", "login_command", "tools")}
         if job["phase"] in {"provisioning", "installing", "starting"}:
             try:
                 with locked_directory(self.directory(job["user"], job["org"], job["id"]) / "operation"):
@@ -100,7 +99,7 @@ class CloudBots:
         self.require(user, org)
         wheel = bot_cloud.wheel_for_release(self.config.deployment_release)
         spec = {"server": self.config.public_url, "engine": body.engine, "models": body.models, "cas": body.cas,
-                "lean": body.lean, "allow_other_users": body.allow_other_users,
+                "lean": body.lean,
                 "wheel_sha256": hashlib.sha256(wheel.read_bytes()).hexdigest()}
         bot_cloud.validate_spec(spec)
         provider = DigitalOcean(body.token.get_secret_value())
@@ -121,7 +120,7 @@ class CloudBots:
                    "spec": spec, "wheel": wheel.name, "error": None, "console_url": None,
                    "login_command": bot_cloud.login_command(body.engine),
                    "tools": [*( ["SymPy", "GAP", "PARI/GP", "Singular"] if body.cas else []),
-                             *( ["Lean 4", "mathlib"] if body.lean else [])], "allow_other_users": body.allow_other_users}
+                             *( ["Lean 4", "mathlib"] if body.lean else [])]}
             job["credentials"] = self.credentials(job, {
                 "digitalocean": body.token.get_secret_value(), "bot": "rnb_" + secrets.token_urlsafe(32),
                 "console_password": "".join(secrets.choice(string.ascii_lowercase) for _ in range(32)),

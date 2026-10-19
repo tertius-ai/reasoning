@@ -622,3 +622,7 @@ MIGRATIONS += (BOT_RUN_TIMING_SCHEMA,)
 from .direct_messages_schema import SCHEMA as DIRECT_MESSAGES_SCHEMA  # noqa: E402
 
 MIGRATIONS += (DIRECT_MESSAGES_SCHEMA,)
+
+from .bot_sharing_schema import SCHEMA as BOT_SHARING_SCHEMA  # noqa: E402
+
+MIGRATIONS += (BOT_SHARING_SCHEMA,)

@@ -23,7 +23,7 @@ export function BotDeveloperAccess({ organizationId, bot, onSaved }: { organizat
     {enabled && <>
     <label>Allowed GitHub repositories<textarea rows={2} value={repositories} placeholder="owner/repository, one per line" onChange={event => setRepositories(event.target.value)} /></label>
     <p className="org-help">On the bot computer: <code>make dev-bot-config DEV_REPOSITORY=owner/repository</code>, then restart <code>make bot-run</code>. Pair with local execution enabled for source reads and tests; GitHub issues use its local <code>gh</code> login.</p>
-    <details><summary>Other permitted requesters · {requesters.length}</summary><small>You are always permitted. The bot must also allow other users in its local runner policy: <code>make bot-run BOT_ALLOW_OTHER_USERS=1</code>.</small>
+    <details><summary>Other permitted requesters · {requesters.length}</summary><small>You are always permitted. Other requesters must also be included in <strong>Who can use this bot</strong>.</small>
       {members.filter(member => member.id !== bot.created_by && member.role !== "viewer").map(member => <div key={member.id}>
         <label><input type="checkbox" checked={requesters.includes(member.id)} onChange={event => toggleRequester(member.id, event.target.checked)} />{member.name}</label>
         {requesters.includes(member.id) && <label className="org-help"><input type="checkbox" checked={selfApprovers.includes(member.id)}

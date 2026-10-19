@@ -9,6 +9,7 @@ from test_public_bots import member
 
 from reasoning_ledger.server.bot_pairing import BotPairing
 from reasoning_ledger.server.bot_runtime import BotRuntime
+from reasoning_ledger.server.bot_sharing import BotSharing
 from reasoning_ledger.server.bot_tools import BotTools
 from reasoning_ledger.server.security import digest
 from reasoning_ledger.server.store import StoreError
@@ -26,7 +27,8 @@ def invocation(fixture, *, owner_id=None, requester=None, following=True):
     bot = bots.create(user, org, "Discoverer", [] if following else topics[1:],
                       ["messages:read", "messages:write"], personal=True, public_access=following)
     runtime = BotRuntime(bots)
-    runtime.advertise(bot["token"], "codex", ["default"], True, False)
+    runtime.advertise(bot["token"], "codex", ["default"], False, False)
+    BotSharing(bots).configure(user, org, bot["id"], "topic_writers")
     run = runtime.enqueue(requester or user, org, topics[1], f"bot/{bot['id']}/default", "discover", prompt="Find a topic")
     claimed = runtime.claim(bot["token"])
     tools = BotTools(runtime)

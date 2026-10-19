@@ -514,6 +514,17 @@ def test_make_bot_run_passes_explicit_other_user_policy(tmp_path, others):
     assert rejected.returncode != 0 and "BOT_ALLOW_OTHER_USERS must be 0 or 1" in rejected.stderr
 
 
+def test_runner_flag_is_documented_as_deprecated_in_favour_of_my_bots(capsys):
+    from reasoning_ledger.server.bot_client import main
+
+    with pytest.raises(SystemExit):
+        main(["run", "--help"])
+    assert "deprecated: choose who can use this bot in My bots" in " ".join(capsys.readouterr().out.split())
+    result = subprocess.run(["make", "--no-print-directory", "help"], cwd=Path(__file__).resolve().parents[1],
+                            capture_output=True, text=True)
+    assert "BOT_ALLOW_OTHER_USERS=1  Deprecated; choose who can use a bot in My bots" in result.stdout
+
+
 def test_make_bot_connect_rejects_invalid_pair_only_before_starting(tmp_path):
     result = subprocess.run(["make", "--no-print-directory", "bot-connect", "UV=true", "BOT_PAIR_ONLY=invalid"],
         cwd=Path(__file__).resolve().parents[1], capture_output=True, text=True)

@@ -130,6 +130,7 @@ def test_source_topic_needs_explicit_bot_grant_and_requester_as_well_as_owner_ac
     from test_public_media import upload
 
     from reasoning_ledger.server.bot_runtime import BotRuntime
+    from reasoning_ledger.server.bot_sharing import BotSharing
 
     fixture = bot_fixture.__wrapped__(tmp_path)
     store, owner, topics, _, _, bots = fixture
@@ -158,7 +159,8 @@ def test_source_topic_needs_explicit_bot_grant_and_requester_as_well_as_owner_ac
     personal = bots.create(
         user, org, "Owner reader", [topics[1], secret], ["messages:read", "messages:write", "knowledge:read"], personal=True
     )
-    runtime.advertise(personal["token"], "codex", ["default"], True, False)
+    runtime.advertise(personal["token"], "codex", ["default"], False, False)
+    BotSharing(bots).configure(user, org, personal["id"], "topic_writers")
     requested = runtime.enqueue(other, org, topics[1], f"bot/{personal['id']}/default", "private-request", prompt="Read a picture")
     claimed = runtime.claim(personal["token"])
     with pytest.raises(StoreError):

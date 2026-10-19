@@ -23,7 +23,7 @@ shutil.copyfile(wheel, host.ROOT / wheel.name)
 shutil.copyfile(source_install.__file__, host.ROOT / "source-installer.py")
 request = {"plan_id": "a" * 64, "deployment_id": "b" * 32}
 Path("/etc/reasoning-provisioning.json").write_text(json.dumps(request))
-spec = {"engine": engine, "models": ["default"], "cas": True, "lean": engine == "codex", "allow_other_users": False,
+spec = {"engine": engine, "models": ["default"], "cas": True, "lean": engine == "codex",
         "wheel_sha256": hashlib.sha256(wheel.read_bytes()).hexdigest()}
 (host.ROOT / "input.json").write_text(json.dumps({"request": request, "spec": spec, "wheel_name": wheel.name,
     "console_password": "a" * 32,

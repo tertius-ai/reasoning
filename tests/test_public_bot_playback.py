@@ -8,6 +8,7 @@ from test_public_bot_runtime import setup
 from test_public_bots import fixture as bot_fixture
 
 from reasoning_ledger.server.bot_runtime import BotRuntime
+from reasoning_ledger.server.bot_sharing import BotSharing
 from reasoning_ledger.server.store import StoreError
 
 
@@ -67,7 +68,8 @@ def test_stop_requires_current_scope_and_requester_owner_or_administrator(fixtur
         person("stranger@example.org"), person("viewer@example.org", "viewer")
     bot = bots.create(bot_owner, org, "Personal", [topics[1]], ["messages:read", "messages:write"], personal=True)
     runtime = BotRuntime(bots)
-    runtime.advertise(bot["token"], "codex", ["default"], True, False)
+    runtime.advertise(bot["token"], "codex", ["default"], False, False)
+    BotSharing(bots).configure(bot_owner, org, bot["id"], "topic_writers")
     model = f"bot/{bot['id']}/default"
     for actor in (requester, bot_owner, owner["user_id"]):
         run = runtime.enqueue(requester, org, topics[1], model, "stop-" + actor, prompt="An explicit fixture request")

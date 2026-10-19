@@ -29,8 +29,7 @@ CLI = {"codex": "@openai/codex@0.160.1", "claude": "@anthropic-ai/claude-code@2.
 
 
 def runner_command(spec):
-    base = f"/usr/local/lib/reasoning-bot/bin/reasoning-bot run --state-dir {STATE} --config {STATE}/config.json"
-    return base + (" --allow-other-users" if spec["allow_other_users"] else "")
+    return f"/usr/local/lib/reasoning-bot/bin/reasoning-bot run --state-dir {STATE} --config {STATE}/config.json"
 
 
 def run(args, **kwargs):
@@ -171,7 +170,7 @@ def _install():
     config_path.write_bytes(json.dumps(config, sort_keys=True, separators=(",", ":")).encode())
     config_path.chmod(0o600)
     agent = {"engine": spec["engine"], "models": spec["models"], "local_tools": spec["cas"] or spec["lean"],
-             "allow_other_users": spec["allow_other_users"], "workspace": str(STATE / "workspaces")}
+             "workspace": str(STATE / "workspaces")}
     (STATE / "agent.json").write_bytes(json.dumps(agent, sort_keys=True, separators=(",", ":")).encode())
     (STATE / "agent.json").chmod(0o600)
     run(["chown", "-R", "reasoning-bot:reasoning-bot", str(HOME)])

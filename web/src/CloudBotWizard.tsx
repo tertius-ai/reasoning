@@ -4,7 +4,7 @@ import { errorMessage, organizationPath, request } from "./organization-api";
 
 type CloudBot = {
   id: string; name: string; engine: "codex" | "claude"; phase: string; error: string | null;
-  console_url: string | null; login_command: string; tools: string[]; allow_other_users: boolean;
+  console_url: string | null; login_command: string; tools: string[];
   quote: { region: string; size: string; quote: { compute_hourly_usd: string; estimated_730_hours_usd: string } };
 };
 
@@ -20,7 +20,6 @@ export function CloudBotWizard({ organizationId, onChanged }: { organizationId: 
   const [ceiling, setCeiling] = useState("");
   const [cas, setCas] = useState(false);
   const [lean, setLean] = useState(false);
-  const [shared, setShared] = useState(false);
   const [confirmation, setConfirmation] = useState<Record<string, string>>({});
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -59,7 +58,7 @@ export function CloudBotWizard({ organizationId, onChanged }: { organizationId: 
     <form className="org-bot-wizard" onSubmit={(event) => { event.preventDefault(); void action(async () => {
       await request<CloudBot>(root + "/quote", { method: "POST", body: {
         name, engine, models: models.split(",").map((item) => item.trim()), region, size, token,
-        maximum_hourly_usd: ceiling, cas, lean, allow_other_users: shared,
+        maximum_hourly_usd: ceiling, cas, lean,
       } }); setToken("");
     }); }}>
       <label>Bot name<input value={name} onChange={(event) => setName(event.target.value)} pattern="[a-z0-9][a-z0-9-]{0,40}" required /></label>
@@ -75,8 +74,8 @@ export function CloudBotWizard({ organizationId, onChanged }: { organizationId: 
         setSize(lean ? "s-4vcpu-8gb" : checked ? "s-2vcpu-4gb" : "s-1vcpu-2gb"); }} />Local CAS · SymPy, GAP, PARI/GP, Singular (4 GiB minimum)</label>
       <label><input type="checkbox" checked={lean} onChange={(event) => { const checked = event.target.checked; setLean(checked);
         setSize(checked ? "s-4vcpu-8gb" : cas ? "s-2vcpu-4gb" : "s-1vcpu-2gb"); }} />Lean 4 + mathlib (8 GiB minimum)</label>
-      <label><input type="checkbox" checked={shared} onChange={(event) => setShared(event.target.checked)} />Allow other users with topic access to request this bot</label>
-      <p>The bot follows your topic access. Local execution still requires your approval in People, even when someone else requests it.</p>
+      <p>The bot follows your topic access. Only you can use it until you choose otherwise under <strong>Who can use this bot</strong> in My bots.
+        Local execution still requires your approval in People, even when someone else requests it.</p>
       <button disabled={busy}>Get quote · no cloud resources created</button>
     </form>
     {jobs.map((job) => {

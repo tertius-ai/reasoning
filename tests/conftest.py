@@ -26,6 +26,7 @@ DEPLOYMENT_TESTS = {
     "test_public_bot_approvals.py",
     "test_public_bot_conversations.py",
     "test_public_bot_runner.py",
+    "test_public_bot_sharing.py",
     "test_public_bot_developer.py",
     "test_public_developer_testing.py",
     "test_public_claim_index_migration.py",

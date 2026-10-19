@@ -69,7 +69,6 @@ def main(argv=None):
                 cas = ask("Install SymPy, GAP, PARI/GP and Singular? y/n", "n").lower() == "y"
                 lean = ask("Install pinned Lean 4 and mathlib? y/n", "n").lower() == "y"
                 models = [item.strip() for item in ask("Provider CLI models, comma-separated", "default").split(",")]
-                shared = ask("Allow other users with topic access to request this bot? y/n", "n").lower() == "y"
                 # Build only the trusted Python bot artifact; no frontend/node
                 # installation and no private repository credentials on the VM.
                 artifact = directory / "artifact"
@@ -78,7 +77,7 @@ def main(argv=None):
 
                 source = build_source(Path.cwd(), artifact / "reasoning-source.zip")
                 spec = {"server": server.rstrip("/"), "engine": engine, "models": models, "cas": cas, "lean": lean,
-                        "allow_other_users": shared, "wheel_sha256": hashlib.sha256(source.read_bytes()).hexdigest()}
+                        "wheel_sha256": hashlib.sha256(source.read_bytes()).hexdigest()}
                 bot_cloud.validate_spec(spec)
                 webbrowser.open("https://cloud.digitalocean.com/account/api/tokens")
                 print("Create a token in the same Team that should own the bot. Required permissions: " + bot_cloud.TOKEN_SCOPES)
@@ -147,6 +146,7 @@ def main(argv=None):
         bot_cloud.start(controller, host)
         bot_panel("CLOUD BOT READY", [("Bot", setup["quote"]["name"]), ("Server", setup["spec"]["server"]),
                   ("Runner", "systemd · reconnects automatically"), ("Approvals", "My bots in Reasoning"),
+                  ("Who can use it", "Only you · change it in My bots"),
                   ("Hardware", "Manage/destroy this dedicated Droplet in DigitalOcean to end VM billing")])
         return 0
     except (InstallError, BotClientError, OSError, ValueError, subprocess.SubprocessError) as exc:

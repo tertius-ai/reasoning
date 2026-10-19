@@ -42,6 +42,14 @@ def bot(fixture, *, scopes=None, topics=None):
     )
 
 
+def share(fixture, bot_id, policy="topic_writers", members=(), *, owner_id=None):
+    """Set the bot owner's server-side "Who can use this bot" choice."""
+    from reasoning_ledger.server.bot_sharing import BotSharing
+
+    _, owner, _, _, _, bots = fixture
+    return BotSharing(bots).configure(owner_id or owner["user_id"], owner["organization_id"], bot_id, policy, list(members))
+
+
 def member(fixture, role="member"):
     store, owner, _, _, _, _ = fixture
     invite = store.invite(owner["user_id"], owner["organization_id"], "member@example.org", role, 3600)

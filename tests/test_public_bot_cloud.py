@@ -47,7 +47,7 @@ class Provider(ProviderFixture):
 def cloud(tmp_path):
     provider = Provider()
     spec = {"engine": "codex", "models": ["default"], "server": "https://chat.example.org", "cas": True,
-            "lean": False, "allow_other_users": False, "wheel_sha256": hashlib.sha256(b"wheel fixture").hexdigest()}
+            "lean": False, "wheel_sha256": hashlib.sha256(b"wheel fixture").hexdigest()}
     quote = provider.client.compute_quote(name="bot", region="fra1", size="s-2vcpu-4gb",
                                          admin_cidr="139.59.1.9/32", maximum_hourly_usd="0.10")
     with locked_directory(tmp_path / "host") as directory:
@@ -63,7 +63,7 @@ def test_quote_is_read_only_and_tool_size_requirements_are_enforced():
     assert not provider.writes
     assert {request.url.path for request in provider.requests} == {"/v2/account", "/v2/sizes"}
     spec = {"engine": "claude", "models": ["default"], "server": "https://chat.example.org", "cas": True,
-            "lean": True, "allow_other_users": False, "wheel_sha256": "a" * 64}
+            "lean": True, "wheel_sha256": "a" * 64}
     with pytest.raises(InstallError, match="8 GiB"):
         bot_cloud.check_size(quote, spec)
     provider.client.close()
@@ -312,6 +312,10 @@ def test_authenticated_web_quote_and_explicit_confirmation_use_the_shared_contro
     response = client.post(root + "/quote", json={"token": remote.token, "engine": "claude", "name": "test-bot",
         "size": "s-2vcpu-4gb", "maximum_hourly_usd": "0.10"})
     assert response.status_code == 201, response.text
+    assert "allow_other_users" not in response.json()
+    # Who can use the bot is chosen in My bots, not at setup.
+    assert client.post(root + "/quote", json={"token": remote.token, "engine": "claude", "name": "test-bot",
+        "size": "s-2vcpu-4gb", "maximum_hourly_usd": "0.10", "allow_other_users": True}).status_code == 422
     assert not remote.writes
     path = root + "/" + response.json()["id"]
     assert client.post(path + "/create", json={"confirmation": ""}).status_code == 400
@@ -333,9 +337,18 @@ def test_cli_cloud_pairing_does_not_need_provider_cli_on_local_computer():
     assert result["local_execution_available"] is False
 
 
-def test_cloud_runner_passes_explicit_sharing_choice_to_runtime():
-    assert "--allow-other-users" not in bot_cloud_host.runner_command({"allow_other_users": False})
-    assert bot_cloud_host.runner_command({"allow_other_users": True}).endswith(" --allow-other-users")
+def test_cloud_runner_leaves_who_can_use_the_bot_to_the_server_setting():
+    spec = {"engine": "codex", "models": ["default"], "server": "https://chat.example.org", "cas": False,
+            "lean": False, "wheel_sha256": "a" * 64}
+    bot_cloud.validate_spec(spec)
+    # A retained setup's runner flag is accepted but never passed on; My bots decides who can use the bot.
+    for retained in (True, False):
+        bot_cloud.validate_spec({**spec, "allow_other_users": retained})
+        assert "--allow-other-users" not in bot_cloud_host.runner_command({**spec, "allow_other_users": retained})
+    with pytest.raises(InstallError):
+        bot_cloud.validate_spec({**spec, "allow_other_users": "yes"})
+    with pytest.raises(InstallError):
+        bot_cloud.validate_spec({**spec, "shared": True})
 
 
 def test_shared_wizard_waits_through_normal_vm_readiness_but_not_unknown_creation():

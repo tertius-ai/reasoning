@@ -104,8 +104,9 @@ class WorkflowRuns:
                     runtime = _row(db.execute("SELECT * FROM bot_runtimes WHERE bot_id=?", (bot["id"],)).fetchone())
                     if parsed[1] not in json.loads(runtime["models_json"]):
                         raise StoreError(403, "workflow model is not advertised by this bot")
-                    if user != bot["created_by"] and not runtime["allow_other_users"]:
-                        raise StoreError(403, "workflow bot accepts requests only from its owner")
+                    from .bot_sharing import require
+
+                    require(db, bot, user)
                     if runtime["last_seen_at"] < int(time.time()) - 45:
                         raise StoreError(409, "workflow bot is offline")
                     continue

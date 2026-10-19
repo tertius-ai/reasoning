@@ -8,6 +8,7 @@ from pydantic import Field
 from .bot_developer import BotDeveloper
 from .bot_pairing import BotPairing
 from .bot_runtime import BotRuntime
+from .bot_sharing import BotSharing
 from .bot_store import BotStore
 from .bot_tools import BotTools
 from .knowledge_store import KnowledgeStore
@@ -68,6 +69,7 @@ class KnowledgeWrite(Input):
 class RuntimeAdvertisement(Input):
     engine: Literal["codex", "claude"]
     models: Annotated[list[Annotated[str, Field(max_length=100)]], Field(min_length=1, max_length=20)]
+    # The runner's --allow-other-users flag: recorded, but who may invoke the bot is its sharing setting.
     allow_other_users: bool = False
     local_tools: bool = False
     capabilities: dict = Field(default_factory=dict)
@@ -148,6 +150,12 @@ class DeveloperPermissions(Input):
     issue_daily_limit: Annotated[int, Field(ge=1, le=20, strict=True)] = 3
 
 
+class Sharing(Input):
+    policy: Literal["owner", "members", "topic_writers"]
+    members: Annotated[list[Annotated[str, Field(pattern=r"^[a-f0-9]{32}$")]], Field(max_length=64)] = Field(
+        default_factory=list)
+
+
 class IssueRequest(Lease):
     repository: Annotated[str, Field(max_length=140)]
     title: Annotated[str, Field(min_length=1, max_length=200)]
@@ -174,6 +182,7 @@ def install_routes(app: FastAPI, state: BotStore, authenticated, *, compute=None
     pairing = BotPairing(state)
     runtime = BotRuntime(state)
     developer = BotDeveloper(runtime, deployment=deployment)
+    sharing = BotSharing(state)
     tools = BotTools(runtime, compute=compute)
     from .bot_compute import BotCompute
 
@@ -203,6 +212,14 @@ def install_routes(app: FastAPI, state: BotStore, authenticated, *, compute=None
     @app.put("/api/organizations/{organization_id}/my-bots/{bot_id}/developer")
     def developer_permissions(organization_id: str, bot_id: str, body: DeveloperPermissions, user: User):
         return developer.configure(user, organization_id, bot_id, **body.model_dump())
+
+    @app.put("/api/organizations/{organization_id}/my-bots/{bot_id}/sharing")
+    def personal_sharing(organization_id: str, bot_id: str, body: Sharing, user: User):
+        return sharing.configure(user, organization_id, bot_id, body.policy, body.members)
+
+    @app.put("/api/organizations/{organization_id}/bots/{bot_id}/sharing")
+    def administrator_sharing(organization_id: str, bot_id: str, body: Sharing, user: User):
+        return sharing.configure(user, organization_id, bot_id, body.policy, body.members, personal=False)
 
     @app.get("/api/organizations/{organization_id}/my-bots/issue-approvals")
     def issue_approvals(organization_id: str, user: User):
@@ -284,7 +301,7 @@ def install_routes(app: FastAPI, state: BotStore, authenticated, *, compute=None
     @app.post("/api/organizations/{organization_id}/topics/{topic_id}/bot-runs", status_code=201)
     def bot_inference(organization_id: str, topic_id: str, body: BotInference, user: User):
         return runtime.enqueue(user, organization_id, topic_id, body.model, body.client_id,
-                               through=body.through_sequence, effort=body.effort)
+                               through=body.through_sequence, effort=body.effort, decline=True)
 
     @app.get("/api/organizations/{organization_id}/my-bots/execution-approvals")
     def execution_approvals(organization_id: str, user: User):

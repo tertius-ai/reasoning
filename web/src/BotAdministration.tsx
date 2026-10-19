@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useRef, useState } from "react";
 import { BotMetadata, Hierarchy, KIND_SYMBOL, errorMessage, organizationPath, request } from "./organization-api";
 import { BotWebhooks } from "./BotWebhooks";
 import { BotDeveloperAccess } from "./BotDeveloperAccess";
+import { BotSharing, sharingLabel } from "./BotSharing";
 import { CloudBotWizard } from "./CloudBotWizard";
 
 type Purpose = "notify" | "respond" | "observe";
@@ -23,6 +24,9 @@ function purposeFor(bot: BotMetadata): Purpose {
   if (!bot.scopes.includes("messages:read")) return "notify";
   return bot.scopes.includes("messages:write") ? "respond" : "observe";
 }
+
+/** Only a bot that reads and responds in its topics can be asked to run. */
+const invocable = (bot: BotMetadata) => bot.scopes.includes("messages:read") && bot.scopes.includes("messages:write");
 
 function permissionLabel(bot: BotMetadata): string {
   const messages = PURPOSES.find((item) => item.id === purposeFor(bot))?.name ?? "Custom access";
@@ -191,8 +195,11 @@ export function BotAdministration({ organizationId, personal = false, readOnly =
       <ul className="org-admin-list">{bots.map((bot) => <li key={bot.id} className="org-bot-card"><div className="org-bot-card-heading"><span aria-label={bot.developer?.enabled ? "Developer bot" : "Bot"}>{bot.developer?.enabled ? "⬡" : "◆"}</span><strong title={[bot.runtime?.engine === "claude" ? "Claude Code" : bot.runtime?.engine === "codex" ? "Codex" : "External bot", ...(bot.runtime?.models ?? [])].join(" · ")}>{bot.name}</strong>
         <small>{bot.revoked_at ? "Revoked" : !bot.enabled ? "Access expired" : bot.runtime?.online ? "Online" : "Offline"}</small></div>
         <div className="org-bot-card-access"><span>{permissionLabel(bot)}</span><span>{bot.public_access ? personal ? "Follows your access" : "Organization-public access" : `${bot.explicit_topic_ids?.length ?? bot.topic_ids.length} restricted topics`}</span>
-          <span>{bot.runtime?.local_tools ? "Local execution · approval required" : "Local execution not enabled"}</span></div>
+          <span>{bot.runtime?.local_tools ? "Local execution · approval required" : "Local execution not enabled"}</span>
+          {invocable(bot) && <span>{sharingLabel(bot, !personal)}</span>}</div>
         <small title={new Date(bot.expires_at * 1000).toLocaleString()}>Credential expires {new Date(bot.expires_at * 1000).toLocaleDateString()}</small>
+        {!readOnly && !bot.revoked_at && invocable(bot) && (personal || bot.delegation_kind === "administrator") && <BotSharing
+          organizationId={organizationId} bot={bot} path={botsPath + "/" + bot.id + "/sharing"} administrator={!personal} onSaved={() => void reload()} />}
         {personal && !readOnly && !bot.revoked_at && <BotDeveloperAccess organizationId={organizationId} bot={bot} onSaved={() => void reload()} />}
         {!bot.revoked_at && <div className="org-bot-row-actions">
           <button disabled={busy} onClick={() => { setPairDismissed(true); setError(""); setSaved(""); setEditing(bot.id); setName(bot.name); setTopics(bot.explicit_topic_ids ?? bot.topic_ids);
