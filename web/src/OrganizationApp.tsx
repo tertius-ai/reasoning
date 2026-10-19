@@ -191,8 +191,8 @@ export function TopicNavigation({ hierarchy, organizationId = "", userId = "", u
       }} className={`org-project org-project-tone-${projectIndex % 6}`}>
       <summary title={project.name} {...reveal("projects", project.id, project.name)}><span className="org-tree-label">{project.name}</span>{project.visibility === "private" && (project.project_role
         ? <span className="org-private-mark" aria-label="Private project" title="Private project · visible to its members and to organization owners and admins">· private</span>
-        : <span className="org-private-mark" aria-label="Private project, visible to you as an organization owner or admin"
-            title="Private project · you are not on its roster; you see it because you are an organization owner or admin">· private · admin access</span>)}{spend("projects", project.id)}</summary>
+        : <span className="org-private-mark org-admin-access" aria-label="Private project, visible to you as an organization owner or admin"
+            title="Private project · you are not on its roster; you see it because you are an organization owner or admin">private · visible to you as admin</span>)}{spend("projects", project.id)}</summary>
       <span className="org-project-actions">{canWriteProject && <button type="button" className="org-tree-add" aria-label={`New channel in ${project.name}`}
         title={`New channel in ${project.name}`} onClick={() => onCreateChannel(project.id)}>+</button>}
         {canManageProject && <button type="button" className="org-tree-more" aria-label={`Settings for ${project.name}`} title={`Settings for ${project.name}`} onClick={() => onProjectSettings(project.id)}>⋯</button>}</span>

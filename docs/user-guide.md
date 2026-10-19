@@ -149,7 +149,7 @@ fork, edit), and single-message copy controls. The upward triangle attaches a pi
 
 A private project is visible to its roster and to every organization owner and
 admin, who can also open its topics. If you see a project marked
-`private · admin access`, you are not on its roster and see it through your
+`private · visible to you as admin`, you are not on its roster and see it through your
 organization role; its settings list everyone who has access that way.
 
 Deleting a project or channel includes its children in one confirmation. Active

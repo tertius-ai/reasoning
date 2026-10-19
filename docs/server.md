@@ -244,7 +244,7 @@ instead create a private project with an initial owner and roster. Only that ros
 and organization owners/administrators can discover or access its hierarchy,
 messages, knowledge, model and compute runs, workflows, search results, or usage.
 Owners and administrators who are not on the roster see the project marked
-`private · admin access` in navigation, and project settings list them under
+`private · visible to you as admin` in navigation, and project settings list them under
 "Also visible through their organization role", so a roster never implies that
 nobody else can read the project.
 A private-project owner can manage its roster and rename its project and channels;

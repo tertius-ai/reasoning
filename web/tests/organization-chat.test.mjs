@@ -22,7 +22,7 @@ test("private projects say when they are visible through an organization owner o
     hierarchy, organizationId: "org", selected: null, canCreate: true, canManageOrganization: true, onSelect: () => {},
     onCreateChannel: () => {}, onCreateTopic: () => {}, onProjectSettings: () => {}, onChannelSettings: () => {},
   }));
-  assert.equal((markup.match(/· private · admin access/g) ?? []).length, 1, "only the project seen through the organization role");
+  assert.equal((markup.match(/private · visible to you as admin/g) ?? []).length, 1, "only the project seen through the organization role");
   assert.match(markup, /aria-label="Private project, visible to you as an organization owner or admin"/);
   assert.equal((markup.match(/aria-label="Private project"/g) ?? []).length, 1, "the rostered project keeps the plain marker");
 });

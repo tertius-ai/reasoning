@@ -83,6 +83,9 @@
 .org-project-tone-5 { --project-tone: #e57ea5; }
 .org-project-actions { position: absolute; display: flex; top: 4px; right: 4px; }
 .org-private-mark { margin-left: 6px; color: var(--muted); font-size: 10px; font-weight: 400; white-space: nowrap; }
+/* Seen only through an organization role: a second line under the name, so the name keeps the row's width. */
+.org-project > summary { flex-wrap: wrap; }
+.org-project > summary .org-admin-access { order: 3; flex-basis: 100%; margin-left: 0; line-height: 1.3; }
 .org-channel { margin-left: 8px; }
 .org-channel-heading { display: flex; align-items: center; min-height: 32px; padding: 3px 4px 3px 8px; color: var(--org-tree-tone); font-size: 13px; }
 .org-channel-actions { display: flex; flex: none; }
