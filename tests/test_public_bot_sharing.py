@@ -223,10 +223,11 @@ def test_workflow_bot_nodes_follow_the_owners_setting(installation):  # noqa: F8
     assert env.start([node], client="workflow-shared-0001")["status"] == "running"
 
 
-def test_existing_bots_migrate_to_only_me_even_with_the_runner_flag(fixture):
+@pytest.mark.parametrize("runner_flag", [True, False])
+def test_existing_bots_keep_their_runner_sharing_when_migrated(fixture, runner_flag):
     store, owner, topics, _, _, _ = fixture
     other = person(fixture, "other@example.org")["user_id"]
-    runtime, bot, _ = connected(fixture, runner_flag=True)
+    runtime, bot, _ = connected(fixture, runner_flag=runner_flag)
     with store.transaction(write=True) as db:
         db.execute("DROP TABLE bot_invokers")
         db.execute("DROP TABLE bot_sharing")
@@ -234,9 +235,13 @@ def test_existing_bots_migrate_to_only_me_even_with_the_runner_flag(fixture):
     migrated = Store(store.data_dir)
     with migrated.transaction() as db:
         assert db.execute("PRAGMA user_version").fetchone()[0] == len(MIGRATIONS)
-        assert db.execute("SELECT allow_other_users FROM bot_runtimes WHERE bot_id=?", (bot["id"],)).fetchone()[0] == 1
-        assert setting(db, bot["id"]) == {"policy": "owner", "members": []}
-    assert all(declined(run) for run in attempt(fixture, runtime, bot, other, "after-migration"))
+        assert db.execute("SELECT allow_other_users FROM bot_runtimes WHERE bot_id=?", (bot["id"],)).fetchone()[0] == int(runner_flag)
+        expected = {"policy": "topic_writers", "members": []} if runner_flag else {"policy": "owner", "members": []}
+        assert setting(db, bot["id"]) == expected
+        if runner_flag:
+            assert db.execute("SELECT updated_by FROM bot_sharing WHERE bot_id=?", (bot["id"],)).fetchone()[0] == owner["user_id"]
+    runs = attempt(fixture, runtime, bot, other, "after-migration")
+    assert all(not declined(run) for run in runs) if runner_flag else all(declined(run) for run in runs)
 
 
 def test_sharing_routes_for_owners_and_administrators(fixture, monkeypatch):

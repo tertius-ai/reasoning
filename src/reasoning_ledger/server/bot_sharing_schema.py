@@ -18,4 +18,9 @@ SCHEMA = (
         FOREIGN KEY(organization_id,user_id) REFERENCES memberships(organization_id,user_id) ON DELETE CASCADE
     )""",
     "CREATE INDEX bot_invoker_member ON bot_invokers(organization_id,user_id)",
+    # Bots whose runner already accepted other members' requests keep doing so: they start as "everyone who can write
+    # in its topics", attributed to their owner at the runner's last report. Every other bot starts as "only me".
+    """INSERT INTO bot_sharing(bot_id,policy,updated_by,updated_at)
+        SELECT r.bot_id,'topic_writers',b.created_by,r.last_seen_at FROM bot_runtimes r JOIN bots b ON b.id=r.bot_id
+        WHERE r.allow_other_users=1""",
 )
