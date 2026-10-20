@@ -1,4 +1,5 @@
 import React, { lazy, useCallback, useEffect, useState } from "react";
+import { Brand } from "./Brand";
 import { LazyView } from "./LazyView";
 import { Account, ApiError, Session, aborted, clearSharedReads, errorMessage, request } from "./organization-api";
 
@@ -35,7 +36,7 @@ export function AuthForm({ mode, invitation, onMode, onAuthenticated }: {
     finally { setPassword(""); setBusy(false); }
   };
   return <main className="org-auth"><div className="org-auth-card">
-    <div className="org-wordmark"><img src="/reasoning.svg" alt="" />Reasoning</div>
+    <Brand />
     <h1>{title}</h1>
     <form onSubmit={submit}>
       {mode !== "login" && <label>{mode === "setup" ? "Setup credential" : "Invitation token"}<input name="token" type="password"

@@ -32,12 +32,10 @@ export function peopleInbox<P extends { id: string }>(people: P[], conversations
   return [...talking, ...people.filter(person => !byUser.has(person.id))];
 }
 
-/** Marks beside a person in People for their direct conversation: state and the unread count. */
+/** Marks beside a person in People for their direct conversation: state and the unread count; People also bolds an unread name. */
 export function DirectMessageMarks({ conversation }: { conversation: DirectConversation }) {
   const unread = directUnread(conversation);
   return <span className="org-direct-marks">
-    <svg className="org-direct-mark" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"
-      aria-hidden="true"><path d="M4 5h16v11H9l-5 4z" /></svg>
     {!conversation.other_member && <small className="org-private-mark">left</small>}
     {conversation.blocked && <small className="org-private-mark">blocked</small>}
     {conversation.muted && <small className="org-private-mark" aria-label="Muted">muted</small>}

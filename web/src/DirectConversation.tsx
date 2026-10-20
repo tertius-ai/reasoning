@@ -149,7 +149,7 @@ export function DirectConversationView({ organizationId, conversation, user, mem
       {(groupIndex === 0 || new Date(groups[groupIndex - 1][0].created_at * 1000).toDateString() !== new Date(group[0].created_at * 1000).toDateString())
         && <div className="org-message-day"><time dateTime={new Date(group[0].created_at * 1000).toISOString().slice(0, 10)}>
           {new Date(group[0].created_at * 1000).toLocaleDateString(undefined, { weekday: "long", month: "short", day: "numeric", year: "numeric" })}</time></div>}
-      <div className="org-message-group">{group.map((message, index) => {
+      <div className="org-message-group org-speaker-human">{group.map((message, index) => {
         const own = message.author_id === user.id;
         return <article key={message.id} id={"direct-message-" + message.sequence} data-sequence={message.sequence}
           className={"org-message " + (index ? "org-message-continuation " : "") + (own ? "org-message-own" : "")}>

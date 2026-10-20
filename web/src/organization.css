@@ -28,9 +28,9 @@
 .org-wordmark { display: flex; align-items: center; gap: 8px; font: 500 15px var(--font-mono); white-space: nowrap; }
 .org-wordmark img { width: 28px; height: 28px; }
 .org-appbar { height: 44px; flex: none; display: flex; align-items: center; gap: 8px; padding: 6px 12px; border-bottom: 1px solid var(--border); }
-.org-appbar .org-wordmark { min-width: 0; font-size: 13px; }
-.org-appbar .org-wordmark img { width: 24px; height: 24px; }
-.org-appbar .org-wordmark > span { max-width: 180px; overflow: hidden; text-overflow: ellipsis; }
+.org-brand { display: inline-flex; flex: none; align-items: baseline; gap: 6px; color: var(--foreground); font: 500 14px var(--font-mono); letter-spacing: -.01em; white-space: nowrap; }
+.org-brand-mark { color: var(--teal); font-size: 16px; }
+.org-auth-card .org-brand { font-size: 16px; }
 .org-app .org-icon-button { display: inline-flex; align-items: center; justify-content: center; width: 28px; min-height: 28px; padding: 4px; flex: none; border-color: transparent; }
 .org-app a.org-icon-button { color:var(--foreground); text-decoration:none; border-bottom:0; }
 .org-copy-topic[data-copied=true] { color: var(--teal); }
@@ -62,42 +62,57 @@
 .org-body { display: flex; flex: 1; min-height: 0; }
 .org-sidebar { width: 270px; min-width: 230px; flex: none; display: flex; flex-direction: column; background: var(--surface); border-right: 1px solid var(--border); }
 .org-sidebar[hidden] { display: none; }
-.org-sidebar > header { display: flex; align-items: center; justify-content: space-between; padding: 13px 12px 8px 16px; font-size: 13px; }
+.org-sidebar > header { display: flex; align-items: center; justify-content: space-between; gap: 6px; margin: 12px 10px 0; padding: 0 2px 12px 7px; border-bottom: 1px solid var(--border); }
+.org-sidebar-title { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.org-sidebar-title strong { overflow: hidden; font-size: 13px; text-overflow: ellipsis; white-space: nowrap; }
+.org-sidebar-title small { color: var(--muted); font-size: 10px; }
+.org-app .org-sidebar > header .org-sidebar-action { width: 24px; min-height: 24px; padding: 0; border-color: var(--border-strong); opacity: 1; font-size: 14px; line-height: 1; }
 .org-sidebar-heading-actions { display: flex; align-items: center; gap: 5px; }
 .org-app .org-tree-add, .org-app .org-tree-more { min-height: 24px; width: 24px; padding: 0; border-color: transparent; line-height: 1; opacity: 0; transition: opacity 100ms ease; }
 .org-app .org-tree-add { font-size: 18px; }
 .org-app .org-tree-more { font-size: 20px; display: inline-flex; align-items: center; justify-content: center; }
 .org-sidebar > header:hover .org-tree-add, .org-project:hover > .org-project-actions > button, .org-channel-heading:hover .org-channel-actions > button,
 .org-topic-row:hover > .org-tree-more, .org-tree-add:focus-visible, .org-tree-more:focus-visible { opacity: 1; }
-.org-tree { overflow-y: auto; flex: 1; padding: 0 8px 16px; }
-.org-project { position: relative; }
-.org-project > summary { list-style: none; font-weight: 600; padding: 8px 58px 8px 24px; font-size: 14px; cursor: pointer; border-radius: var(--radius-control); overflow-wrap: anywhere; }
+.org-tree { overflow-y: auto; flex: 1; padding: 0 10px 16px; }
+.org-project { position: relative; margin-top: 10px; }
+/* A project is a section heading, like the groups in People: a dot in the project's tone, filled while open. */
+.org-project > summary { list-style: none; position: relative; min-height: 26px; padding: 5px 58px 5px 22px; color: var(--muted);
+  font: 500 11px/16px var(--font-mono); letter-spacing: .07em; text-transform: uppercase; cursor: pointer; border-radius: var(--radius-control); overflow-wrap: anywhere; }
+.org-project > summary:hover { color: var(--foreground); }
 .org-project > summary::-webkit-details-marker { display: none; }
-.org-project > summary::before { content: ">"; position: absolute; left: 8px; color: var(--project-tone); font: 700 14px var(--font-mono); }
-.org-project[open] > summary::before { content: "v"; }
+.org-project > summary::before { content: ""; position: absolute; left: 9px; top: 9px; width: 8px; height: 8px; box-sizing: border-box; border-radius: 50%; background: var(--project-tone); }
+.org-project:not([open]) > summary::before { background: transparent; border: 1.5px solid var(--project-tone); }
+.org-project > summary .org-private-mark, .org-project > summary .org-inline-spend { font-family: var(--font-sans); letter-spacing: normal; text-transform: none; }
+/* The guide line runs from the project's dot down along its channels and topics. */
+.org-project > .org-channel, .org-project > .org-tree-empty { margin-left: 12.5px; border-left: 1px solid color-mix(in srgb, var(--project-tone) 35%, transparent); }
+.org-project > .org-tree-empty { padding-left: 8px; }
+.org-tree .org-tree-empty { margin-top: 0; margin-bottom: 0; padding-top: 4px; padding-bottom: 4px; }
 .org-project-tone-0 { --project-tone: var(--blue); }
 .org-project-tone-1 { --project-tone: var(--teal); }
 .org-project-tone-2 { --project-tone: var(--amber); }
 .org-project-tone-3 { --project-tone: var(--red); }
 .org-project-tone-4 { --project-tone: #9b7ee8; }
 .org-project-tone-5 { --project-tone: #e57ea5; }
-.org-project-actions { position: absolute; display: flex; top: 4px; right: 4px; }
+.org-project-actions { position: absolute; display: flex; top: 1px; right: 4px; }
 .org-private-mark { margin-left: 6px; color: var(--muted); font-size: 10px; font-weight: 400; white-space: nowrap; }
 /* Seen only through an organization role: a second line under the name, so the name keeps the row's width. */
 .org-project > summary { flex-wrap: wrap; }
 .org-project > summary .org-admin-access { order: 3; flex-basis: 100%; margin-left: 0; line-height: 1.3; }
-.org-channel { margin-left: 8px; }
-.org-channel-heading { display: flex; align-items: center; min-height: 32px; padding: 3px 4px 3px 8px; color: var(--org-tree-tone); font-size: 13px; }
+/* Rows start at the guide line with a square left edge, as in People. */
+.org-channel-heading { display: flex; align-items: center; min-height: 26px; padding: 0 2px 0 4px; border-radius: 0 var(--radius-control) var(--radius-control) 0; color: var(--org-tree-tone); font-size: 12px; }
 .org-channel-actions { display: flex; flex: none; }
-.org-app .org-channel-name { flex: 1; min-width: 0; min-height: 26px; padding: 2px 4px; overflow: hidden; border: none; text-align: left; text-overflow: ellipsis; white-space: nowrap; color: inherit; }
+.org-app .org-channel-name { flex: 1; min-width: 0; min-height: 24px; padding: 2px 4px; overflow: hidden; border: none; text-align: left; text-overflow: ellipsis; white-space: nowrap; color: inherit; }
 .org-app .org-channel-name:hover { background: transparent; }
-.org-project > summary:hover, .org-channel-heading:hover { background: var(--accent-dim); }
+.org-project > summary:hover { background: var(--accent-dim); }
+.org-channel-heading:hover { background: var(--surface-2); }
 .org-tree-tone-0 { --org-tree-tone: var(--blue); }
 .org-tree-tone-1 { --org-tree-tone: var(--teal); }
 .org-tree-tone-2 { --org-tree-tone: var(--amber); }
 .org-tree-tone-3 { --org-tree-tone: var(--red); }
-.org-tree .org-topic { display: flex; align-items: center; width: 100%; text-align: left; border: none; padding: 5px 8px 5px 28px; gap: 0; }
-.org-tree .org-topic[aria-current="page"] { background: var(--surface-raised); }
+.org-tree .org-topic { display: flex; align-items: center; width: 100%; min-height: 26px; text-align: left; border: none; padding: 3px 7px 3px 21px; gap: 0; border-radius: 0 var(--radius-control) var(--radius-control) 0; font-size: 12px; }
+/* The open topic: the People selection tint, and its stretch of the guide line brightens in the project tone. */
+.org-tree .org-topic[aria-current="page"] { background: var(--accent-dim); box-shadow: -1px 0 0 var(--project-tone), inset 1px 0 0 var(--project-tone); }
+.org-tree .org-topic .org-unread { background: var(--org-tree-tone); color: var(--background); font-weight: 600; }
 .org-topic-row { display: flex; align-items: center; position: relative; }
 .org-topic-row > .org-topic { flex: 1; min-width: 0; }
 .org-topic-row > .org-tree-more { flex: none; }
@@ -120,23 +135,28 @@
 .org-project-members h3 { margin: 0 0 10px; }
 .org-project-members form { display: grid; grid-template-columns: minmax(0, 1fr) 130px auto; align-items: end; gap: 8px; }
 @media (hover: none) { .org-app .org-tree-add, .org-app .org-tree-more { opacity: 1; } }
-.org-sidebar > footer { display: flex; flex-direction: column; padding: 8px; gap: 5px; border-top: 1px solid var(--border); }
+.org-sidebar > footer { display: flex; flex-direction: column; padding: 6px 10px 8px; gap: 5px; border-top: 1px solid var(--border); }
 .org-sidebar > footer button { text-align: left; }
 .org-sidebar > footer a { padding: 4px 10px; color: var(--muted); font-size: 11px; }
 .org-account-menu { position: relative; }
-.org-account-menu > summary { display: flex; justify-content: space-between; padding: 9px 10px; border-radius: var(--radius-control); font-size: 14px; cursor: pointer; list-style: none; }
+.org-account-menu > summary { display: flex; align-items: center; justify-content: space-between; gap: 7px; min-height: 28px; padding: 5px 7px; border-radius: var(--radius-control); font-size: 12px; cursor: pointer; list-style: none; }
+.org-account-menu > summary > span:last-child { color: var(--muted); font-size: 11px; }
 .org-account-menu > summary:hover, .org-account-menu[open] > summary { background: var(--surface-raised); }
-.org-account-menu > summary > span:first-child { min-width: 0; overflow-wrap: anywhere; }
-.org-account-options { position: absolute; bottom: calc(100% + 7px); left: 0; width: 280px; max-width: 82vw; overflow: hidden; border: 1px solid var(--border-strong); border-radius: var(--radius-card); background: var(--surface-raised); box-shadow: var(--shadow-overlay); z-index: 30; }
-.org-account-options > header { display: flex; flex-direction: column; gap: 2px; padding: 14px 15px 12px; border-bottom: 1px solid var(--border); }
-.org-account-options > header strong { font-size: 14px; }
-.org-account-options > header small { color: var(--muted); overflow-wrap: anywhere; }
-.org-account-options section { padding: 6px; border-top: 1px solid var(--border); }
-.org-account-options section > small, .org-account-options .org-org-selector > span { display: block; padding: 4px 8px; color: var(--muted); font: 600 10px var(--font-mono); letter-spacing: .07em; text-transform: uppercase; }
-.org-account-options button { display: block; width: 100%; min-height: 34px; padding: 6px 9px; border-color: transparent; text-align: left; }
-.org-account-options .org-org-selector { display: block; width: 100%; padding: 8px 10px 10px; }
-.org-account-options footer { padding: 9px 14px 11px; border-top: 1px solid var(--border); }
-.org-account-options footer a { padding: 0; font-size: 11px; }
+.org-account-menu > summary > span:first-child { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.org-account-options { position: absolute; bottom: calc(100% + 7px); left: 0; width: 250px; max-width: 82vw; overflow: hidden; border: 1px solid var(--border-strong); border-radius: var(--radius-card); background: var(--surface-raised); box-shadow: var(--shadow-overlay); z-index: 30; }
+.org-account-options { padding: 5px; }
+.org-account-options > header { display: flex; flex-direction: column; gap: 1px; padding: 2px 7px 4px; font-size: 12px; }
+.org-account-options > header strong { font-weight: 500; }
+.org-account-options > header small { color: var(--muted); font-size: 11px; overflow-wrap: anywhere; }
+.org-account-options section { margin: 4px -5px 0; padding: 4px 5px 0; border-top: 1px solid var(--border); }
+.org-account-options button { display: flex; align-items: center; gap: 7px; width: 100%; min-height: 22px; padding: 2px 7px; border-color: transparent; border-radius: 8px; text-align: left; font-size: 12px; }
+.org-account-options button kbd { margin-left: auto; padding: 0 4px; border: 1px solid var(--border-strong); border-radius: 4px; color: var(--muted); font: 10px/14px var(--font-mono); }
+.org-account-mark { width: 14px; flex: none; color: var(--muted); text-align: center; }
+.org-account-options .org-org-selector { display: block; width: 100%; padding: 4px 2px; border-top: 1px solid var(--border); margin-top: 0; }
+.org-account-options .org-org-selector select { width: 100%; min-height: 24px; font-size: 12px; }
+.org-account-signout { display: flex; align-items: center; }
+.org-account-signout > button { flex: 1; }
+.org-account-signout > a { flex: none; padding: 0 7px; color: var(--muted); font-size: 11px; white-space: nowrap; }
 .org-message-usage { font-size: 11px; color: var(--muted); margin-top: 8px; }
 .org-message-usage summary { cursor: pointer; }
 .org-message-usage p { font-size: 12px; }
@@ -214,7 +234,6 @@
 .org-offline { color: var(--amber); }
 .org-transcript { min-height: 0; flex: 1; overflow: auto; padding: 12px max(16px, calc((100% - 900px) / 2)); overscroll-behavior: contain; }
 .org-message { margin: 0 0 10px; padding: 7px 10px; overflow-wrap: anywhere; }
-.org-message-own { background: var(--surface); border-radius: var(--radius-card); }
 .org-message-linked { border-radius: var(--radius-card); box-shadow: inset 3px 0 0 var(--teal); animation: org-message-linked 2.5s ease-out; }
 .org-message-linked:focus { outline: none; }
 .org-message-linked:focus-visible { outline: 2px solid var(--teal); outline-offset: 2px; }
@@ -317,15 +336,35 @@ a.org-reference:hover, a.org-reference:focus-visible { text-decoration: underlin
 .org-presence-dot, .org-presence-row i { width: 7px; height: 7px; border-radius: 50%; background: var(--teal); }
 .org-presence { width: 230px; flex: none; overflow-y: auto; padding: 12px 10px; border-left: 1px solid var(--border); background: var(--surface); }
 .org-presence > header { display: flex; align-items: center; justify-content: space-between; padding: 0 2px 12px 7px; border-bottom: 1px solid var(--border); }
-.org-presence > header div, .org-presence-row > span:nth-child(2) { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.org-presence > header div { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
 .org-presence small { color: var(--muted); font-size: 10px; }
 .org-presence h2 { margin: 16px 7px 6px; color: var(--muted); font: 600 10px var(--font-mono); letter-spacing: .07em; text-transform: uppercase; }
 .org-presence-row { display: flex; align-items: center; gap: 9px; padding: 7px; border-radius: var(--radius-control); font-size: 12px; }
 .org-presence-row:hover { background: var(--surface-2); }
-.org-presence-row > span:nth-child(2) { flex: 1; }
-.org-presence-avatar { display: grid; place-items: center; width: 28px; height: 28px; flex: none; border-radius: 50%; color: var(--blue); background: var(--accent-dim); font-weight: 650; }
-.org-bot-avatar { color: var(--teal); }
-.org-person-bot { margin-left: 24px; font-size: 12px; }
+/* Online people, bots and offline people: a dot in the group's tone and a guide line along its rows, as for projects. */
+.org-presence-online { --presence-tone: var(--teal); }
+.org-presence-bots { --presence-tone: var(--blue); }
+.org-presence-offline { --presence-tone: var(--muted); }
+.org-presence .org-presence-group > h2 { display: flex; align-items: center; gap: 8px; margin: 14px 0 4px; }
+.org-presence-group > h2::before { content: ""; width: 8px; height: 8px; margin-left: 3px; flex: none; border-radius: 50%; background: var(--presence-tone); }
+.org-presence-offline > h2::before { opacity: .5; }
+.org-presence .org-presence-group > .org-presence-row { margin-left: 6.5px; padding: 3px 7px 3px 8px; border-left: 1px solid color-mix(in srgb, var(--presence-tone) 35%, transparent); border-radius: 0 var(--radius-control) var(--radius-control) 0; }
+.org-presence-offline > .org-presence-row:not(.org-presence-has-unread) > strong, .org-presence .org-bot-offline > strong { color: var(--muted); }
+.org-presence-group > .org-presence-row { position: relative; }
+/* A person's name button covers the whole row, so the unread count opens the conversation too. */
+.org-presence .org-presence-message::after { content: ""; position: absolute; inset: 0; }
+/* A bot row: the name, its owner's first name, then the status; details on hover or focus, below the row. */
+.org-presence .org-bot-row > strong { flex: 0 1 auto; }
+.org-bot-owner { flex: 1; min-width: 0; margin-left: -3px; overflow: hidden; color: var(--muted); text-overflow: ellipsis; white-space: nowrap; }
+.org-bot-hover { display: none; position: absolute; top: 100%; left: 4px; right: 0; z-index: 5; flex-direction: column; gap: 2px; padding: 8px 10px;
+  border: 1px solid var(--border-strong); border-radius: var(--radius-control); background: var(--surface-raised); box-shadow: var(--shadow-overlay);
+  color: var(--muted); font-size: 12px; line-height: 1.4; white-space: normal; pointer-events: none; }
+.org-bot-hover-title { color: var(--foreground); }
+.org-bot-hover-title strong { font-weight: 600; }
+.org-bot-hover-active { color: var(--amber); }
+.org-bot-row:hover > .org-bot-hover, .org-bot-row:focus-within > .org-bot-hover { display: flex; }
+/* The group says whether someone is online; the dot stays for assistive technology and shows only a working bot. */
+.org-presence-group .org-presence-row > i:not(.org-bot-thinking) { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
 .org-presence-row i[aria-label="offline"] { background: var(--muted); opacity: .35; }
 .org-presence-row i { flex: none; }
 .org-knowledge { height: calc(100% - 42px); min-height: 0; display: flex; flex-direction: column; }
@@ -394,8 +433,15 @@ a.org-reference:hover, a.org-reference:focus-visible { text-decoration: underlin
 .org-inline-spend[data-visible=true] { visibility:visible; }
 .org-tree-label { flex:1; }
 .org-mention-count { margin-left:5px; font-weight:700; }
-.org-message-group { margin:8px 0; }
-.org-message-group > .org-message { margin:0; }
+/* A run of messages from one speaker, styled like a People group: a dot in the speaker's tone beside the name,
+   then a guide line along the messages. People are green, bots and models blue, as in People. */
+.org-message-group { --speaker-tone: var(--teal); position: relative; margin: 10px 0; }
+.org-speaker-bot, .org-speaker-assistant { --speaker-tone: var(--blue); }
+.org-message-group::before { content: ""; position: absolute; left: 6.5px; top: 24px; bottom: 4px; width: 1px; background: color-mix(in srgb, var(--speaker-tone) 35%, transparent); }
+.org-message-group > .org-message { margin: 0; padding: 2px 10px 4px 20px; border-radius: 0 var(--radius-card) var(--radius-card) 0; }
+.org-message-group > .org-message:first-child > header { margin-left: -17px; gap: 8px; font-size: 12px; }
+.org-message-group > .org-message:first-child > header::before { content: ""; width: 8px; height: 8px; flex: none; align-self: center; border-radius: 50%; background: var(--speaker-tone); }
+.org-message-group > .org-message:first-child > header strong { font-weight: 600; }
 .org-message-group .org-message-continuation { padding-top:0; }
 .org-message-continuation > header { height:0; position:relative; margin:0; }
 .org-message-continuation > header > time { position:absolute; right:0; top:3px; opacity:0; }
@@ -426,11 +472,10 @@ a.org-reference:hover, a.org-reference:focus-visible { text-decoration: underlin
 .org-model-run.org-run-compact { border: 0; background: transparent; }
 .org-run-compact[data-status="failed"] > summary [role="status"] { color: var(--red); }
 .org-presence .org-presence-row { min-height: 26px; padding: 3px 0; gap: 7px; }
-.org-presence-row > strong { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; }
-.org-presence .org-presence-avatar { width: 20px; height: 20px; font-size: 10px; }
+.org-presence-row > strong { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; font-weight: 400; }
 .org-presence-row i.org-bot-thinking { animation: org-bot-pulse 1.2s ease-in-out infinite; background: var(--amber); }
 .org-presence .org-bot-approval-indicator { flex: none; width: 18px; height: 18px; padding: 0; border: 0; border-radius: 50%; color: var(--amber); font-weight: 700; background: transparent; }
-.org-presence .org-bot-review-name { width: 100%; text-align: left; border: 0; padding: 0; background: transparent; color: inherit; font: inherit; font-weight: inherit; }
+.org-presence .org-bot-review-name { width: 100%; min-height: 0; text-align: left; border: 0; padding: 0; background: transparent; color: inherit; font: inherit; font-weight: inherit; }
 .org-bot-review .org-approval-request { padding: 16px 0; }
 .org-bot-review .org-approval-request + .org-approval-request { border-top: 1px solid var(--border); }
 .org-approval-request h3, .org-approval-request h4 { margin: 0 0 6px; font-size: 14px; font-weight: 500; }
@@ -577,12 +622,10 @@ a.org-reference:hover, a.org-reference:focus-visible { text-decoration: underlin
 @media (max-width: 1000px) {
   .org-sidebar { width: 235px; }
   .org-presence { position: fixed; inset: 44px 0 0 auto; z-index: 22; width: min(280px, 88vw); box-shadow: var(--shadow-overlay); }
-  .org-appbar .org-wordmark > span { max-width: 120px; }
   .org-org-selector { width: 150px; }
   .org-composer-controls > span { font-size: 10px; }
 }
 @media (max-width: 700px) {
-  .org-appbar .org-wordmark > span { display: none; }
   .org-appbar { gap: 6px; }
   .org-sidebar { position: fixed; inset: 44px auto 0 0; width: min(290px, 85vw); z-index: 20; transform: translateX(-100%); transition: transform var(--motion) var(--ease-out); }
   .org-sidebar-open { transform: translateX(0); }
@@ -605,7 +648,7 @@ a.org-reference:hover, a.org-reference:focus-visible { text-decoration: underlin
 @media (max-width: 540px) {
   .org-composer-controls { flex-wrap: wrap; }
   .org-composer-model { flex-wrap:wrap; }
-  .org-appbar .org-wordmark { gap: 0; }
+  .org-appbar .org-brand > span:last-child { display: none; }
   .org-org-selector { width: 95px; }
   .org-appbar select, .org-appbar button { font-size: 12px; }
   .org-appbar { gap: 5px; padding: 6px; }

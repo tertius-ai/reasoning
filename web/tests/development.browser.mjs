@@ -64,7 +64,7 @@ test('local hot-reload workflow signs in, streams a simulated beta answer, and c
     await page.getByRole('button', { name: /Simulated research/ }).first().click();
     await page.getByPlaceholder('Message development/fast…', { exact: true }).waitFor();
     assert.equal(Math.round((await page.locator('.org-appbar').boundingBox()).height), 44);
-    assert.equal(await page.locator('.org-wordmark').innerText(), 'Local development');
+    assert.equal(await page.locator('.org-organization-name').innerText(), 'Local development');
     assert.match(await page.getByRole('navigation', { name: 'Current topic' }).innerText(), /#playground.*Simulated research/s);
     assert.equal(await page.locator('.org-topic-header').count(), 0);
     assert.equal(await page.getByRole('button', { name: /Pin.*research context/i }).count(), 0);
@@ -264,7 +264,7 @@ test('local hot-reload workflow signs in, streams a simulated beta answer, and c
     await pairing.waitFor({ state: 'hidden' });
     const bot = await (await fetch(origin + '/api/bot/identity', { headers: { Authorization: 'Bearer ' + botToken } })).json();
     assert.equal(bot.public_access, true); assert.ok(bot.topic_ids.includes(botBetaTopic.id));
-    await page.locator(`[data-person-id="${human.id}"] [data-bot-id="${bot.id}"]`).waitFor();
+    await page.locator(`[data-bot-id="${bot.id}"][data-owner-id="${human.id}"]`).waitFor();
     await page.getByRole('button', { name: /Simulated research/ }).first().click();
     await composer.fill('@Fixture');
     await page.getByRole('option', { name: 'Fixture Codex', exact: true }).waitFor({ timeout: 15000 });

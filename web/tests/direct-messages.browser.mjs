@@ -87,7 +87,9 @@ test("a member messages a colleague from People, who finds, reads and replies, t
       "conversation partners are listed first");
     // The People toggle carries the count, so it stays visible while the panel is closed.
     await visible(member.getByRole("button", { name: "Show online people and bots, 1 unread direct messages", exact: true }));
-    await ownerRow.getByRole("button", { name: "Owner", exact: true }).click();
+    // The whole row opens the conversation, including the unread count at its right edge.
+    const rowBox = await ownerRow.boundingBox(), countBox = await ownerRow.getByLabel("1 unread direct messages").boundingBox();
+    await ownerRow.click({ position: { x: countBox.x + countBox.width / 2 - rowBox.x, y: countBox.y + countBox.height / 2 - rowBox.y } });
     const reply = member.getByRole("region", { name: "Direct messages with Owner" });
     await visible(reply.locator(".org-message").filter({ hasText: "section 3" }));
     await ownerRow.getByLabel("1 unread direct messages").waitFor({ state: "detached", timeout: 15000 });

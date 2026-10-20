@@ -48,7 +48,7 @@ test("phone toolbar retains every action and scoped navigation survives refresh"
     await second().click();
     const project = () => page.locator("details.org-project");
     const readout = page.locator(".org-inline-spend[data-visible=true]");
-    await page.locator(".org-wordmark").hover();
+    await page.locator(".org-brand").hover();
     assert.equal(await readout.count(), 0);
     assert.equal(await second().locator(".org-mention-count").innerText(), "@");
     assert.ok(await second().evaluate(element => parseFloat(getComputedStyle(element).paddingLeft) > 20));
@@ -60,7 +60,7 @@ test("phone toolbar retains every action and scoped navigation survives refresh"
       assert.ok(await row.locator(".org-inline-spend[data-visible=true]").isVisible(), name);
       assert.deepEqual(await second().boundingBox(), before, "spending must not shift rows");
     }
-    await page.locator(".org-wordmark").hover();
+    await page.locator(".org-brand").hover();
     assert.equal(await readout.count(), 0);
     await second().focus();
     await page.keyboard.press("Tab"); await page.keyboard.press("Shift+Tab");
@@ -160,7 +160,7 @@ test("phone toolbar retains every action and scoped navigation survives refresh"
     assert.equal(await page.getByRole("button", { name: /^#channel/ }).getAttribute("aria-expanded"), "true");
     assert.match(await page.locator(".org-topic-menu h1").innerText(), /First/);
     await page.getByLabel("Account menu").click(); await page.getByLabel("Organization", { exact: true }).selectOption("other");
-    await page.waitForFunction(() => document.querySelector(".org-wordmark")?.textContent === "Other");
+    await page.waitForFunction(() => document.querySelector(".org-organization-name")?.textContent === "Other");
     assert.notEqual(await project().getAttribute("open"), null);
     await page.getByLabel("Account menu").click(); await page.getByRole("button", { name: "Model capabilities", exact: true }).click();
     const capabilities = page.getByRole("region", { name: "Model capabilities", exact: true });

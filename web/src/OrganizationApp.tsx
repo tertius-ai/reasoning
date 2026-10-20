@@ -12,8 +12,9 @@ import { BotConversation } from "./BotConversation";
 import { withBotModels } from "./botModels";
 import { availableEfforts } from "./ReasoningEffort";
 import { editMentions, encodeMentions, MentionBinding } from "./composerMentions";
+import { Brand } from "./Brand";
 import { ComputeConversation } from "./ComputeConversation";
-import { DirectConversation, DirectMessageMarks, DirectMessagePicker, NewDirectMessageButton, directPath, directUnreadTotal, peopleInbox } from "./DirectMessages";
+import { DirectConversation, DirectMessageMarks, DirectMessagePicker, NewDirectMessageButton, directPath, directUnread, directUnreadTotal, peopleInbox } from "./DirectMessages";
 import { KnowledgeLinks, KnowledgeView } from "./KnowledgeLinks";
 import { LazyView } from "./LazyView";
 import { WorkflowConversation } from "./WorkflowConversation";
@@ -259,25 +260,26 @@ export function AccountMenu({ user, organization, organizations, canCreateOrgani
       <span>{user.name}</span><span aria-hidden="true">⌃</span></summary>
     <div className="org-account-options">
       <header><strong>{user.name}</strong><small>{user.email}</small></header>
-      <label className="org-org-selector"><span>Organization</span><select aria-label="Organization" value={organization?.id ?? ""}
+      <label className="org-org-selector"><span className="org-visually-hidden">Organization</span><select aria-label="Organization" value={organization?.id ?? ""}
         onChange={(event) => act(() => onSwitch(event.target.value))}>
         {!organization && <option value="">Choose organization</option>}
         {organizations.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
       </select></label>
-      <section><small>Organization</small>
-        {organization && <button onClick={() => { if (onBots) act(onBots); }}>My bots</button>}
-        {organization && <button onClick={() => act(onOrganization)}>Information</button>}
-        {organization && ["owner", "admin"].includes(organization.role) && <button onClick={() => act(onAdmin)}>Administration</button>}
-        {canCreateOrganization && <button onClick={() => act(onCreate)}>New organization</button>}
+      {/* Sections are separated by rules; each row leads with a mark, as topics lead with their kind. */}
+      <section aria-label="Organization options">
+        {organization && <button onClick={() => { if (onBots) act(onBots); }}><span className="org-account-mark" aria-hidden="true">◆</span>My bots</button>}
+        {organization && <button onClick={() => act(onOrganization)}><span className="org-account-mark" aria-hidden="true">i</span>Information</button>}
+        {organization && ["owner", "admin"].includes(organization.role) && <button onClick={() => act(onAdmin)}><span className="org-account-mark" aria-hidden="true">⚙{"\uFE0E"}</span>Administration</button>}
+        {canCreateOrganization && <button onClick={() => act(onCreate)}><span className="org-account-mark" aria-hidden="true">+</span>New organization</button>}
       </section>
-      <section><small>Models and usage</small>
-        <button disabled={!organization} onClick={() => act(onModels)}>Model capabilities</button>
-        <button disabled={!organization} onClick={() => act(onUsage)}>Usage and energy</button>
+      <section aria-label="Model and usage options">
+        <button disabled={!organization} onClick={() => act(onModels)}><span className="org-account-mark" aria-hidden="true">≡</span>Model capabilities</button>
+        <button disabled={!organization} onClick={() => act(onUsage)}><span className="org-account-mark" aria-hidden="true">∿</span>Usage and energy</button>
       </section>
-      <section><small>Account</small><button onClick={() => act(onAccount)}>User information</button>
-        {onShortcuts && <button onClick={() => act(onShortcuts)}>Keyboard shortcuts <kbd>?</kbd></button>}
-        <button onClick={() => act(onSignOut)}>Sign out</button></section>
-      <footer><a href="/licenses/Reasoning-NOTICE.txt">License notices</a></footer>
+      <section aria-label="Account options"><button onClick={() => act(onAccount)}><span className="org-account-mark" aria-hidden="true">@</span>User information</button>
+        {onShortcuts && <button onClick={() => act(onShortcuts)}><span className="org-account-mark" aria-hidden="true">⌘</span>Keyboard shortcuts <kbd>?</kbd></button>}
+        <div className="org-account-signout"><button onClick={() => act(onSignOut)}><span className="org-account-mark" aria-hidden="true">→</span>Sign out</button>
+          <a href="/licenses/Reasoning-NOTICE.txt" title="License notices">§ Licenses</a></div></section>
     </div>
   </details>;
 }
@@ -610,26 +612,46 @@ function PresenceSidebar({ organizationId, open, onClose, onAuthLost, userId, on
     conversation => ({ id: conversation.other_user.id, name: conversation.other_user.name, email: "", role: "member" as const,
       online: false, last_seen_at: null, bots: [] })) : [];
   const connected = (presence?.humans.filter(person => person.online).length ?? 0) + (presence?.bots.filter(bot => bot.online).length ?? 0);
+  // Online people, then bots, then offline people; within each group conversation partners keep the inbox order.
+  const personRow = (person: (typeof people)[number]) => {
+    const unread = person.conversation ? directUnread(person.conversation) : 0;
+    return <div className={"org-presence-row" + (unread ? " org-presence-has-unread" : "")} key={person.id} data-person-id={person.id}>
+      <strong title={person.role}>{onMessage && person.id !== userId && (canStartDirect || person.conversation) ? <button type="button" className="org-presence-message"
+        aria-current={person.conversation && person.conversation.id === selectedConversation ? "page" : undefined}
+        title={person.conversation ? `Direct messages with ${person.name}` : `Send ${person.name} a direct message`} onClick={() => onMessage(person.id)}>{person.name}</button> : person.name}</strong>
+      {person.conversation && <DirectMessageMarks conversation={person.conversation} />}<i aria-label={person.online ? "online" : "offline"} /></div>;
+  };
+  // A bot shows its owner's first name; the full owner, engine, status and models appear on hover or keyboard focus.
+  const botRow = (bot: Presence["bots"][number], owner: string) => {
+    const pending = approvals.rows.filter(row => row.bot_id === bot.id).length;
+    const activity = bot.activity?.replaceAll("_", " ");
+    const status = bot.online ? "Online · " + (activity ?? "idle")
+      : "Offline" + (bot.last_seen_at ? " · last seen " + new Date(bot.last_seen_at * 1000).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" }) : "");
+    return <div className={"org-presence-row org-bot-row" + (bot.online ? "" : " org-bot-offline")} key={bot.id} data-bot-id={bot.id} data-owner-id={bot.owner_user_id}
+      tabIndex={pending ? undefined : 0} aria-describedby={"org-bot-hover-" + bot.id}>
+      <strong>{pending ? <button type="button" className="org-bot-review-name" onClick={() => setReviewBot(bot)}>{bot.name}</button> : bot.name}</strong>
+      <span className="org-bot-owner">· {owner.split(/\s+/)[0]}</span>
+      {pending ? <button type="button" className="org-bot-approval-indicator" aria-label={`Review ${pending} pending requests from ${bot.name}`}
+        title="Approval needed" onClick={() => setReviewBot(bot)}>!</button> : <i className={bot.activity ? "org-bot-thinking" : ""}
+        aria-label={activity ?? (bot.online ? "online" : "offline")} />}
+      <div className="org-bot-hover" role="tooltip" id={"org-bot-hover-" + bot.id}>
+        <span className="org-bot-hover-title"><strong>{bot.name}</strong> · {bot.engine === "claude" ? "Claude Code" : bot.engine === "codex" ? "Codex" : "Bot"}</span>
+        <span>{owner}’s bot</span><span className={activity ? "org-bot-hover-active" : undefined}>{status}</span>
+        {!!bot.models?.length && <span>{bot.models.join(", ")}</span>}{bot.developer && <span>Developer tools</span>}</div></div>;
+  };
+  const onlinePeople = people.filter(person => person.online);
+  const groups = [
+    { key: "online", label: `Online · ${onlinePeople.length}`, rows: onlinePeople.map(personRow) },
+    { key: "bots", label: "Bots", rows: people.flatMap(person => person.bots.map(bot => botRow(bot, person.name))) },
+    { key: "offline", label: "Offline", rows: people.filter(person => !person.online).map(personRow) },
+  ];
   return <aside className="org-presence" aria-label="Online people and bots"><header><div><strong>People</strong><small>{connected} connected</small></div>
     <span className="org-presence-actions">{onMessage && canStartDirect && <NewDirectMessageButton open={picking} onToggle={() => setPicking(value => !value)} />}
       <button aria-label="Collapse online sidebar" onClick={onClose}>×</button></span></header>
     {picking && onMessage && userId && <DirectMessagePicker members={members} userId={userId} onStart={onMessage} onClose={() => setPicking(false)} />}
     {!presence && <p role="status">Checking presence…</p>}
-    {people.map(person => <section key={person.id} data-person-id={person.id}>
-      <div className="org-presence-row"><span className="org-presence-avatar">{person.name.slice(0, 1).toUpperCase()}</span><strong title={person.role}>{onMessage && person.id !== userId && (canStartDirect || person.conversation) ? <button type="button" className="org-presence-message"
-        aria-current={person.conversation && person.conversation.id === selectedConversation ? "page" : undefined}
-        title={person.conversation ? `Direct messages with ${person.name}` : `Send ${person.name} a direct message`} onClick={() => onMessage(person.id)}>{person.name}</button> : person.name}</strong>
-        {person.conversation && <DirectMessageMarks conversation={person.conversation} />}<i aria-label={person.online ? "online" : "offline"} /></div>
-      {person.bots.map(bot => <div className="org-presence-row org-person-bot" key={bot.id} data-bot-id={bot.id}>
-        <span className="org-presence-avatar org-bot-avatar" aria-label={bot.developer ? "Developer bot" : "Bot"}>{bot.developer ? "⬡" : "◆"}</span><strong title={[bot.engine === "claude" ? "Claude Code" : bot.engine === "codex" ? "Codex" : "Bot", ...(bot.models ?? []), bot.online ? "online" : "offline", bot.developer ? "developer tools" : ""].filter(Boolean).join(" · ")}>{approvals.rows.some(row => row.bot_id === bot.id)
-          ? <button type="button" className="org-bot-review-name" onClick={() => setReviewBot(bot)}>{bot.name}</button> : bot.name}</strong>
-        {approvals.rows.some(row => row.bot_id === bot.id) ? <button type="button" className="org-bot-approval-indicator"
-          aria-label={`Review ${approvals.rows.filter(row => row.bot_id === bot.id).length} pending requests from ${bot.name}`}
-          title="Approval needed" onClick={() => setReviewBot(bot)}>!</button> : <i className={bot.activity ? "org-bot-thinking" : ""}
-          title={bot.activity?.replaceAll("_", " ")} aria-label={bot.activity?.replaceAll("_", " ") ?? (bot.online ? "online" : "offline")} />
-        }
-      </div>)}
-    </section>)}
+    {groups.map(group => group.rows.length > 0 && <section key={group.key} className={"org-presence-group org-presence-" + group.key} aria-labelledby={"org-presence-" + group.key}>
+      <h2 id={"org-presence-" + group.key}>{group.label}</h2>{group.rows}</section>)}
     {presence && !people.length && <p className="org-help">No active connections.</p>}
     {approvals.error && <p className="org-error" role="alert">Approvals: {approvals.error}</p>}
     {reviewBot && <BotApprovalDialog key={organizationId + reviewBot.id} organizationId={organizationId}
@@ -1055,7 +1077,7 @@ function Conversation({ organizationId, topic, members, user, canWrite, canManag
       id: "message:" + group[0].id, created_at: group[0].created_at, sequence: group[0].sequence, body: <>
       {topic.kind === "alpha" && (groupIndex === 0 || new Date(groups[groupIndex - 1][0].created_at * 1000).toDateString() !== new Date(group[0].created_at * 1000).toDateString())
         && <div className="org-message-day"><time dateTime={new Date(group[0].created_at * 1000).toISOString().slice(0, 10)}>{new Date(group[0].created_at * 1000).toLocaleDateString(undefined, { weekday: "long", month: "short", day: "numeric", year: "numeric" })}</time></div>}
-      <div className={topic.kind === "alpha" ? "org-message-group" : undefined}>{group.map((message, index) => <article className={"org-message " + (index ? "org-message-continuation " : "") + (message.author_kind !== "assistant" && message.author_id === user.id ? "org-message-own" : "") + (message.id === highlighted ? " org-message-linked" : "")}
+      <div className={"org-message-group org-speaker-" + (group[0].author_kind ?? "human")}>{group.map((message, index) => <article className={"org-message " + (index ? "org-message-continuation " : "") + (message.author_kind !== "assistant" && message.author_id === user.id ? "org-message-own" : "") + (message.id === highlighted ? " org-message-linked" : "")}
         key={message.id} id={"message-" + message.sequence} data-sequence={message.sequence} data-message-id={message.id}
         tabIndex={message.id === focus ? -1 : undefined} aria-current={message.id === highlighted ? "location" : undefined}>
         <header>{!index && <strong>{authorLabel(message, members)}</strong>}
@@ -1595,6 +1617,7 @@ export function OrganizationApp({ user, onAccount, onAuthenticated, onSignedOut,
   };
   // Shown on the People toggle, so unread direct messages are visible while the panel is closed.
   const directTotal = directUnreadTotal(directConversations);
+  const unreadTopics = hierarchy.topic_state.reduce((sum, state) => sum + (state.subscribed ? state.unread_count : 0), 0);
   const openDirect = (memberId: string) => {
     const existing = directConversations.find(item => item.other_user.id === memberId);
     if (existing) { showDirect(existing.id); return; }
@@ -1619,7 +1642,7 @@ export function OrganizationApp({ user, onAccount, onAuthenticated, onSignedOut,
     <header className="org-appbar org-topic-color"><button type="button" className="org-icon-button org-nav-toggle" aria-label="Toggle project navigation"
       title="Toggle project navigation · Ctrl/⌘B" aria-controls="org-project-navigation" aria-expanded={navOpen} onClick={() => setNavOpen(open => !open)}>
       <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2" /><path d="M9 4v16" /></svg></button>
-      <div className="org-wordmark" title={organization?.name}><img src="/reasoning.svg" alt="" /><span>{organization?.name ?? "Organizations"}</span></div>
+      <Brand />
       {knowledgeView ? <h1 className="org-workspace-title">{knowledgeView === "journal" ? "Research blog editor" : knowledgeView === "ledger" ? "Ledger" : "Bibliography"}</h1>
         : directConversation ? <h1 className="org-workspace-title">Direct messages · {directConversation.other_user.name}</h1> : organization && topic && <TopicBreadcrumb channel={channel} topic={topic}
         subscribed={hierarchy.topic_state.find((item) => item.topic_id === topic.id)?.subscribed !== false}
@@ -1663,8 +1686,14 @@ export function OrganizationApp({ user, onAccount, onAuthenticated, onSignedOut,
     <div className="org-body">
       {navOpen && <button className="org-nav-backdrop" aria-label="Close project navigation" onClick={() => setNavOpen(false)} />}
       <aside id="org-project-navigation" hidden={!navOpen} className={"org-sidebar " + (navOpen ? "org-sidebar-open" : "")}>
-        <header><strong>Projects</strong><span className="org-sidebar-heading-actions"><span role="status" className={online ? "org-connected" : "org-offline"}>{online ? "" : "Offline"}</span>
-          {canCreate && <button type="button" className="org-tree-add" aria-label="New project" title="New project" onClick={() => beginCreation("project")}>+</button>}</span></header>
+        {/* Like the People header: the organization, a summary line, then actions. */}
+        <header><div className="org-sidebar-title"><strong className="org-organization-name" title={organization?.name}>{organization?.name ?? "Organizations"}</strong>
+          {organization && <small>{[organization.role, hierarchy.projects.length + (hierarchy.projects.length === 1 ? " project" : " projects"),
+            unreadTopics ? unreadTopics + " unread" : ""].filter(Boolean).join(" · ")}</small>}</div>
+          <span className="org-sidebar-heading-actions"><span role="status" className={online ? "org-connected" : "org-offline"}>{online ? "" : "Offline"}</span>
+          {canCreate && <button type="button" className="org-tree-add org-sidebar-action" aria-label="New project" title="New project" onClick={() => beginCreation("project")}>+</button>}
+          {organization && <button type="button" className="org-sidebar-action" aria-label="Organization information" title="Organization information"
+            onClick={() => setInformation("organization")}>⋯</button>}</span></header>
         <TopicNavigation key={user.id + "/" + organizationId} hierarchy={hierarchy} organizationId={organizationId ?? undefined} userId={user.id} usage={navigationUsage} selected={direct ? null : selection?.topic ?? null} canCreate={canCreate}
           canManageOrganization={Boolean(organization && ["owner", "admin"].includes(organization.role))} onSelect={(id) => select(id)}
           onCreateChannel={(projectId) => beginCreation("channel", projectId)} onCreateTopic={(channelId) => beginCreation("topic", channelId)}
