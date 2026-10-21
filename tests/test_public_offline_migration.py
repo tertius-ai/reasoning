@@ -8,6 +8,7 @@ import hashlib
 import inspect
 import io
 import json
+import linecache
 import os
 import sqlite3
 import sys
@@ -18,7 +19,12 @@ import pytest
 from test_public_compute_worker import IMAGE
 
 from reasoning_ledger.deployment import host
-from reasoning_ledger.deployment.server_upgrade import MIGRATION_RUNNER, RETAINED_IDLE_QUERIES, STOPPED_WORKER_IDLE
+from reasoning_ledger.deployment.server_upgrade import (
+    MIGRATION_RUNNER,
+    RETAINED_IDLE_QUERIES,
+    RETAINED_STOPPED_WORKER_IDLE,
+    STOPPED_WORKER_IDLE,
+)
 from reasoning_ledger.server import backup as snapshots
 from reasoning_ledger.server import cli, maintenance
 from reasoning_ledger.server import store as store_module
@@ -816,6 +822,17 @@ def test_retained_runner_refuses_unrecognized_worker_guard_before_any_migration(
         exec(compile(MIGRATION_RUNNER, "<verified-migration-runner>", "exec"), {})
 
 
+def test_retained_runner_refuses_changed_stopped_worker_guard(tmp_path, monkeypatch):
+    path = tmp_path / "guard.py"
+    path.write_text(RETAINED_STOPPED_WORKER_IDLE.replace("a.kind!='llm'", "a.kind!='compute'"))
+    namespace = {"snapshots": snapshots, "MaintenanceError": maintenance.MaintenanceError}
+    exec(compile(path.read_text(), str(path), "exec"), namespace)
+    monkeypatch.setattr(maintenance, "_idle", namespace["_idle"])
+    monkeypatch.setattr(sys, "argv", ["-c", "--data-dir", "/unused", "migrate-offline"])
+    with pytest.raises(SystemExit, match="unrecognized offline worker guard"):
+        exec(compile(MIGRATION_RUNNER, "<verified-migration-runner>", "exec"), {})
+
+
 @pytest.mark.parametrize("name", ["inference-worker.lock", "workflow-worker.lock", "mail-worker.lock", "webhook-worker.lock"])
 def test_stopped_record_policy_never_waives_a_live_worker_lease(source, name):
     lock = source[0] / name
@@ -904,6 +921,112 @@ def test_real_migration_retains_unknown_workflow_outcome_and_billing_reservation
     with sqlite3.connect(root / "server.sqlite3") as db:
         assert {table: db.execute("SELECT * FROM " + table).fetchall() for table in rows} == rows
         assert db.execute("SELECT reserved_microusd,actual_microusd,accounting_state FROM llm_runs").fetchone() == (200, None, "uncertain")
+
+
+@pytest.mark.parametrize("status", ["succeeded", "failed", "cancelled", "outcome_unknown",
+                                  "queued", "running", "waiting_approval", "missing", "foreign_org"])
+@pytest.mark.parametrize("node_status", ["running", "outcome_unknown"])
+@pytest.mark.parametrize("stopped", [False, True])
+def test_bot_model_child_must_be_same_organization_and_terminal(monkeypatch, status, node_status, stopped):
+    with sqlite3.connect(":memory:") as db:
+        for statement in (
+            "CREATE TABLE compute_workers(revoked_at,draining)", "CREATE TABLE compute_jobs(status)",
+            "CREATE TABLE llm_runs(organization_id,id,status)", "CREATE TABLE bot_runs(organization_id,id,status)",
+            "CREATE TABLE workflow_node_attempts(organization_id,inference_run_id,bot_run_id,compute_job_id,kind,status)",
+            "CREATE TABLE invitation_mail(state)", "CREATE TABLE bot_webhook_deliveries(state)",
+        ):
+            db.execute(statement)
+        if status != "missing":
+            db.execute("INSERT INTO bot_runs VALUES(?,'child',?)",
+                       ("other" if status == "foreign_org" else "org", "failed" if status == "foreign_org" else status))
+        db.execute("INSERT INTO workflow_node_attempts VALUES('org',NULL,'child',NULL,'llm',?)", (node_status,))
+
+        @contextmanager
+        def connection(_path):
+            yield db
+
+        monkeypatch.setattr(snapshots, "_connect", connection)
+        if status in {"succeeded", "failed", "cancelled", "outcome_unknown"}:
+            maintenance._idle(Path("unused"), local_workers_stopped=stopped)
+        else:
+            with pytest.raises(maintenance.MaintenanceError, match="workflow_execution"):
+                maintenance._idle(Path("unused"), local_workers_stopped=stopped)
+
+
+@pytest.mark.parametrize("retained", [False, True])
+def test_cancelled_bot_workflow_migrates_unchanged_and_cannot_replay(organization, monkeypatch, retained):
+    from reasoning_ledger.server.bot_runtime import BotRuntime
+    from reasoning_ledger.server.bot_store import BotStore
+    from reasoning_ledger.server.store import StoreError
+    from reasoning_ledger.server.workflow_runs import WorkflowRuns
+
+    source, owner, topic, _, compute, worker = organization
+    root, _, _, _, store = source
+    user, org = owner["user_id"], owner["organization_id"]
+    compute.drain_self(worker["token"])
+    bots = BotStore(store)
+    bot = bots.create(user, org, "Fixture", [topic], ["messages:read", "messages:write"], personal=True)
+    runtime = BotRuntime(bots)
+    runtime.advertise(bot["token"], "codex", ["default"], False, False)
+    definitions = WorkflowStore(store)
+    saved = definitions.create(user, org, topic, "cancelled-bot-definition", {
+        "format": 1, "name": "Cancelled bot", "nodes": [{"id": "model_1", "kind": "llm", "depends_on": [],
+        "inputs": {}, "parameters": {"model": f"bot/{bot['id']}/default", "prompt": "Research", "max_completion_tokens": 128}}],
+    })
+    workflows = WorkflowRuns(definitions, compute, InferenceStore(store))
+    workflow = workflows.start(user, org, saved["workflow_id"], saved["version"], "cancelled-bot-run")
+    workflows.advance(workflow["id"])
+    claim = runtime.claim(bot["token"])
+    assert claim is not None
+    workflows.cancel(user, org, workflow["id"], "cancel-before-upgrade")
+    tables = ("bot_runs", "workflow_runs", "workflow_node_attempts", "workflow_run_actions", "workflow_run_events")
+    with store.transaction() as db:
+        assert db.execute("SELECT status FROM bot_runs").fetchone()[0] == "outcome_unknown"
+        before = {table: [tuple(row) for row in db.execute("SELECT * FROM " + table)] for table in tables}
+    stopped = stopped_snapshot(organization)
+    archive_before = stopped[1].read_bytes()
+    future(monkeypatch)
+    if retained:
+        namespace = {"snapshots": snapshots, "MaintenanceError": maintenance.MaintenanceError}
+        # Comments, line wrapping and future flags may change bytecode while
+        # retaining exactly the verified source guard's syntax tree.
+        retained_source = "from __future__ import annotations\n" + RETAINED_STOPPED_WORKER_IDLE.replace(
+            "    terminal =", "    # Protected target source.\n    terminal =", 1)
+        monkeypatch.setitem(linecache.cache, "<retained-guard>",
+                            (len(retained_source), None, retained_source.splitlines(True), "<retained-guard>"))
+        exec(compile(retained_source, "<retained-guard>", "exec"), namespace)
+        old_idle = namespace["_idle"]
+        with pytest.raises(maintenance.MaintenanceError, match="workflow_execution"):
+            old_idle(root, local_workers_stopped=True)
+        monkeypatch.setattr(maintenance, "_idle", old_idle)
+
+        def helper(command, arguments):
+            monkeypatch.setattr(sys, "argv", ["-c", "--data-dir", str(root), command, *arguments])
+            with redirect_stdout(io.StringIO()) as output, pytest.raises(SystemExit) as exited:
+                exec(compile(MIGRATION_RUNNER, "<verified-runner>", "exec"), {})
+            assert exited.value.code == 0 and maintenance._idle is old_idle
+            return json.loads(output.getvalue())
+
+        result = helper("migrate-offline", ["--backup", str(stopped[1]), "--key-file", str(stopped[2]),
+                        "--expected-sha256", stopped[3]["sha256"], "--source-schema", str(len(MIGRATIONS)),
+                        "--target-release", RELEASE, "--operation-id", OPERATION, "--confirm-source-stopped"])
+        assert helper("maintenance-verify", ["--operation-id", OPERATION, "--target-release", RELEASE])["prepared_state_verified"]
+    else:
+        result = run(stopped)
+        assert maintenance.verify_prepared(root, operation_id=OPERATION, target_release=RELEASE)["prepared_state_verified"]
+    assert result["phase"] == "migrated" and stopped[1].read_bytes() == archive_before
+    with sqlite3.connect(root / "server.sqlite3") as db:
+        assert {table: db.execute("SELECT * FROM " + table).fetchall() for table in tables} == before
+    migrations = maintenance.MIGRATIONS
+    monkeypatch.setattr(store_module, "MIGRATIONS", migrations)
+    with maintenance.serving(root, release=RELEASE, operation_id=OPERATION):
+        recovered = Store(root)
+        runtime = BotRuntime(BotStore(recovered))
+        assert runtime.claim(bot["token"]) is None
+        with pytest.raises(StoreError, match="lease is no longer active"):
+            runtime.progress(bot["token"], claim["id"], claim["lease"], "thinking")
+        with pytest.raises(StoreError, match="differs from the retained outcome"):
+            runtime.finish(bot["token"], claim["id"], claim["lease"], "succeeded", "late answer")
 
 
 def test_prepared_verification_needs_no_backup_key_and_never_advances_activation(source):

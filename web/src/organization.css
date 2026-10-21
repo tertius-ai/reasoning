@@ -292,7 +292,16 @@ a.org-reference:hover, a.org-reference:focus-visible { text-decoration: underlin
   background: var(--teal); color: var(--background); font: 600 10px/16px var(--font-mono); text-align: center; }
 .org-reconnecting { font-size: 11px; color: var(--amber); margin: 3px 16px; }
 .org-composer { margin: 0 max(16px, calc((100% - 900px) / 2)) 12px; border: 1px solid var(--border-strong); border-radius: var(--radius-composer); padding: 8px; position: relative; flex: none; }
-.org-composer textarea { background: transparent; border: none; resize: none; width: 100%; min-height: 24px; max-height: 240px; color: var(--foreground); padding: 0 4px; font: 14px/1.6 var(--font-sans); box-sizing: border-box; }
+.org-composer textarea { position: relative; z-index: 1; display: block; background: transparent; border: none; resize: none; width: 100%; min-height: 24px; max-height: 240px; color: var(--foreground); padding: 0 4px; font: 14px/1.6 var(--font-sans); box-sizing: border-box; }
+/* Mentions, as in Signal: tinted text; mentions of the reader in amber. */
+.org-mention { padding: 0 2px; border-radius: 4px; background: color-mix(in srgb, var(--blue) 18%, transparent); color: color-mix(in srgb, var(--blue) 75%, var(--foreground)); }
+.org-mention.org-mention-self { background: color-mix(in srgb, var(--amber) 22%, transparent); color: color-mix(in srgb, var(--amber) 80%, var(--foreground)); }
+/* The composer's mirror repeats the text invisibly behind the textarea, with identical metrics, to tint mention ranges. */
+.org-composer-input { position: relative; }
+.org-composer-mirror { position: absolute; inset: 0; z-index: 0; overflow: hidden; padding: 0 4px; box-sizing: border-box; color: transparent;
+  font: 14px/1.6 var(--font-sans); white-space: pre-wrap; overflow-wrap: break-word; pointer-events: none; }
+.org-composer-mirror .org-mention { padding: 0; border-radius: 3px; color: transparent; box-shadow: 0 0 0 2px color-mix(in srgb, var(--blue) 18%, transparent); }
+.org-composer-mirror .org-mention.org-mention-self { color: transparent; box-shadow: 0 0 0 2px color-mix(in srgb, var(--amber) 22%, transparent); }
 .org-composer textarea:focus { outline: none; }
 .org-composer:focus-within { border-color: var(--blue); }
 .org-composer-controls { display: flex; align-items: center; gap: 8px; padding-top: 5px; }
@@ -405,6 +414,13 @@ a.org-reference:hover, a.org-reference:focus-visible { text-decoration: underlin
 .org-knowledge-markdown .katex-display { overflow-x: auto; overflow-y: hidden; }
 .org-mention-menu { position: absolute; bottom: 45px; left: 12px; width: min(300px, 90%); max-height: 230px; overflow: auto; padding: 6px; border: 1px solid var(--border-strong); border-radius: var(--radius-card); background: var(--surface-raised); box-shadow: var(--shadow-overlay); z-index: 5; }
 .org-mention-menu button { display: block; width: 100%; text-align: left; border: none; }
+#org-mention-list button { display: flex; align-items: center; gap: 8px; min-height: 32px; padding: 4px 8px; }
+.org-mention-option-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* Signal-style avatars in the picker: initials on a stable per-member color. */
+.org-mention-avatar { display: grid; place-items: center; width: 22px; height: 22px; flex: none; border-radius: 50%; font-size: 10px; font-weight: 600;
+  background: color-mix(in srgb, var(--mention-tone) 26%, transparent); color: color-mix(in srgb, var(--mention-tone) 80%, var(--foreground)); }
+.org-mention-tone-0 { --mention-tone: var(--blue); } .org-mention-tone-1 { --mention-tone: var(--teal); } .org-mention-tone-2 { --mention-tone: var(--amber); }
+.org-mention-tone-3 { --mention-tone: var(--red); } .org-mention-tone-4 { --mention-tone: #9b7ee8; } .org-mention-tone-5 { --mention-tone: #e57ea5; }
 .org-mention-menu button[aria-selected="true"] { background: var(--accent-dim); }
 .org-mention-menu small { color: var(--muted); }
 .org-empty { margin: auto; padding: 30px; text-align: center; color: var(--muted); }

@@ -91,7 +91,7 @@ MIGRATION_FAILURE_REASONS = {
     "helper_timeout": "migration helper exceeded its execution deadline",
     "inflight_compute_workers": "external compute workers must be drained or fenced before migration",
     "inflight_compute_jobs": "external computation is running or has an unresolved outcome",
-    "inflight_workflow_execution": "a workflow has unresolved non-LLM execution or an unverified inference child",
+    "inflight_workflow_execution": "a workflow has unresolved non-LLM execution or an unverified model child",
 }
 
 
@@ -135,6 +135,29 @@ RETAINED_IDLE_QUERIES = (
     "SELECT 1 FROM invitation_mail WHERE state='sending' LIMIT 1",
     "SELECT 1 FROM bot_webhook_deliveries WHERE state='sending' LIMIT 1",
 )
+RETAINED_STOPPED_WORKER_IDLE = """def _idle(root, *, local_workers_stopped=False):
+    terminal = "'succeeded','failed','cancelled','interrupted'"
+    local_states = terminal + ",'queued','running'" if local_workers_stopped else terminal
+    queries = [
+        ("compute_workers", "SELECT 1 FROM compute_workers WHERE revoked_at IS NULL AND draining=0 LIMIT 1"),
+        ("compute_jobs", "SELECT 1 FROM compute_jobs WHERE status IN ('running','outcome_unknown') LIMIT 1"),
+        ("workflow_execution", "SELECT 1 FROM workflow_node_attempts a LEFT JOIN llm_runs r "
+         "ON r.organization_id=a.organization_id AND r.id=a.inference_run_id "
+         "WHERE a.status IN ('running','outcome_unknown') AND "
+         "(a.kind!='llm' OR r.status IS NULL OR r.status NOT IN (" + local_states + ")) LIMIT 1"),
+    ]
+    if not local_workers_stopped:
+        queries += [
+            ("inference", "SELECT 1 FROM llm_runs WHERE status='running' LIMIT 1"),
+            ("mail", "SELECT 1 FROM invitation_mail WHERE state='sending' LIMIT 1"),
+            ("webhooks", "SELECT 1 FROM bot_webhook_deliveries WHERE state='sending' LIMIT 1"),
+        ]
+    with snapshots._connect(root / "server.sqlite3") as db:
+        for category, query in queries:
+            if db.execute(query).fetchone():
+                raise MaintenanceError("offline migration requires drained workers and settled in-flight execution: " + category)
+"""
+
 STOPPED_WORKER_IDLE = """def _idle(root, *, local_workers_stopped=False):
     terminal = "'succeeded','failed','cancelled','interrupted'"
     local_states = terminal + ",'queued','running'" if local_workers_stopped else terminal
@@ -153,6 +176,16 @@ STOPPED_WORKER_IDLE = """def _idle(root, *, local_workers_stopped=False):
             ("webhooks", "SELECT 1 FROM bot_webhook_deliveries WHERE state='sending' LIMIT 1"),
         ]
     with snapshots._connect(root / "server.sqlite3") as db:
+        if "bot_run_id" in {row[1] for row in db.execute("PRAGMA table_info(workflow_node_attempts)")}:
+            queries[2] = (
+                "workflow_execution", "SELECT 1 FROM workflow_node_attempts a "
+                "LEFT JOIN llm_runs r ON r.organization_id=a.organization_id AND r.id=a.inference_run_id "
+                "LEFT JOIN bot_runs b ON b.organization_id=a.organization_id AND b.id=a.bot_run_id "
+                "WHERE a.status IN ('running','outcome_unknown') AND (a.kind!='llm' OR a.compute_job_id IS NOT NULL OR NOT ("
+                "(a.bot_run_id IS NULL AND a.inference_run_id IS NOT NULL AND COALESCE(r.status,'') IN (" + local_states + ")) OR "
+                "(a.inference_run_id IS NULL AND a.bot_run_id IS NOT NULL AND COALESCE(b.status,'') IN "
+                "('succeeded','failed','cancelled','outcome_unknown')))) LIMIT 1",
+            )
         for category, query in queries:
             if db.execute(query).fetchone():
                 raise MaintenanceError("offline migration requires drained workers and settled in-flight execution: " + category)
@@ -225,9 +258,25 @@ if any(statement in rebuilds for migration in maintenance.MIGRATIONS for stateme
     maintenance._migrate_database = migrate_database
 """
 MIGRATION_RUNNER += "retained_idle_queries = " + repr(RETAINED_IDLE_QUERIES) + "\n"
+MIGRATION_RUNNER += "retained_stopped_worker_idle = " + repr(RETAINED_STOPPED_WORKER_IDLE) + "\n"
+MIGRATION_RUNNER += "current_stopped_worker_idle = " + repr(STOPPED_WORKER_IDLE) + "\n"
 MIGRATION_RUNNER += "import sys\nsnapshots = maintenance.snapshots\nMaintenanceError = maintenance.MaintenanceError\n" + STOPPED_WORKER_IDLE
 MIGRATION_RUNNER += """original_idle = maintenance._idle
-if 'local_workers_stopped' not in original_idle.__code__.co_varnames:
+if 'local_workers_stopped' in original_idle.__code__.co_varnames:
+    import ast, inspect
+    try:
+        original_guard = ast.dump(ast.parse(inspect.getsource(original_idle)))
+    except (OSError, TypeError, SyntaxError):
+        raise SystemExit('unrecognized offline worker guard; retain the pending upgrade') from None
+    if original_guard == ast.dump(ast.parse(retained_stopped_worker_idle)):
+        if (not any(mode in sys.argv[1:] for mode in ('migrate-offline', 'maintenance-verify'))
+                or not {'_lock', 'LOCK', 'WORKER_LOCKS'} <= set(maintenance.migrate.__code__.co_names)
+                or not {'_lock', 'LOCK', 'WORKER_LOCKS'} <= set(maintenance.verify_prepared.__code__.co_names)):
+            raise SystemExit('unrecognized offline worker guard; retain the pending upgrade')
+        maintenance._idle = _idle
+    elif original_guard != ast.dump(ast.parse(current_stopped_worker_idle)):
+        raise SystemExit('unrecognized offline worker guard; retain the pending upgrade')
+else:
     if (not any(mode in sys.argv[1:] for mode in ('migrate-offline', 'maintenance-verify'))
             or original_idle.__code__.co_names != ('snapshots', '_connect', 'execute', 'fetchone', 'MaintenanceError')
             or retained_idle_queries not in original_idle.__code__.co_consts

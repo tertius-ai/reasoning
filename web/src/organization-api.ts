@@ -323,7 +323,8 @@ export function mentionMarkdown(content: string, members: Pick<Member, "id" | "n
   return content.replace(/@\[([a-f0-9]{32})(?::([A-Za-z0-9][A-Za-z0-9._/-]{0,99})(?:!(low|medium|high|xhigh|max))?)?\]/g,
     (_match, id: string, model?: string, effort?: string) => {
     const name = (names.get(id) ?? "departed member").replace(/[\r\n]/g, " ").replace(/[\\`*_{}\[\]()#+.!<>~$]/g, "\\$&");
-    return "@" + name + (model ? "-" + model.replace(/[._/-]/g, "\\$&") : "") + (effort ? "!" + effort : "");
+    // A link to `#mention/ID`, rendered as a tinted mention; the label stays escaped text.
+    return "[@" + name + (model ? "-" + model.replace(/[._/-]/g, "\\$&") : "") + (effort ? "!" + effort : "") + "](#mention/" + id + ")";
   });
 }
 

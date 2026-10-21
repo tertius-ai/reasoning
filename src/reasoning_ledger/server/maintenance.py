@@ -205,6 +205,19 @@ def _idle(root, *, local_workers_stopped=False):
             ("webhooks", "SELECT 1 FROM bot_webhook_deliveries WHERE state='sending' LIMIT 1"),
         ]
     with snapshots._connect(root / "server.sqlite3") as db:
+        # Bot-backed model nodes use a different child queue. Terminal bot
+        # receipts, including unknown outcomes, fence further effects and are
+        # never claimed again. Preserve that evidence rather than settling it.
+        if "bot_run_id" in {row[1] for row in db.execute("PRAGMA table_info(workflow_node_attempts)")}:
+            queries[2] = (
+                "workflow_execution", "SELECT 1 FROM workflow_node_attempts a "
+                "LEFT JOIN llm_runs r ON r.organization_id=a.organization_id AND r.id=a.inference_run_id "
+                "LEFT JOIN bot_runs b ON b.organization_id=a.organization_id AND b.id=a.bot_run_id "
+                "WHERE a.status IN ('running','outcome_unknown') AND (a.kind!='llm' OR a.compute_job_id IS NOT NULL OR NOT ("
+                "(a.bot_run_id IS NULL AND a.inference_run_id IS NOT NULL AND COALESCE(r.status,'') IN (" + local_states + ")) OR "
+                "(a.inference_run_id IS NULL AND a.bot_run_id IS NOT NULL AND COALESCE(b.status,'') IN "
+                "('succeeded','failed','cancelled','outcome_unknown')))) LIMIT 1",
+            )
         for category, query in queries:
             if db.execute(query).fetchone():
                 raise MaintenanceError("offline migration requires drained workers and settled in-flight execution: " + category)

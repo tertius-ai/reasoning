@@ -17,6 +17,7 @@ import { ComputeConversation } from "./ComputeConversation";
 import { DirectConversation, DirectMessageMarks, DirectMessagePicker, NewDirectMessageButton, directPath, directUnread, directUnreadTotal, peopleInbox } from "./DirectMessages";
 import { KnowledgeLinks, KnowledgeView } from "./KnowledgeLinks";
 import { ReplyBar, ReplyPointer, ThreadDialog } from "./MessageReplies";
+import { MentionMirror, MentionSelf, MentionTag, mentionFromHref, mentionInitials, mentionTone } from "./mentions";
 import { LazyView } from "./LazyView";
 import { WorkflowConversation } from "./WorkflowConversation";
 import { TopicActivity, orderedActivity } from "./TopicActivity";
@@ -70,6 +71,8 @@ export const unchanged = <T,>(current: T, next: T): T => JSON.stringify(current)
 const messageRemarkPlugins = [remarkGfm, remarkMath, remarkReferences], messageRehypePlugins = [rehypeKatex];
 const messageMarkdownComponents: Components = {
   a: ({ children, href }) => {
+    const mentioned = mentionFromHref(href);
+    if (mentioned) return <MentionTag id={mentioned}>{children}</MentionTag>;
     const reference = referenceFromHref(href);
     if (reference) return <ReferenceLink kind={reference.kind} id={reference.id} />;
     // Links into this application (message, topic and project links) navigate in place.
@@ -730,7 +733,7 @@ function Conversation({ organizationId, topic, members, user, canWrite, canManag
   const [betaActivity, setBetaActivity] = useState<TopicActivity[]>([]);
   const [botActivity, setBotActivity] = useState<TopicActivity[]>([]);
   const viewport = useRef<HTMLDivElement>(null);
-  const textarea = useRef<HTMLTextAreaElement>(null);
+  const textarea = useRef<HTMLTextAreaElement>(null), mirror = useRef<HTMLDivElement>(null);
   const cursor = useRef(snapshot?.cursor ?? 0);
   const editCursor = useRef(snapshot?.editCursor ?? 0);
   const retained = useRef({ messages, older, loading, failed: false });
@@ -1186,7 +1189,8 @@ function Conversation({ organizationId, topic, members, user, canWrite, canManag
       <SlashCommandPalette topicId={topic.id} kind={topic.kind} text={draft.text} onSelect={chooseCommand} />
       {draft.replyTo && <ReplyBar original={replyOriginal} label={replyOriginal && authorLabel(replyOriginal, members)} onCancel={cancelReply} />}
       <label className="org-visually-hidden" htmlFor="org-message">Message</label>
-      <textarea id="org-message" ref={textarea} placeholder={!canWrite ? "You have read-only access" : topic.kind === "beta" && modelAttempt
+      <div className="org-composer-input"><MentionMirror ref={mirror} text={draft.text} bindings={draft.mentions} self={user.id} />
+      <textarea id="org-message" ref={textarea} onScroll={event => { if (mirror.current) mirror.current.scrollTop = event.currentTarget.scrollTop; }} placeholder={!canWrite ? "You have read-only access" : topic.kind === "beta" && modelAttempt
         ? modelAttempt.unconfirmed ? "Retry or dismiss the unconfirmed reply request before sending another message"
           : "Sending the reply request…" : topic.kind === "beta" && selectedModel
       ? `Message ${catalogModel(replyCatalog, selectedModel)?.execution_source === "bot"
@@ -1223,7 +1227,7 @@ function Conversation({ organizationId, topic, members, user, canWrite, canManag
             return;
           }
           if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); setMention(null); setReference(null); void send(); }
-        }} />
+        }} /></div>
       <div className="org-composer-controls">
         <div className="org-composer-actions">
         {(topic.kind === "alpha" || draft.text.trim()) && <button className="org-primary org-send-play"
@@ -1249,7 +1253,10 @@ function Conversation({ organizationId, topic, members, user, canWrite, canManag
       {mentionMembers.length > 0 && <div id="org-mention-list" role="listbox" className="org-mention-menu" aria-label="Mention a member">
         {mentionMembers.map((member, index) => <button type="button" role="option" tabIndex={-1} id={"org-mention-" + (member.optionId ?? member.id)}
           aria-selected={index === mentionIndex % mentionMembers.length} key={member.optionId ?? member.id}
-          onMouseDown={(event) => event.preventDefault()} onClick={() => chooseMention(member)}>{member.name}{member.model ? "-" + member.model : ""}{member.effort ? "!" + member.effort : ""}{member.owner ? " · " + member.owner : ""}</button>)}</div>}
+          onMouseDown={(event) => event.preventDefault()} onClick={() => chooseMention(member)}>
+          <span className={"org-mention-avatar org-mention-tone-" + mentionTone(member.id)} aria-hidden="true">{mentionInitials(member.name)}</span>
+          <span className="org-mention-option-name">{member.name}{member.model ? "-" + member.model : ""}{member.effort ? "!" + member.effort : ""}</span>
+          {member.owner && <small> · {member.owner}</small>}</button>)}</div>}
       {!mentionMembers.length && referenceMatches.length > 0 && <div id="org-reference-list" role="listbox" className="org-mention-menu" aria-label="Reference a topic or project">
         {referenceMatches.map((target, index) => <button type="button" role="option" tabIndex={-1} id={`org-reference-${target.kind}-${target.id}`}
           aria-selected={index === completionIndex} key={target.kind + ":" + target.id}
@@ -1671,7 +1678,7 @@ export function OrganizationApp({ user, onAccount, onAuthenticated, onSignedOut,
   const openKnowledge = (view: KnowledgeView) => { setHelpOpen(false); setKnowledgeView(view); setWorkspace(current=>({...current,view,topic:topic?.id,project:undefined})); setSearch(""); setResults(null);
     const query = new URLSearchParams({ organization: organizationId!, view }); if (topic) query.set("topic", topic.id);
     window.history.pushState(null, "", "/organization.html?" + query); };
-  return <ReferenceContext.Provider value={references}><div className={"org-app org-tree-tone-" + Math.max(0, hierarchy.topics.filter(value => value.channel_id === topic?.channel_id).findIndex(value => value.id === topic?.id)) % 4}>
+  return <ReferenceContext.Provider value={references}><MentionSelf.Provider value={user.id}><div className={"org-app org-tree-tone-" + Math.max(0, hierarchy.topics.filter(value => value.channel_id === topic?.channel_id).findIndex(value => value.id === topic?.id)) % 4}>
     {/* With the sidebar open, the bar splits at the sidebar's edge so the room name starts where the chat does. */}
     <header className="org-appbar org-topic-color"><div className={"org-appbar-brand" + (navOpen ? " org-appbar-brand-open" : "")}><button type="button" className="org-icon-button org-nav-toggle" aria-label="Toggle project navigation"
       title="Toggle project navigation · Ctrl/⌘B" aria-controls="org-project-navigation" aria-expanded={navOpen} onClick={() => setNavOpen(open => !open)}>
@@ -1816,5 +1823,5 @@ export function OrganizationApp({ user, onAccount, onAuthenticated, onSignedOut,
       <DeletionControl organizationId={organization.id} kind="topic" entityId={entitySettings.id} onDeleted={() => { preferenceRefresh(); setEntitySettings(null); }} />
     </Dialog>}
     {admin && organization && <Administration key={organization.id} organization={organization} onClose={() => setAdmin(false)} onRefresh={preferenceRefresh} onAuthLost={authLost} />}
-  </div></ReferenceContext.Provider>;
+  </div></MentionSelf.Provider></ReferenceContext.Provider>;
 }
