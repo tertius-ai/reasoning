@@ -16,6 +16,7 @@ from test_public_workflow_runs import llm_node
 from reasoning_ledger.server.api import Config, create_app
 from reasoning_ledger.server.bot_runtime import BotRuntime
 from reasoning_ledger.server.bot_sharing import BotSharing, setting
+from reasoning_ledger.server.bot_sharing_schema import SCHEMA as BOT_SHARING_SCHEMA
 from reasoning_ledger.server.migrations import MIGRATIONS
 from reasoning_ledger.server.store import Store, StoreError
 
@@ -231,7 +232,10 @@ def test_existing_bots_keep_their_runner_sharing_when_migrated(fixture, runner_f
     with store.transaction(write=True) as db:
         db.execute("DROP TABLE bot_invokers")
         db.execute("DROP TABLE bot_sharing")
-        db.execute(f"PRAGMA user_version={len(MIGRATIONS) - 1}")
+        # Later migrations are undone as well, so the upgrade replays them after bot sharing.
+        db.execute("DROP INDEX messages_reply_to")
+        db.execute("ALTER TABLE messages DROP COLUMN reply_to")
+        db.execute(f"PRAGMA user_version={MIGRATIONS.index(BOT_SHARING_SCHEMA)}")
     migrated = Store(store.data_dir)
     with migrated.transaction() as db:
         assert db.execute("PRAGMA user_version").fetchone()[0] == len(MIGRATIONS)

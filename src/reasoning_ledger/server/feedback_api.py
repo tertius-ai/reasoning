@@ -6,12 +6,13 @@ from fastapi import Depends, Query
 from pydantic import Field
 
 from .chat_feedback import ChatFeedback
+from .reaction_emoji_schema import EMOJIS
 from .request_input import RequestInput
 from .topic_forks import TopicForks
 
 
 class Reaction(RequestInput):
-    emoji: Literal["up", "down", "upside_down"]
+    emoji: Literal[EMOJIS]
     active: Annotated[bool, Field(strict=True)]
 
 

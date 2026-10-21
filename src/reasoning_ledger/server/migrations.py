@@ -626,3 +626,11 @@ MIGRATIONS += (DIRECT_MESSAGES_SCHEMA,)
 from .bot_sharing_schema import SCHEMA as BOT_SHARING_SCHEMA  # noqa: E402
 
 MIGRATIONS += (BOT_SHARING_SCHEMA,)
+
+from .message_replies_schema import SCHEMA as MESSAGE_REPLIES_SCHEMA  # noqa: E402
+
+MIGRATIONS += (MESSAGE_REPLIES_SCHEMA,)
+
+from .reaction_emoji_schema import SCHEMA as REACTION_EMOJI_SCHEMA  # noqa: E402
+
+MIGRATIONS += (REACTION_EMOJI_SCHEMA,)

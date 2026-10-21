@@ -15,6 +15,9 @@ def remove_collaboration_schema(db):
         db.execute("DROP INDEX compute_project_page")
         db.execute("DROP INDEX compute_worker_activity")
         db.execute("ALTER TABLE compute_jobs DROP COLUMN project_id")
+    if "reply_to" in {row[1] for row in db.execute("PRAGMA table_info(messages)")}:
+        db.execute("DROP INDEX IF EXISTS messages_reply_to")
+        db.execute("ALTER TABLE messages DROP COLUMN reply_to")
     if "bot_run_id" in {row[1] for row in db.execute("PRAGMA table_info(workflow_node_attempts)")}:
         db.execute("ALTER TABLE workflow_node_attempts DROP COLUMN bot_run_id")
     for table in (

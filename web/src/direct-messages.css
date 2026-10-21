@@ -3,7 +3,9 @@
 .org-app .org-direct-new { min-height: 24px; padding: 0 8px; font-size: 14px; line-height: 1; }
 .org-direct-picker { display: block; padding: 8px 2px 4px; }
 .org-direct-marks { display: flex; flex: none; align-items: center; gap: 4px; }
-.org-direct-mark { flex: none; color: var(--muted); }
+.org-direct-marks .org-private-mark { margin-left: 0; font-size: 11px; }
+.org-presence .org-direct-marks .org-unread { background: var(--teal); color: var(--background); font-weight: 600; }
+.org-presence .org-presence-has-unread > strong { font-weight: 600; color: var(--foreground); }
 /* The person whose conversation is open. */
 .org-presence .org-presence-row:has(.org-presence-message[aria-current="page"]) { background: var(--accent-dim); }
 .org-presence-toggle { position: relative; }
@@ -22,5 +24,5 @@
 .org-message:hover .org-direct-actions button, .org-direct-actions button:focus-visible { opacity: 1; }
 @media (hover: none) { .org-direct-actions button[aria-label="Edit message"] { opacity: 1; } }
 .org-direct-status { margin: 0 max(16px, calc((100% - 900px) / 2)) 6px; }
-.org-presence .org-presence-message { width: 100%; text-align: left; border: 0; padding: 0; background: transparent; color: inherit; font: inherit; font-weight: inherit; cursor: pointer; overflow: hidden; text-overflow: ellipsis; }
+.org-presence .org-presence-message { width: 100%; min-height: 0; text-align: left; border: 0; padding: 0; background: transparent; color: inherit; font: inherit; font-weight: inherit; cursor: pointer; overflow: hidden; text-overflow: ellipsis; }
 .org-presence .org-presence-message:hover, .org-presence .org-presence-message:focus-visible { text-decoration: underline; }

@@ -2,6 +2,9 @@
 
 import re
 
+from .reaction_emoji_schema import ADD_CHECK as REACTION_EMOJI_ADD
+from .reaction_emoji_schema import DROP_CHECK as REACTION_EMOJI_DROP
+
 PROJECT_ARTIFACTS = "ALTER TABLE research_artifacts ALTER COLUMN topic_id DROP NOT NULL"
 PROJECT_COMPUTE = "ALTER TABLE compute_jobs ALTER COLUMN topic_id DROP NOT NULL"
 CLAIM_INDEX = ("UPDATE mathematical_records SET object_id=claim_id "
@@ -34,7 +37,32 @@ def repair_claim_index(db):
         db.execute("RELEASE reasoning_claim_index")
 
 
+def _reaction_check(db, clause):
+    """Rebuild chat_reactions with `clause` as the emoji column's check, keeping every row, index and other constraint."""
+    schema = db.execute("SELECT sql FROM sqlite_schema WHERE type='table' AND name='chat_reactions'").fetchone()[0]
+    rebuilt, checks = re.subn(r"emoji TEXT NOT NULL(?:\s*CHECK\(emoji IN \([^)]*\)\))?", "emoji TEXT NOT NULL" + clause, schema, count=1)
+    rebuilt, renamed = re.subn(r'^CREATE TABLE (?:"chat_reactions"|chat_reactions)(?=\s)', "CREATE TABLE chat_reactions_rebuild",
+                               rebuilt, count=1)
+    if checks != 1 or renamed != 1:
+        raise ValueError("reaction schema does not match its emoji migration")
+    indexes = [row[0] for row in db.execute(
+        "SELECT sql FROM sqlite_schema WHERE tbl_name='chat_reactions' AND type IN ('index','trigger') AND sql IS NOT NULL ORDER BY name"
+    )]
+    db.execute(rebuilt)
+    db.execute("INSERT INTO chat_reactions_rebuild SELECT * FROM chat_reactions")
+    db.execute("DROP TABLE chat_reactions")
+    db.execute("ALTER TABLE chat_reactions_rebuild RENAME TO chat_reactions")
+    for sql in indexes:
+        db.execute(sql)
+
+
 def sqlite_migration(db, statement):
+    if statement == REACTION_EMOJI_DROP:
+        _reaction_check(db, "")
+        return
+    if statement == REACTION_EMOJI_ADD:
+        _reaction_check(db, statement[statement.index(" CHECK("):])
+        return
     if statement == CLAIM_INDEX:
         repair_claim_index(db)
         return

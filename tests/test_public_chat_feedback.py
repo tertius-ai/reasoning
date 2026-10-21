@@ -1,6 +1,7 @@
 """Human-only feedback, cross-model history, and cutoff-safe beta branches."""
 
 import json
+import sqlite3
 from concurrent.futures import ThreadPoolExecutor
 
 import pytest
@@ -15,7 +16,10 @@ from reasoning_ledger.server.feedback_api import install_feedback_routes
 from reasoning_ledger.server.feedback_schema import SCHEMA
 from reasoning_ledger.server.feedback_single_schema import SCHEMA as SINGLE_REACTION_SCHEMA
 from reasoning_ledger.server.openrouter import Usage
+from reasoning_ledger.server.reaction_emoji_schema import EMOJIS
+from reasoning_ledger.server.reaction_emoji_schema import SCHEMA as REACTION_EMOJI_SCHEMA
 from reasoning_ledger.server.research_context import ResearchContext
+from reasoning_ledger.server.schema_operations import _reaction_check
 from reasoning_ledger.server.store import StoreError
 from reasoning_ledger.server.topic_forks import TopicForks, feedback_export
 
@@ -56,11 +60,11 @@ def test_reactions_toggle_idempotently_and_use_recorded_model(installation):
         result = client.put(path, json={"emoji": "up", "active": True})
         assert result.status_code == 200, result.text
         assert result.json()["counts"]["up"] == 1
-        assert result.json()["reactors"] == {"up": [{"id": user, "name": "Owner"}], "down": [], "upside_down": []}
+        assert result.json()["reactors"] == {**dict.fromkeys(EMOJIS, []), "up": [{"id": user, "name": "Owner"}]}
     same = client.get(f"/api/organizations/{org}/topics/{topic}/reactions/run/{run['id']}").json()
     assert same == result.json()
     assert client.get(f"/api/organizations/{org}/model-feedback").json()["models"] == [
-        {"model": MODELS[1], "up": 1, "down": 0, "upside_down": 0}
+        {"model": MODELS[1], **dict.fromkeys(EMOJIS, 0), "up": 1}
     ]
     assert client.put(path, json={"emoji": "up", "active": False}).json()["counts"]["up"] == 0
     human = state.store.messages(user, org, topic)[0]
@@ -97,8 +101,8 @@ def test_one_reaction_replaces_prior_choice_across_canonical_output_aliases(inst
     feedback.set(user, org, topic, "message", message["id"], "up", True)
     changed = feedback.set(user, org, topic, "run", run["id"], "down", True)
     assert changed["mine"] == ["down"]
-    assert changed["counts"] == {"up": 0, "down": 1, "upside_down": 0}
-    assert feedback.totals(user, org)["models"] == [{"model": MODELS[0], "up": 0, "down": 1, "upside_down": 0}]
+    assert changed["counts"] == {**dict.fromkeys(EMOJIS, 0), "down": 1}
+    assert feedback.totals(user, org)["models"] == [{"model": MODELS[0], **dict.fromkeys(EMOJIS, 0), "down": 1}]
     # A delayed removal for the old choice must not remove its replacement.
     assert feedback.set(user, org, topic, "message", message["id"], "up", False)["mine"] == ["down"]
     assert feedback.set(user, org, topic, "message", message["id"], "down", False)["mine"] == []
@@ -307,7 +311,7 @@ def test_gamma_node_and_chat_feedback_share_the_retained_actual_model(installati
     feedback = ChatFeedback(state.store)
     node_vote = feedback.set(user, org, topic, "node", run["id"], "up", True, "answer")
     assert feedback.read(user, org, topic, "message", message["id"]) == node_vote
-    assert feedback.totals(user, org)["models"] == [{"model": MODELS[1], "up": 1, "down": 0, "upside_down": 0}]
+    assert feedback.totals(user, org)["models"] == [{"model": MODELS[1], **dict.fromkeys(EMOJIS, 0), "up": 1}]
     with pytest.raises(StoreError):
         feedback.set(user, org, topics[1]["id"], "node", run["id"], "up", True, "answer")
     with pytest.raises(StoreError):
@@ -343,7 +347,7 @@ def test_bot_feedback_and_nested_fork_keep_recorded_model_without_new_execution(
     nested = forks.create(user, org, fork, copied["id"], "Nested branch", "nested-branch")["topic"]["id"]
     nested_message = store.messages(user, org, nested)[-1]
     feedback.set(user, org, nested, "message", nested_message["id"], "down", True)
-    assert feedback.totals(user, org)["models"] == [{"model": "configured-model", "up": 1, "down": 1, "upside_down": 0}]
+    assert feedback.totals(user, org)["models"] == [{"model": "configured-model", **dict.fromkeys(EMOJIS, 0), "up": 1, "down": 1}]
     with store.transaction() as db:
         assert db.execute("SELECT count(*) FROM bot_runs").fetchone()[0] == 1
         exported = feedback_export(db, org, nested)
@@ -378,3 +382,31 @@ def test_fork_inherits_private_project_access_and_http_writes_require_csrf(insta
     cookie.headers["X-CSRF-Token"] = login.json()["csrf_token"]
     assert cookie.put(reaction, json={"emoji": "up", "active": True}).status_code == 200
     assert cookie.get(f"/api/organizations/{org}/topics/{fork}/fork-origin").json()["source_message_id"] == message["id"]
+
+
+def test_more_reactions_are_accepted_and_older_installations_widen_the_check(installation):
+    _, store, client, owner = installation
+    org, user = owner["organization_id"], owner["user_id"]
+    topic = structure(client, org)[2][0]["id"]
+    message = store.post_message(user, org, topic, "Many reactions", "many-reactions")
+    feedback = ChatFeedback(store)
+    for emoji in EMOJIS:
+        assert feedback.set(user, org, topic, "message", message["id"], emoji, True)["mine"] == [emoji]
+    path = f"/api/organizations/{org}/topics/{topic}/reactions/message/{message['id']}"
+    assert client.put(path, json={"emoji": "unicorn", "active": True}).status_code == 422
+    # An installation from before this migration keeps its reactions and accepts the new choices after the upgrade.
+    feedback.set(user, org, topic, "message", message["id"], "upside_down", True)
+    with store.transaction(write=True) as db:
+        _reaction_check(db, " CHECK(emoji IN ('up','down','upside_down'))")
+        with pytest.raises(sqlite3.IntegrityError):
+            db.execute("UPDATE chat_reactions SET emoji='heart'")
+        db.execute(f"PRAGMA user_version={store_module.MIGRATIONS.index(REACTION_EMOJI_SCHEMA)}")
+    upgraded = store_module.Store(store.data_dir)
+    upgraded_feedback = ChatFeedback(upgraded)
+    assert upgraded_feedback.read(user, org, topic, "message", message["id"])["mine"] == ["upside_down"]
+    assert upgraded_feedback.set(user, org, topic, "message", message["id"], "heart", True)["mine"] == ["heart"]
+    with upgraded.transaction() as db:
+        indexes = {row[0] for row in db.execute("SELECT name FROM sqlite_schema WHERE tbl_name='chat_reactions' AND type='index'")}
+        assert {"chat_reaction_model", "chat_reaction_person"} <= indexes
+        with pytest.raises(sqlite3.IntegrityError):
+            db.execute("UPDATE chat_reactions SET emoji='unicorn'")

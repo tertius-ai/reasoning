@@ -5,10 +5,25 @@ import { encodeMessageEdit, MessageEditDraft, readableMessageEdit, updateMessage
 import { ReferenceContext, messageLink } from "./references";
 import "./chat-feedback.css";
 
-const emojis = { up: "👍", down: "👎", upside_down: "🙃" } as const;
-const labels = { up: "Thumbs up", down: "Thumbs down", upside_down: "Upside-down smile" };
+// The server's canonical order (reaction_emoji_schema.EMOJIS): the first six are the quick choices, as in Signal.
+const emojis = {
+  up: "👍", down: "👎", heart: "❤️", laugh: "😂", surprised: "😮", sad: "😢", upside_down: "🙃", party: "🎉", thinking: "🤔", eyes: "👀",
+  check: "✅", cross: "❌", fire: "🔥", idea: "💡", pray: "🙏", clap: "👏", rocket: "🚀", hundred: "💯", star: "⭐", question: "❓",
+  wave: "👋", smile: "🙂", wink: "😉", confused: "😕",
+} as const;
+const labels: Record<keyof typeof emojis, string> = {
+  up: "Thumbs up", down: "Thumbs down", heart: "Heart", laugh: "Laughing", surprised: "Surprised", sad: "Sad", upside_down: "Upside-down smile",
+  party: "Party", thinking: "Thinking", eyes: "Eyes", check: "Check mark", cross: "Cross mark", fire: "Fire", idea: "Light bulb", pray: "Folded hands",
+  clap: "Clapping", rocket: "Rocket", hundred: "Hundred points", star: "Star", question: "Question mark", wave: "Waving hand", smile: "Smile",
+  wink: "Wink", confused: "Confused",
+};
 type Emoji = keyof typeof emojis;
-export type Feedback = { counts: Record<Emoji, number>; mine: Emoji[]; reactors?: Record<Emoji, { id: string; name: string }[]> };
+const ALL = Object.keys(emojis) as Emoji[], QUICK = ALL.slice(0, 6);
+export type Feedback = { counts: Partial<Record<Emoji, number>>; mine: Emoji[]; reactors?: Partial<Record<Emoji, { id: string; name: string }[]>> };
+const count = (feedback: Feedback, emoji: Emoji) => feedback.counts[emoji] ?? 0;
+/** Signal's reaction mark: a smiling face with a small plus. */
+const ReactionIcon = () => <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" aria-hidden="true">
+  <path d="M20.5 11.5a8.5 8.5 0 1 1-6-8.13" /><path d="M8.5 14.5a4.5 4.5 0 0 0 7 0" /><path d="M9 9.5h.01M15 9.5h.01" /><path d="M19 2.5v5M16.5 5h5" /></svg>;
 
 export function CopyOutputButton({ text }: { text: string | (() => string) }) {
   const [error, setError] = useState("");
@@ -26,16 +41,12 @@ export function CopyOutputButton({ text }: { text: string | (() => string) }) {
 }
 
 export function OutputActions({ text, ...props }: Parameters<typeof ReactionBar>[0] & { text: string }) {
-  return <div className="chat-message-actions chat-output-actions"><ReactionBar {...props} /><CopyOutputButton text={text} /></div>;
+  return <div className={"chat-message-actions chat-output-actions chat-has-copy" + (props.canWrite !== false ? " chat-has-react" : "")}>
+    <ReactionBar {...props} /><CopyOutputButton text={text} /></div>;
 }
 
-export function reactorInitials(name: string): string {
-  const words = name.trim().split(/\s+/).filter(Boolean);
-  return (words.length > 1 ? [words[0], words.at(-1)!] : words).map(word => Array.from(word)[0]).join("").toLocaleUpperCase();
-}
-
-function ActionMenu({ label, className, icon, children }: {
-  label: string; className: string; icon: ReactNode; children: (close: () => void) => ReactNode;
+function ActionMenu({ label, className, icon, menuClassName = "", onClosed, children }: {
+  label: string; className: string; icon: ReactNode; menuClassName?: string; onClosed?: () => void; children: (close: () => void) => ReactNode;
 }) {
   const [position, setPosition] = useState<{ left: number; top: number } | null>(null);
   const trigger = useRef<HTMLButtonElement>(null), menu = useRef<HTMLDivElement>(null);
@@ -51,7 +62,7 @@ function ActionMenu({ label, className, icon, children }: {
       ? { left, top } : current);
   };
   useLayoutEffect(() => {
-    if (!open) return;
+    if (!open) { onClosed?.(); return; }
     reposition();
   }, [open]);
   useEffect(() => {
@@ -85,34 +96,38 @@ function ActionMenu({ label, className, icon, children }: {
         setPosition({ left: Math.max(8, Math.min(box.right - 176, window.innerWidth - 184)),
           top: box.bottom + 128 <= window.innerHeight ? box.bottom + 4 : Math.max(8, box.top - 124) });
       }}>{icon}</button>
-    {position && createPortal(<div ref={menu} className="chat-action-menu" role="menu" aria-label={label}
+    {position && createPortal(<div ref={menu} className={"chat-action-menu " + menuClassName} role="menu" aria-label={label}
       style={position} onKeyDown={event => {
         if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); close(); }
-        if (["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)) {
+        if (["ArrowDown", "ArrowUp", "ArrowRight", "ArrowLeft", "Home", "End"].includes(event.key)) {
           event.preventDefault();
           const buttons = Array.from(menu.current!.querySelectorAll<HTMLButtonElement>("button:not(:disabled)"));
           const current = buttons.indexOf(document.activeElement as HTMLButtonElement);
           const next = event.key === "Home" ? 0 : event.key === "End" ? buttons.length - 1
-            : (current + (event.key === "ArrowDown" ? 1 : -1) + buttons.length) % buttons.length;
+            : (current + (event.key === "ArrowDown" || event.key === "ArrowRight" ? 1 : -1) + buttons.length) % buttons.length;
           buttons[next]?.focus({ preventScroll: true });
         }
       }}>{children(close)}</div>, document.body)}
   </>;
 }
 
+/**
+ * Reactions as one pill on the message's bottom edge, as in Signal: each emoji in use (most used first), then the total.
+ * Each emoji is a button naming who reacted; pressing it sets or clears your reaction.
+ */
 export function ReactionChips({ feedback, canWrite, busy, onToggle }: {
   feedback: Feedback; canWrite: boolean; busy: boolean; onToggle: (emoji: Emoji) => void;
 }) {
-  return <>{(Object.keys(emojis) as Emoji[]).filter(emoji => feedback.counts[emoji] > 0).map(emoji => {
-    const people = feedback.reactors?.[emoji] ?? [], extra = Math.max(0, feedback.counts[emoji] - people.length);
+  const used = ALL.filter(emoji => count(feedback, emoji) > 0).sort((left, right) => count(feedback, right) - count(feedback, left));
+  if (!used.length) return null;
+  const total = used.reduce((sum, emoji) => sum + count(feedback, emoji), 0);
+  return <span className="chat-reaction-pill">{used.map(emoji => {
+    const people = feedback.reactors?.[emoji] ?? [], extra = Math.max(0, count(feedback, emoji) - people.length);
     const names = people.map(person => person.name).join(", ") + (extra ? ` and ${extra} others` : "");
-    return <button key={emoji} type="button" className="chat-reaction-chip" aria-label={`${labels[emoji]}: ${names || feedback.counts[emoji]}`}
-      title={names} data-reactors={names} aria-pressed={feedback.mine.includes(emoji)} aria-disabled={!canWrite || busy}
-      disabled={busy} onClick={() => { if (canWrite && !busy) onToggle(emoji); }}>
-      <span>{emojis[emoji]}</span>{people.map(person => <span className="chat-reactor-initials" key={person.id} title={person.name}>{reactorInitials(person.name)}</span>)}
-      {extra > 0 && <small>+{extra}</small>}
-    </button>;
-  })}</>;
+    return <button key={emoji} type="button" className="chat-reaction-chip" aria-label={`${labels[emoji]}: ${names || count(feedback, emoji)}`}
+      title={`${labels[emoji]}: ${names || count(feedback, emoji)}`} data-reactors={names} aria-pressed={feedback.mine.includes(emoji)}
+      aria-disabled={!canWrite || busy} disabled={busy} onClick={() => { if (canWrite && !busy) onToggle(emoji); }}>{emojis[emoji]}</button>;
+  })}{total > 1 && <span className="chat-reaction-total" aria-hidden="true">{total}</span>}</span>;
 }
 
 export function ReactionBar({ organizationId, topicId, targetKind, targetId, nodeId, canWrite = true, onAuthLost, batched = false, preloaded }: {
@@ -121,8 +136,8 @@ export function ReactionBar({ organizationId, topicId, targetKind, targetId, nod
   /** The conversation reads this target's reactions in one request for its whole message page. */
   batched?: boolean; preloaded?: Feedback;
 }) {
-  const [feedback, setFeedback] = useState<Feedback>(preloaded ?? { counts: { up: 0, down: 0, upside_down: 0 }, mine: [] });
-  const [busy, setBusy] = useState(false), [error, setError] = useState("");
+  const [feedback, setFeedback] = useState<Feedback>(preloaded ?? { counts: {}, mine: [] });
+  const [busy, setBusy] = useState(false), [error, setError] = useState(""), [more, setMore] = useState(false);
   const path = topicPath(organizationId, topicId) + "/reactions/" + targetKind + "/" + encodeURIComponent(targetId)
     + (nodeId ? "?node_id=" + encodeURIComponent(nodeId) : "");
   useEffect(() => { if (preloaded) setFeedback(preloaded); }, [preloaded]);
@@ -143,21 +158,29 @@ export function ReactionBar({ organizationId, topicId, targetKind, targetId, nod
   };
   return <span className="chat-reactions" aria-label="Human reactions">
     <ReactionChips {...{ feedback, canWrite, busy }} onToggle={toggle} />
-    {canWrite && <ActionMenu label="Add reaction" className="chat-reaction-launcher" icon={<span aria-hidden="true">:)</span>}>
-      {close => (Object.keys(emojis) as Emoji[]).map(emoji => <button key={emoji} type="button" role="menuitemcheckbox"
-        aria-label={labels[emoji]} aria-checked={feedback.mine.includes(emoji)} disabled={busy}
-        onClick={() => { close(); toggle(emoji); }}>{emojis[emoji]} <span>{labels[emoji]}</span></button>)}
+    {canWrite && <ActionMenu label="Add reaction" className="chat-reaction-launcher" icon={<ReactionIcon />}
+      menuClassName={"chat-reaction-menu" + (more ? " chat-reaction-menu-all" : "")} onClosed={() => setMore(false)}>
+      {close => <>{(more ? ALL : QUICK).map(emoji => <button key={emoji} type="button" role="menuitemcheckbox"
+        aria-label={labels[emoji]} title={labels[emoji]} aria-checked={feedback.mine.includes(emoji)} disabled={busy}
+        onClick={() => { close(); setMore(false); toggle(emoji); }}>{emojis[emoji]}</button>)}
+        {!more && <button type="button" role="menuitem" className="chat-reaction-more" aria-label="More reactions" title="More reactions"
+          onClick={event => {
+            const menu = event.currentTarget.parentElement; setMore(true);
+            requestAnimationFrame(() => menu?.querySelector<HTMLButtonElement>("button:not(:disabled)")?.focus({ preventScroll: true }));
+          }}>+</button>}</>}
     </ActionMenu>}
     {error && <small role="alert" className="org-error">{error}</small>}
   </span>;
 }
 
-export function MessageActions({ organizationId, topicId, messageId, kind, canWrite, onForked, onAuthLost, message, canEdit, onEdited, onReplyAgain, people = [], reactions, batchedReactions = false }: {
+export function MessageActions({ organizationId, topicId, messageId, kind, canWrite, onForked, onAuthLost, message, canEdit, onEdited, onReplyAgain, onReply, people = [], reactions, batchedReactions = false }: {
   organizationId: string; topicId: string; messageId: string; kind: string; canWrite: boolean;
   reactions?: Feedback; batchedReactions?: boolean;
   onForked?: (topicId: string) => void; onAuthLost?: () => void;
   message?: Message; canEdit?: boolean; onEdited?: (message: Message) => void;
   onReplyAgain?: () => Promise<void>;
+  /** Starts a reply to this message in the composer. */
+  onReply?: () => void;
   people?: { id: string; name: string }[];
 }) {
   const [open, setOpen] = useState(false), [name, setName] = useState(""), [busy, setBusy] = useState(false), [error, setError] = useState("");
@@ -179,9 +202,11 @@ export function MessageActions({ organizationId, topicId, messageId, kind, canWr
   };
   // Every persisted message offers its link; forking, editing and history depend on access and revisions.
   const hasMenu = Boolean(message) || (kind === "beta" && canWrite) || canEdit;
-  return <div className={`chat-message-actions${hasMenu ? " chat-has-fork" : ""}${message ? " chat-has-copy" : ""}`}>
+  return <div className={`chat-message-actions${hasMenu ? " chat-has-fork" : ""}${message ? " chat-has-copy" : ""}${onReply ? " chat-has-reply" : ""}${canWrite ? " chat-has-react" : ""}`}>
     <ReactionBar {...{ organizationId, topicId, canWrite, onAuthLost }} targetKind="message" targetId={messageId}
       batched={batchedReactions} preloaded={reactions} />
+    {onReply && <button type="button" className="chat-action-launcher chat-reply-launcher" aria-label="Reply" title="Reply"
+      onClick={event => { event.preventDefault(); onReply(); }}>↩</button>}
     {hasMenu && <ActionMenu label="Message actions" className="chat-fork-launcher" icon={<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" aria-hidden="true"><circle cx="7" cy="5" r="2"/><circle cx="17" cy="5" r="2"/><circle cx="7" cy="19" r="2"/><path d="M7 7v10m10-10v3a4 4 0 0 1-4 4H7"/></svg>}>
       {close => <>{message && <button type="button" role="menuitem" onClick={() => {
         close(); setLinkStatus("");

@@ -29,6 +29,7 @@ from .inference_store import InferenceStore
 from .inference_worker import DEFAULT_AGENT_CONCURRENCY, InferenceWorker
 from .knowledge_store import KnowledgeStore
 from .mail import MailConfig, MailStore, MailWorker
+from .message_replies import install_routes as install_reply_routes
 from .model_benchmarks import ModelBenchmarks, metadata_key
 from .model_recommendations import recommendations
 from .navigation_api import install_routes as install_navigation_routes
@@ -316,6 +317,7 @@ class Topic(Organization):
 class Message(Input):
     content: Annotated[str, Field(min_length=1, max_length=16000, pattern=r"\S")]
     client_id: Annotated[str, Field(min_length=1, max_length=128)]
+    reply_to: Annotated[str | None, Field(pattern=r"^[a-f0-9]{32}$")] = None
 
 
 class ModelFavorite(Input):
@@ -595,6 +597,7 @@ def create_app(config: Config, *, provider: OpenRouter | None = None, mail_provi
     install_feedback_routes(app, store, authenticated)
     install_navigation_routes(app, store, authenticated)
     install_reference_routes(app, store, authenticated)
+    install_reply_routes(app, store, authenticated)
     install_direct_message_routes(app, store, authenticated)
     install_topic_event_routes(app, topic_events, credentials)
 
@@ -775,7 +778,7 @@ def create_app(config: Config, *, provider: OpenRouter | None = None, mail_provi
 
     @app.post("/api/organizations/{organization_id}/topics/{topic_id}/messages", status_code=201)
     def post_message(organization_id: str, topic_id: str, body: Message, user: User):
-        return store.post_message(user, organization_id, topic_id, body.content, body.client_id)
+        return store.post_message(user, organization_id, topic_id, body.content, body.client_id, body.reply_to)
 
     @app.get("/api/organizations/{organization_id}/topics/{topic_id}/message-updates")
     def message_updates(organization_id: str, topic_id: str, user: User,
