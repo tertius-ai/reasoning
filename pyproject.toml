@@ -20,7 +20,7 @@ classifiers = [
     "Topic :: Scientific/Engineering",
 ]
 dependencies = [
-    "certifi>=2026.6,<2027",
+    "certifi>=2026.10.19,<2027",
     "jsonschema>=4.23,<5",
     "mcp>=1.30,<2",
     "fastapi>=0.115,<1",
