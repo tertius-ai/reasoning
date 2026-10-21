@@ -22,20 +22,26 @@ test("empty messages have no permanent emoji choices and readonly readers have n
     organizationId: "org", topicId: "topic", targetKind: "message", targetId: "message", canWrite: true,
   }));
   assert.match(writable, /aria-label="Add reaction"/);
-  assert.match(writable, /:\)/); assert.doesNotMatch(writable, /<svg/);
+  assert.match(writable, /<svg/);
   assert.doesNotMatch(writable, /👍|👎|🙃/);
 });
 
-test("existing reactions show initials and bounded overflow without exposing zero-count choices", () => {
+test("existing reactions form one pill naming who reacted, without zero-count choices", () => {
   const html = renderToStaticMarkup(React.createElement(components.ReactionChips, {
     feedback: { counts: { up: 5, down: 0, upside_down: 0 }, mine: ["up"], reactors: { up: [
       { id: "b", name: "Benjamin Antieau" }, { id: "d", name: "Deven Manam" }, { id: "a", name: "Ada" },
     ] } }, canWrite: true, busy: false, onToggle: () => {},
   }));
-  assert.match(html, /👍/); assert.doesNotMatch(html, /👎|🙃/);
-  for (const text of ["BA", "DM", "+2", 'title="Benjamin Antieau"', 'aria-pressed="true"']) assert.ok(html.includes(text));
-  assert.equal(components.reactorInitials("李 明"), "李明");
-  assert.equal(components.reactorInitials("  Ada  "), "A");
+  assert.match(html, /chat-reaction-pill/); assert.match(html, /👍/); assert.doesNotMatch(html, /👎|🙃/);
+  for (const text of ['title="Thumbs up: Benjamin Antieau, Deven Manam, Ada and 2 others"', 'aria-pressed="true"', ">5<"]) assert.ok(html.includes(text), text);
+  const mixed = renderToStaticMarkup(React.createElement(components.ReactionChips, {
+    feedback: { counts: { up: 1, heart: 3 }, mine: [], reactors: {} }, canWrite: true, busy: false, onToggle: () => {},
+  }));
+  assert.ok(mixed.indexOf("❤️") < mixed.indexOf("👍"), "the most used reaction comes first");
+  assert.ok(mixed.includes(">4<"), "the pill ends with the total");
+  assert.equal(renderToStaticMarkup(React.createElement(components.ReactionChips, {
+    feedback: { counts: { up: 0 }, mine: [] }, canWrite: true, busy: false, onToggle: () => {},
+  })), "");
 });
 
 test("only writable beta messages expose branching", () => {
@@ -75,7 +81,7 @@ test("readonly reaction chips remain focusable for name inspection without permi
   assert.match(html, /aria-disabled="true"/);
   assert.doesNotMatch(html, / disabled=/);
   assert.match(html, /Thumbs up: Benjamin Antieau/);
-  components.ReactionChips(props).props.children[0].props.onClick();
+  components.ReactionChips(props).props.children[0][0].props.onClick();
   assert.equal(toggles, 0);
 });
 

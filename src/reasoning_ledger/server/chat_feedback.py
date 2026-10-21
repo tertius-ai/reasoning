@@ -3,9 +3,9 @@
 import re
 import time
 
+from .reaction_emoji_schema import EMOJIS
 from .store import StoreError, _row
 
-EMOJIS = ("up", "down", "upside_down")
 MESSAGE_BATCH = 200
 
 

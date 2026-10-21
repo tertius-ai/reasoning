@@ -95,7 +95,7 @@ test("message links land on the message in long topics and # references stay acc
     assert.ok(!writes.some(write => write.path.endsWith("/read")), "opening a link does not acknowledge unseen newer messages");
 
     await linked.hover();
-    await linked.getByLabel("Message actions", { exact: true }).click();
+    await linked.hover(); await linked.getByLabel("Message actions", { exact: true }).click();
     await page.getByRole("menuitem", { name: "Copy link", exact: true }).click();
     await linked.getByText("Link copied.", { exact: true }).waitFor();
     const copied = await page.evaluate(() => window.__copied);

@@ -14,20 +14,12 @@ import { chromium } from "playwright";
 const repository = fileURLToPath(new URL("../../", import.meta.url));
 async function assertSingleLineReaction(message) {
   const layout = await message.getByLabel("Add reaction", { exact: true }).evaluate(button => {
-    const span = button.querySelector("span"), text = span.firstChild;
-    const range = document.createRange();
-    const characters = [0, 1].map(index => {
-      range.setStart(text, index); range.setEnd(text, index + 1);
-      const box = range.getBoundingClientRect();
-      return { top: box.top, left: box.left, right: box.right };
-    });
-    const box = button.getBoundingClientRect();
-    return { text: span.textContent, characters, left: box.left, right: box.right };
+    const icon = button.querySelector("svg").getBoundingClientRect(), box = button.getBoundingClientRect();
+    return { icon: [icon.left, icon.top, icon.right, icon.bottom], box: [box.left, box.top, box.right, box.bottom] };
   });
-  assert.equal(layout.text, ":)");
-  assert.equal(layout.characters[0].top, layout.characters[1].top, "the reaction launcher must stay on one line");
-  assert.ok(layout.characters[0].left >= layout.left && layout.characters[1].right <= layout.right,
-    "both reaction characters must fit inside the launcher");
+  const [left, top, right, bottom] = layout.icon, [boxLeft, boxTop, boxRight, boxBottom] = layout.box;
+  assert.ok(left >= boxLeft - .5 && top >= boxTop - .5 && right <= boxRight + .5 && bottom <= boxBottom + .5,
+    "the reaction icon must fit inside its launcher");
 }
 async function until(predicate) {
   const deadline = Date.now() + 25000;
@@ -158,7 +150,7 @@ test("ordinary beta conversation delegates, streams roles and integrates without
     });
     await final.getByLabel("Copy message", { exact: true }).click();
     assert.equal(await final.getByRole("alert").count(), 0);
-    await final.getByLabel("Add reaction", { exact: true }).click();
+    await final.hover(); await final.getByLabel("Add reaction", { exact: true }).click();
     await page.keyboard.press("ArrowDown");
     assert.equal(await page.getByRole("menuitemcheckbox", { name: "Thumbs down", exact: true }).evaluate(element => element === document.activeElement), true);
     await page.locator(".org-transcript").evaluate(element => { element.scrollTop = Math.max(0, element.scrollTop - 2); });
@@ -169,7 +161,7 @@ test("ordinary beta conversation delegates, streams roles and integrates without
       "menu repositioning must not reset keyboard focus");
     await page.keyboard.press("Escape");
     assert.equal(await page.getByRole("menu", { name: "Add reaction", exact: true }).count(), 0);
-    await final.getByLabel("Add reaction", { exact: true }).click();
+    await final.hover(); await final.getByLabel("Add reaction", { exact: true }).click();
     await page.getByLabel("Message", { exact: true }).click();
     assert.equal(await page.getByRole("menu", { name: "Add reaction", exact: true }).count(), 0);
     await final.hover(); await final.getByLabel("Add reaction", { exact: true }).click();
@@ -177,9 +169,9 @@ test("ordinary beta conversation delegates, streams roles and integrates without
     assert.equal(await page.getByRole("menu", { name: "Add reaction", exact: true }).count(), 0, "the picker closes immediately");
     await until(async () => (await call(root + "/model-feedback", undefined, "GET")).models
       .some(row => row.model === "fixture/model" && row.up === 1));
-    await final.locator(".chat-reactor-initials").waitFor();
-    assert.equal(await final.locator(".chat-reactor-initials").textContent(), "O");
-    assert.equal(await final.locator(".chat-reactor-initials").getAttribute("title"), "Owner");
+    await final.locator(".chat-reaction-pill").waitFor();
+    assert.equal(await final.locator(".chat-reaction-pill .chat-reaction-chip").textContent(), "👍");
+    assert.equal(await final.locator(".chat-reaction-pill .chat-reaction-chip").getAttribute("title"), "Thumbs up: Owner");
     await page.getByRole("button", { name: "Choose reply model", exact: true }).click();
     await page.getByRole("radio", { name: "fixture/new", exact: true }).click();
     const sourceId = await page.locator("article.org-message").filter({ hasText: "Please compare two approaches and consult a librarian and critic." }).getAttribute("id");
@@ -201,7 +193,7 @@ test("ordinary beta conversation delegates, streams roles and integrates without
       const box = button.getBoundingClientRect();
       return button.contains(document.elementFromPoint(box.x + box.width / 2, box.y + box.height / 2));
     }), true, "the message header must not intercept its action controls after history collapses");
-    await revisedSource.getByLabel("Message actions", { exact: true }).click();
+    await revisedSource.hover(); await revisedSource.getByLabel("Message actions", { exact: true }).click();
     await page.getByRole("menuitem", { name: "Fork here", exact: true }).click();
     await revisedSource.getByLabel("New beta-topic name").fill("Forked comparison");
     await revisedSource.getByRole("button", { name: "Create fork", exact: true }).click();
@@ -250,6 +242,7 @@ test("ordinary beta conversation delegates, streams roles and integrates without
     await answer.getByLabel("Copy message", { exact: true }).click();
     assert.equal(await page.evaluate(() => window.__copiedMessage), "Retained comparison answer for fixture/new");
     await answer.getByLabel("Add reaction", { exact: true }).click();
+    await page.getByRole("menuitem", { name: "More reactions", exact: true }).click();
     await page.getByRole("menuitemcheckbox", { name: "Upside-down smile", exact: true }).click();
     await until(async () => (await call(root + "/model-feedback", undefined, "GET")).models
       .some(row => row.model === "fixture/new" && row.upside_down === 1));
@@ -276,6 +269,7 @@ test("ordinary beta conversation delegates, streams roles and integrates without
       await mobileAnswer.getByLabel("Add reaction", { exact: true }).tap();
       await mobile.route("**/reactions/message/*", route => route.request().method() === "PUT"
         ? route.fulfill({ status: 503, contentType: "application/json", body: JSON.stringify({ detail: "Fixture reaction refused" }) }) : route.continue());
+      await mobile.getByRole("menuitem", { name: "More reactions", exact: true }).tap();
       await mobile.getByRole("menuitemcheckbox", { name: "Upside-down smile", exact: true }).tap();
       assert.equal(await mobile.getByRole("menu", { name: "Add reaction", exact: true }).count(), 0, "refused reactions still close the picker immediately");
       await mobileAnswer.getByRole("alert").waitFor();

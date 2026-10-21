@@ -1023,10 +1023,11 @@ class Store:
                        (organization_id, kind, entity_id, plan["name"], user_id, now, json.dumps(plan["counts"], sort_keys=True)))
             self._audit(db, organization_id, user_id, f"{kind}.delete", entity_id)
 
-    def post_message(self, user_id: str, organization_id: str, topic_id: str, content: str, client_id: str) -> dict[str, Any]:
+    def post_message(self, user_id: str, organization_id: str, topic_id: str, content: str, client_id: str,
+                     reply_to: str | None = None) -> dict[str, Any]:
         with self.transaction(write=True) as db:
             self._topic_access(db, user_id, organization_id, topic_id, write=True)
-            return self._post_message(db, user_id, organization_id, topic_id, content, client_id)
+            return self._post_message(db, user_id, organization_id, topic_id, content, client_id, reply_to=reply_to)
 
     def edit_message(self, user_id, organization_id, topic_id, message_id, content, revision):
         if not isinstance(content, str) or not content.strip() or len(content) > 16000 or type(revision) is not int or revision < 0:
@@ -1124,7 +1125,8 @@ class Store:
                 result["workflow_run_id"] = parent[0]
         return result
 
-    def _post_message(self, db, user_id, organization_id, topic_id, content, client_id, *, sender_kind="human") -> dict[str, Any]:
+    def _post_message(self, db, user_id, organization_id, topic_id, content, client_id, *, sender_kind="human",
+                      reply_to=None) -> dict[str, Any]:
         # Callers must authorize the principal and topic inside this same transaction.
         existing = db.execute(
             "SELECT m.*,u.name AS sender_name FROM messages m JOIN users u ON u.id=m.author_id "
@@ -1134,13 +1136,19 @@ class Store:
         if existing:
             original = db.execute("SELECT content FROM message_revisions WHERE message_id=? AND revision=0", (existing["id"],)).fetchone()
             original_content = original[0] if original else existing["content"]
-            if existing["topic_id"] != topic_id or original_content != content or existing["sender_kind"] != sender_kind:
+            if (existing["topic_id"] != topic_id or original_content != content or existing["sender_kind"] != sender_kind
+                    or existing["reply_to"] != reply_to):
                 raise StoreError(409, "client_id was already used for a different message")
             return self._message(existing)
+        # A reply names a message of the same topic, so it never reveals or links across topics.
+        if reply_to is not None and not db.execute("SELECT 1 FROM messages WHERE organization_id=? AND topic_id=? AND id=?",
+                                                   (organization_id, topic_id, reply_to)).fetchone():
+            raise StoreError(400, "a reply must answer a message in the same topic")
         message_id = _id()
         db.execute(
-            "INSERT INTO messages(id,organization_id,topic_id,author_id,content,client_id,created_at,sender_kind) VALUES(?,?,?,?,?,?,?,?)",
-            (message_id, organization_id, topic_id, user_id, content, client_id, int(time.time()), sender_kind),
+            "INSERT INTO messages(id,organization_id,topic_id,author_id,content,client_id,created_at,sender_kind,reply_to) "
+            "VALUES(?,?,?,?,?,?,?,?,?)",
+            (message_id, organization_id, topic_id, user_id, content, client_id, int(time.time()), sender_kind, reply_to),
         )
         for mentioned in sorted(set(re.findall(r"@\[([a-f0-9]{32})(?::[A-Za-z0-9][A-Za-z0-9._/-]{0,99})?\]", content))):
             if db.execute("SELECT 1 FROM memberships WHERE organization_id=? AND user_id=?", (organization_id, mentioned)).fetchone():

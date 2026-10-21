@@ -1,8 +1,6 @@
 .chat-message-actions { display:flex; gap:.5rem; align-items:center; flex-wrap:wrap; }
 .chat-reactions { display:inline-flex; gap:.15rem; align-items:center; }
-.chat-reactions:has(.chat-reaction-chip) { margin-top:.25rem; }
 .org-message,.org-model-run,.org-comparison-answer { position:relative; isolation:isolate; }
-.org-message > header { padding-right:5.5rem; }
 .org-model-run > summary,.org-comparison-answer > summary { padding-right:4rem; }
 .chat-action-launcher { position:absolute; right:.25rem; top:.25rem; width:1.75rem; min-height:1.75rem; padding:0; display:grid; place-items:center;
   z-index:1; opacity:0; pointer-events:none; border:0; background:transparent; color:var(--muted); }
@@ -13,14 +11,17 @@
 .chat-has-fork.chat-has-copy .chat-reaction-launcher { right:3.75rem; }
 .org-app .chat-copy-launcher { border:0; padding:0; background:transparent; box-shadow:none; }
 .org-app .chat-fork-launcher { border:0; padding:0; background:transparent; box-shadow:none; }
-.org-message.org-message-continuation > header > time { right:5.75rem; top:.25rem; white-space:nowrap; }
+/* Reply sits left of the menu; the reaction launcher and the header's reserved space move one slot further. */
+.org-app .chat-reply-launcher { right:3.75rem; border:0; padding:0; background:transparent; box-shadow:none; font-size:15px; }
+.chat-has-reply.chat-has-fork.chat-has-copy .chat-reaction-launcher { right:5.5rem; }
+.org-message.org-message-continuation > header > time { right:.5rem; top:.25rem; white-space:nowrap; }
 .chat-reaction-launcher,.org-app .chat-reaction-launcher,.org-app .chat-reaction-launcher:hover,.org-app .chat-reaction-launcher:focus-visible {
   padding:0; border:0; background:transparent; box-shadow:none; font:14px var(--font-mono); white-space:nowrap; overflow-wrap:normal;
 }
 .org-message:hover > .chat-message-actions .chat-action-launcher,
-.org-message:focus-within > .chat-message-actions .chat-action-launcher,
-.org-model-run:hover .chat-action-launcher,.org-model-run:focus-within .chat-action-launcher,
-.org-comparison-answer:hover .chat-action-launcher,.org-comparison-answer:focus-within .chat-action-launcher,
+.org-message:has(:focus-visible) > .chat-message-actions .chat-action-launcher,
+.org-model-run:hover .chat-action-launcher,.org-model-run:has(:focus-visible) .chat-action-launcher,
+.org-comparison-answer:hover .chat-action-launcher,.org-comparison-answer:has(:focus-visible) .chat-action-launcher,
 .chat-action-launcher:focus-visible,.chat-action-launcher[aria-expanded=true] { opacity:1; pointer-events:auto; }
 .chat-action-menu { position:fixed; width:176px; padding:.25rem; z-index:100; border:1px solid var(--border);
   max-height:calc(100dvh - 16px); overflow-y:auto;
@@ -47,3 +48,27 @@
 .chat-feedback-table table { width:100%; border-collapse:collapse; font-size:.8rem; }
 .chat-feedback-table th,.chat-feedback-table td { padding:.2rem .4rem; text-align:right; border-bottom:1px solid #8883; }
 .chat-feedback-table th:first-child { text-align:left; overflow-wrap:anywhere; }
+
+/* Message actions float in one toolbar above the message's top-right corner, so they never cover its text.
+   Each launcher keeps its slot; the toolbar is as wide as the slots in use. */
+.chat-has-copy { --slot-copy:1; } .chat-has-fork { --slot-menu:1; } .chat-has-reply { --slot-reply:1; } .chat-has-react { --slot-react:1; }
+.org-message > .chat-message-actions .chat-action-launcher { top:-13px; z-index:2; }
+/* Keyboard focus shows the toolbar; focus a mouse click leaves behind (a closed thread or menu returns it here) does not. */
+.org-message:is(:hover,:has(:focus-visible)) > .chat-message-actions::before { content:""; position:absolute; top:-15px; right:0; z-index:1;
+  width:calc((var(--slot-copy,0) + var(--slot-menu,0) + var(--slot-reply,0) + var(--slot-react,0)) * 1.75rem + .5rem); height:calc(1.75rem + 4px);
+  box-sizing:border-box; border:1px solid var(--border-strong); border-radius:var(--radius-control); background:var(--surface-raised); box-shadow:0 4px 14px rgba(0,0,0,.25); }
+.org-message > .chat-message-actions .chat-action-launcher:hover { background:var(--accent-dim); }
+/* Reactions: one pill pinned to the message's bottom-right edge, as in Signal. */
+.chat-reaction-pill { display:inline-flex; align-items:center; gap:1px; padding:1px 7px; border:2px solid var(--background); border-radius:var(--radius-pill);
+  background:var(--surface-raised); font-size:13px; line-height:18px; white-space:nowrap; }
+.org-app .chat-reaction-pill .chat-reaction-chip { min-height:0; padding:0 1px; border:0; border-radius:50%; background:transparent; font-size:13px; line-height:18px; }
+.org-app .chat-reaction-pill .chat-reaction-chip[aria-pressed=true] { background:color-mix(in srgb, var(--teal) 28%, transparent); }
+.chat-reaction-total { margin-left:3px; color:var(--muted); font:11px var(--font-mono); }
+.org-message .chat-reaction-pill { position:absolute; right:10px; bottom:-11px; z-index:1; }
+.org-message:has(.chat-reaction-pill) { margin-bottom:12px; }
+/* The reaction picker: six quick reactions and "+" in a bar; "+" opens every reaction in a grid. */
+.chat-action-menu.chat-reaction-menu { width:max-content; display:flex; gap:2px; padding:4px 6px; border-radius:var(--radius-pill); }
+.chat-action-menu.chat-reaction-menu-all { display:grid; grid-template-columns:repeat(8, 2rem); border-radius:var(--radius-card); }
+.chat-reaction-menu button { width:2rem; min-height:2rem; justify-content:center; padding:0; border-radius:50%; font-size:18px; }
+.chat-reaction-menu button[aria-checked=true] { background:color-mix(in srgb, var(--teal) 28%, transparent); color:inherit; }
+.chat-reaction-menu .chat-reaction-more { border:1px solid var(--border-strong); color:var(--muted); font-size:16px; }

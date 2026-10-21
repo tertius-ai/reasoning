@@ -19,6 +19,7 @@ from reasoning_ledger.server import backup, maintenance, schema_operations
 from reasoning_ledger.server import store as store_module
 from reasoning_ledger.server.migrations import MIGRATIONS
 from reasoning_ledger.server.postgres import migration as postgres_migration
+from reasoning_ledger.server.reaction_emoji_schema import SCHEMA as REACTION_EMOJI_SCHEMA
 from reasoning_ledger.server.source_statements_schema import SCHEMA as INDEX_SCHEMA
 from reasoning_ledger.server.store import Store
 from reasoning_ledger.server.workbench_schema import SCHEMA as RECORD_SCHEMA
@@ -61,9 +62,13 @@ def released_operation():
     """Simulate the exact supported schema-operation shape in a retained target archive."""
     source = inspect.getsource(schema_operations.sqlite_migration)
     branch = "    if statement == CLAIM_INDEX:\n        repair_claim_index(db)\n        return\n"
-    assert branch in source
+    # Later operations (the reaction emoji check) did not exist in that release either.
+    later = ("    if statement == REACTION_EMOJI_DROP:\n        _reaction_check(db, \"\")\n        return\n"
+             "    if statement == REACTION_EMOJI_ADD:\n"
+             "        _reaction_check(db, statement[statement.index(\" CHECK(\"):])\n        return\n")
+    assert branch in source and later in source
     namespace = dict(vars(schema_operations))
-    exec(compile(source.replace(branch, "", 1), "<retained-schema-operation>", "exec"), namespace)
+    exec(compile(source.replace(branch, "", 1).replace(later, "", 1), "<retained-schema-operation>", "exec"), namespace)
     operation = namespace["sqlite_migration"]
     assert operation.__code__.co_names == ("PROJECT_ARTIFACTS", "PROJECT_COMPUTE", "execute", "fetchone", "ValueError", "_project_compute")
     return operation
@@ -98,8 +103,12 @@ def test_schema_52_upgrade_with_populated_cited_claims_keeps_backup_and_resumes(
     original_key = (root / "encryption.key").read_bytes()
     release, operation = "a" * 64, "b" * 64
     options = {"source_schema": 52, "target_release": release, "operation_id": operation, "source_stopped": True}
-    if retained_target:
-        with monkeypatch.context() as target:
+    # A retained release that predates later schema operations also predates their migrations.
+    target_migrations = MIGRATIONS[:MIGRATIONS.index(REACTION_EMOJI_SCHEMA)] if retained_target else MIGRATIONS
+    with monkeypatch.context() as target:
+        for module in (store_module, backup, maintenance):
+            target.setattr(module, "MIGRATIONS", target_migrations)
+        if retained_target:
             old_operation = released_operation()
             for module in (schema_operations, maintenance, backup):
                 target.setattr(module, "sqlite_migration", old_operation)
@@ -110,10 +119,10 @@ def test_schema_52_upgrade_with_populated_cited_claims_keeps_backup_and_resumes(
                 exec(compile(MIGRATION_RUNNER, "<verified-migration-runner>", "exec"), {})
             assert exited.value.code == 0
             result = json.loads(output.getvalue())
-    else:
-        result = maintenance.migrate(root, archive, key, original["sha256"], **options)
-    assert result["phase"] == "migrated"
-    assert maintenance.migrate(root, archive, key, original["sha256"], **options) == result
+        else:
+            result = maintenance.migrate(root, archive, key, original["sha256"], **options)
+        assert result.get("phase") == "migrated", result
+        assert maintenance.migrate(root, archive, key, original["sha256"], **options) == result
     assert hashlib.sha256(archive.read_bytes()).hexdigest() == original_archive
     assert (root / "encryption.key").read_bytes() == original_key
     with sqlite3.connect(root / "server.sqlite3") as db:
@@ -122,7 +131,7 @@ def test_schema_52_upgrade_with_populated_cited_claims_keeps_backup_and_resumes(
         for old, new in zip(before, after, strict=True):
             assert old[:3] + old[4:] == new[:3] + new[4:]
             assert new[3] == (claim["claim_id"] if old[2] in {"claim-head", "claim-revision"} else old[3])
-        assert db.execute("PRAGMA user_version").fetchone()[0] == len(MIGRATIONS)
+        assert db.execute("PRAGMA user_version").fetchone()[0] == len(target_migrations)
         assert db.execute("PRAGMA foreign_key_check").fetchall() == []
         with pytest.raises(sqlite3.IntegrityError, match="immutable"):
             db.execute("UPDATE mathematical_records SET body_json='{}' WHERE record_type='claim-revision'")

@@ -145,15 +145,20 @@
 .org-account-menu > summary > span:first-child { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .org-account-options { position: absolute; bottom: calc(100% + 7px); left: 0; width: 250px; max-width: 82vw; overflow: hidden; border: 1px solid var(--border-strong); border-radius: var(--radius-card); background: var(--surface-raised); box-shadow: var(--shadow-overlay); z-index: 30; }
 .org-account-options { padding: 5px; }
-.org-account-options > header { display: flex; flex-direction: column; gap: 1px; padding: 2px 7px 4px; font-size: 12px; }
+.org-account-options > header { display: flex; flex-direction: column; gap: 1px; margin: 0 -5px; padding: 2px 12px 5px; border-bottom: 1px solid var(--border); font-size: 12px; }
 .org-account-options > header strong { font-weight: 500; }
 .org-account-options > header small { color: var(--muted); font-size: 11px; overflow-wrap: anywhere; }
 .org-account-options section { margin: 4px -5px 0; padding: 4px 5px 0; border-top: 1px solid var(--border); }
 .org-account-options button { display: flex; align-items: center; gap: 7px; width: 100%; min-height: 22px; padding: 2px 7px; border-color: transparent; border-radius: 8px; text-align: left; font-size: 12px; }
 .org-account-options button kbd { margin-left: auto; padding: 0 4px; border: 1px solid var(--border-strong); border-radius: 4px; color: var(--muted); font: 10px/14px var(--font-mono); }
 .org-account-mark { width: 14px; flex: none; color: var(--muted); text-align: center; }
-.org-account-options .org-org-selector { display: block; width: 100%; padding: 4px 2px; border-top: 1px solid var(--border); margin-top: 0; }
-.org-account-options .org-org-selector select { width: 100%; min-height: 24px; font-size: 12px; }
+/* The organization switch is a menu row: a mark, the current organization, and a chevron close to the text's end. */
+.org-account-options .org-org-selector { position: relative; display: flex; align-items: center; gap: 7px; width: 100%; margin: 4px 0 0; padding: 0 7px;
+  border-radius: 8px; box-sizing: border-box; font-size: 12px; cursor: pointer; }
+.org-account-options .org-org-selector:hover { background: var(--accent-dim); }
+.org-account-options .org-org-selector select { flex: 1; min-width: 0; min-height: 22px; padding: 0 18px 0 0; border: 0; background: transparent; color: inherit;
+  font: inherit; appearance: none; -webkit-appearance: none; cursor: pointer; }
+.org-org-selector-arrow { position: absolute; right: 9px; top: 50%; transform: translateY(-62%); color: var(--muted); pointer-events: none; }
 .org-account-signout { display: flex; align-items: center; }
 .org-account-signout > button { flex: 1; }
 .org-account-signout > a { flex: none; padding: 0 7px; color: var(--muted); font-size: 11px; white-space: nowrap; }
@@ -278,7 +283,13 @@ a.org-reference:hover, a.org-reference:focus-visible { text-decoration: underlin
 .org-pending-request small { color: var(--muted); margin-top: 3px; }
 .org-pending-actions { display: flex; flex-wrap: wrap; gap: 8px; }
 .org-app .org-older { display: block; margin: 0 auto 18px; color: var(--muted); }
-.org-app .org-jump { position: absolute; bottom: 12px; right: max(16px, calc((100% - 900px) / 2)); display: grid; place-items: center; width: 34px; height: 34px; padding: 0; border-radius: 50%; background: transparent; color: var(--blue); z-index: 2; backdrop-filter: blur(3px); }
+/* Newest message, as in Signal: a raised round button with a down chevron and the count of new messages. */
+.org-app .org-jump { position: absolute; bottom: 14px; right: max(16px, calc((100% - 900px) / 2)); display: grid; place-items: center; width: 36px; height: 36px;
+  padding: 0; border: 1px solid var(--border-strong); border-radius: 50%; background: var(--surface-raised); color: var(--foreground); z-index: 2;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, .35); }
+.org-app .org-jump:hover { background: var(--surface-raised); border-color: var(--muted); }
+.org-jump-count { position: absolute; top: -6px; right: -6px; min-width: 16px; height: 16px; padding: 0 4px; box-sizing: border-box; border-radius: var(--radius-pill);
+  background: var(--teal); color: var(--background); font: 600 10px/16px var(--font-mono); text-align: center; }
 .org-reconnecting { font-size: 11px; color: var(--amber); margin: 3px 16px; }
 .org-composer { margin: 0 max(16px, calc((100% - 900px) / 2)) 12px; border: 1px solid var(--border-strong); border-radius: var(--radius-composer); padding: 8px; position: relative; flex: none; }
 .org-composer textarea { background: transparent; border: none; resize: none; width: 100%; min-height: 24px; max-height: 240px; color: var(--foreground); padding: 0 4px; font: 14px/1.6 var(--font-sans); box-sizing: border-box; }
@@ -442,10 +453,39 @@ a.org-reference:hover, a.org-reference:focus-visible { text-decoration: underlin
 .org-message-group > .org-message:first-child > header { margin-left: -17px; gap: 8px; font-size: 12px; }
 .org-message-group > .org-message:first-child > header::before { content: ""; width: 8px; height: 8px; flex: none; align-self: center; border-radius: 50%; background: var(--speaker-tone); }
 .org-message-group > .org-message:first-child > header strong { font-weight: 600; }
+/* A reply: a pointer to the message it answers, joined to the speaker's dot by a curve in the gutter. */
+.org-app .org-reply-pointer { display: flex; align-items: baseline; gap: 6px; max-width: 100%; min-height: 0; margin: 0 0 2px; padding: 0; border: 0;
+  background: transparent; color: var(--muted); font-size: 11px; line-height: 16px; text-align: left; white-space: nowrap; overflow: hidden; cursor: pointer; }
+.org-app .org-reply-pointer:hover, .org-app .org-reply-pointer:focus-visible { background: transparent; color: var(--foreground); }
+.org-reply-pointer strong { flex: none; color: var(--foreground); font-weight: 500; }
+.org-reply-pointer > span:last-child { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.org-message:has(> .org-reply-pointer)::after { content: ""; position: absolute; left: 6.25px; top: 10px; width: 10px; height: 11px; box-sizing: border-box;
+  border: solid color-mix(in srgb, var(--speaker-tone, var(--teal)) 60%, transparent); border-width: 1.5px 0 0 1.5px; border-top-left-radius: 6px; pointer-events: none; }
+.org-message-group:has(> .org-message:first-child > .org-reply-pointer)::before { top: 42px; }
+.org-reply-bar { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; padding: 0 2px 6px; border-bottom: 1px solid var(--border); color: var(--muted); font-size: 11px; }
+.org-reply-bar > span:first-child { color: var(--teal); }
+.org-reply-bar-text { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.org-reply-bar strong { color: var(--foreground); font-weight: 500; }
+.org-app .org-reply-bar button { width: 22px; min-height: 22px; padding: 0; border-color: transparent; background: transparent; color: var(--muted); }
+/* The whole thread over a dimmed conversation. */
+.org-thread-dialog { width: min(560px, calc(100vw - 32px)); max-height: min(80vh, 720px); padding: 12px 14px; border: 1px solid var(--border-strong);
+  border-radius: var(--radius-card); background: var(--surface); color: var(--foreground); box-shadow: var(--shadow-overlay); }
+.org-thread-dialog[open] { display: flex; flex-direction: column; gap: 8px; }
+.org-thread-dialog::backdrop { background: rgba(0, 0, 0, .55); }
+.org-thread-dialog > header { display: flex; align-items: center; gap: 8px; padding: 0 0 8px 3px; border-bottom: 1px solid var(--border); }
+.org-thread-dialog > header strong { font-size: 13px; font-weight: 600; }
+.org-thread-dialog > header small { color: var(--muted); font-size: 11px; }
+.org-app .org-thread-dialog > header button, .org-thread-dialog > header button { width: 24px; min-height: 24px; margin-left: auto; padding: 0; }
+.org-thread-messages { flex: 1; min-height: 0; overflow-y: auto; }
+.org-thread-composer { display: flex; align-items: flex-end; gap: 8px; padding: 6px 8px; border: 1px solid var(--border-strong); border-radius: var(--radius-composer); }
+.org-thread-composer:focus-within { border-color: var(--blue); }
+.org-thread-composer textarea { flex: 1; min-height: 24px; padding: 2px 4px; border: none; background: transparent; color: var(--foreground); resize: none; font: 13px/1.5 var(--font-sans); }
+.org-thread-composer textarea:focus { outline: none; }
+.org-thread-composer button { flex: none; width: 30px; min-height: 28px; padding: 0; }
 .org-message-group .org-message-continuation { padding-top:0; }
 .org-message-continuation > header { height:0; position:relative; margin:0; }
 .org-message-continuation > header > time { position:absolute; right:0; top:3px; opacity:0; }
-.org-message-continuation:hover > header > time, .org-message-continuation:focus-within > header > time { opacity:1; }
+.org-message-continuation:hover > header > time, .org-message-continuation:has(:focus-visible) > header > time { opacity:1; }
 .org-message-day { text-align:center; color:var(--muted); font-size:11px; margin:16px 0 8px; }
 .org-project > summary, .org-app .org-channel-name { display: flex; align-items: center; }
 .org-tree-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -758,3 +798,10 @@ a.org-reference:hover, a.org-reference:focus-visible { text-decoration: underlin
   .org-workflow-heading > div:last-child { width: 100%; }
   .org-workflow-heading > div:last-child button { flex: 1; }
 }
+
+.org-appbar-brand { display: flex; flex: none; align-items: center; gap: 8px; }
+@media (min-width: 701px) {
+  .org-appbar-brand-open { width: 270px; align-self: stretch; margin: -6px 4px -6px -12px; padding: 0 12px; box-sizing: border-box;
+    border-right: 1px solid var(--border); background: var(--surface); }
+}
+@media (min-width: 701px) and (max-width: 1000px) { .org-appbar-brand-open { width: 235px; } }
