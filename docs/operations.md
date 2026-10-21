@@ -92,9 +92,15 @@ byte-for-byte. Activation uses normal worker recovery, retaining unknown inferen
 without replaying interrupted model requests. Retained targets use the same
 recognized worker-guard compatibility path for migration and prepared-state
 verification. Active external compute workers, running/unknown compute jobs,
-unresolved non-LLM workflow execution and missing/mismatched inference children
-still refuse preparation. No charge or external computation is declared settled
-by this path.
+unresolved non-LLM workflow execution and missing/mismatched model children
+still refuse preparation. Model nodes may use either an inference child or a
+bot child in the same organization. Bot children must have a terminal receipt
+(`succeeded`, `failed`, `cancelled`, or `outcome_unknown`); active bot children
+still refuse preparation. Unknown bot outcomes and workflow cancellation records
+remain unchanged, and neither migration nor startup replays those invocations.
+Current operator tooling recognizes the retained target's worker guard and applies
+this check in memory when resuming its exact original archive and operation.
+No charge or external computation is declared settled by this path.
 Rollback and replacement-recovery receipt validators accept the optional
 `work_workers_revoked` fencing count as well as `workflow_runs_held`; unknown
 fields, Boolean counts and negative counts remain refused.
