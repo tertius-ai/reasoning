@@ -611,16 +611,24 @@ def create_app(config: Config, *, provider: OpenRouter | None = None, mail_provi
 
     @app.get("/api/health")
     def health():
-        return {
-            "status": "ok",
-            "initialized": store.initialized(),
+        workers = {
+            "inference_worker_running": worker.running,
+            "workflow_worker_running": workflow_worker.running,
+            "webhook_worker_running": webhook_worker.running,
             **({"mail_worker_running": mail_worker.running} if config.mail is not None else {}),
+        }
+        ready = all(running for name, running in workers.items() if name != "inference_worker_running" or config.inference_enabled)
+        return JSONResponse({
+            "status": "ok" if ready else "degraded",
+            "initialized": store.initialized(),
+            "inference_enabled": config.inference_enabled,
+            **workers,
             "release_id": config.deployment_release,
             "source_revision": release["source_revision"],
             "source_modified": release["source_modified"],
             "schema_version": len(MIGRATIONS),
             "uptime_seconds": int(time.monotonic() - started),
-        }
+        }, status_code=200 if ready else 503)
 
     @app.exception_handler(ProviderError)
     async def provider_error(_request: Request, exc: ProviderError):

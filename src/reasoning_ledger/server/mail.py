@@ -17,6 +17,7 @@ import httpx
 
 from .security import private_file
 from .store import Store, StoreError
+from .worker_poll import claim_work
 
 MAIL_ENDPOINT = "https://api.resend.com/emails"
 
@@ -378,7 +379,7 @@ class MailWorker:
             raise
 
     async def execute_once(self):
-        row = self.state.claim()
+        row = claim_work(self.state.claim)
         if row is None:
             return False
         try:

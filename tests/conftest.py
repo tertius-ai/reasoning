@@ -64,6 +64,7 @@ DEPLOYMENT_TESTS = {
     "test_public_dns.py",
     "test_public_feature_surface.py",
     "test_public_inference.py",
+    "test_public_worker_resilience.py",
     "test_public_model_benchmarks.py",
     "test_public_model_preferences.py",
     "test_public_responsiveness.py",

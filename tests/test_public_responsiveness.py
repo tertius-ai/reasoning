@@ -127,10 +127,12 @@ def test_concurrent_browsing_offloads_database_and_rechecks_authority_on_cached_
 
     async def scenario():
         nonlocal loop_thread
-        loop_thread = threading.get_ident()
         root = "/api/organizations/" + owner["organization_id"]
         headers = {"Authorization": "Bearer " + owner["access_token"]}
-        async with httpx.AsyncClient(transport=httpx.ASGITransport(app), base_url=config.public_url, headers=headers) as client:
+        async with app.router.lifespan_context(app), httpx.AsyncClient(
+            transport=httpx.ASGITransport(app), base_url=config.public_url, headers=headers
+        ) as client:
+            loop_thread = threading.get_ident()
             paths = [root + suffix for suffix in (
                 "/inference-configuration", "/model-prices", "/model-benchmarks", "/my-bots",
                 "/topics/" + topics[0]["id"] + "/messages",

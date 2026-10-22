@@ -8,6 +8,7 @@ import time
 
 from .research_context import encoded
 from .store import StoreError, _id, _row
+from .worker_poll import database_busy
 
 RECOVERABLE_TURN_ERRORS = {
     "agent_empty_response", "agent_invalid_tool_arguments", "agent_tool_limit", "output_token_limit", "agent_incomplete",
@@ -329,7 +330,9 @@ class ResearchGoals:
                 if exc.status in {425, 429}:
                     continue
                 self.stop(goal["id"], "budget_limited" if "budget" in exc.message else "blocked", exc.message)
-            except Exception:
+            except Exception as exc:
+                if database_busy(exc):
+                    raise
                 self.stop(goal["id"], "blocked", "model quote unavailable; resume after reviewing the provider")
 
     def _check(self, goal):

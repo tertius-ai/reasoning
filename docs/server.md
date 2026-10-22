@@ -412,12 +412,18 @@ Validation errors omit input values and arbitrary extra-field names. Responses
 disable caching; access logging is disabled by the CLI.
 
 `GET /api/health` is public and reads no organization data. It returns `status`
-(`"ok"`), `initialized`, `mail_worker_running` (only when mail is configured),
+(`"ok"` or `"degraded"`), `initialized`, `inference_enabled`,
+`inference_worker_running`, `workflow_worker_running`, `webhook_worker_running`,
+`mail_worker_running` (only when mail is configured),
 `release_id`, `source_revision`, `source_modified`, `schema_version` (the number
 of applied server migrations), and `uptime_seconds` (whole seconds since the
 application was created). `release_id` is the `--deployment-release` manifest
 digest, also sent as `X-Reasoning-Release` on every response, or null without
-one.
+one. Healthy workers return HTTP 200. A stopped required worker returns HTTP 503
+with `status: "degraded"`, including before startup and after shutdown. Explicitly
+disabled inference does not count as a worker failure. Queue polling retries
+SQLite busy/locked errors after rollback; it does not replay provider calls or
+deliveries with uncertain outcomes.
 `source_revision` is the 40- or 64-character commit recorded in the release's
 `manifest.json` beside `--frontend-dir`, and `source_modified` is that manifest's
 uncommitted-changes flag; both are null unless the manifest's SHA-256 equals

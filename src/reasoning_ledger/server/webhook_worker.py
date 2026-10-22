@@ -8,6 +8,7 @@ import threading
 from .security import private_file
 from .webhook_store import _eligible
 from .webhook_transport import WebhookError, WebhookTransport
+from .worker_poll import claim_work
 
 
 class WebhookWorker:
@@ -54,7 +55,7 @@ class WebhookWorker:
             )
 
     async def execute_once(self):
-        row = self.state.claim()
+        row = claim_work(self.state.claim)
         if row is None:
             return False
         try:

@@ -9,6 +9,7 @@ import threading
 
 from .openrouter import ProviderError
 from .security import private_file
+from .worker_poll import claim_work, database_poll
 from .workflow_runs import WorkflowRuns
 
 
@@ -87,7 +88,7 @@ class WorkflowWorker:
     async def _dispatch(self):
         cursor = 0
         while not self._stop.is_set():
-            page = self.state.active(cursor)
+            page = claim_work(lambda cursor=cursor: self.state.active(cursor))
             if not page:
                 cursor = 0
                 await asyncio.sleep(0.25)
@@ -95,6 +96,7 @@ class WorkflowWorker:
             for row in page:
                 if self._stop.is_set():
                     break
-                await self.execute_once(row["id"])
+                with database_poll():
+                    await self.execute_once(row["id"])
                 cursor = row["sequence"]
             await asyncio.sleep(0.25)

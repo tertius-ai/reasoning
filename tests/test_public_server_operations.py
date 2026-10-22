@@ -576,7 +576,9 @@ def test_transport_timeout_kills_and_reaps_its_owned_child(monkeypatch):
     assert processes[0].stdin.closed and processes[0].stdout.closed
 
 
-UNKNOWN_SOURCE = {"source_revision": None, "source_modified": None, "schema_version": len(MIGRATIONS)}
+IDLE_WORKERS = {"inference_enabled": False, "inference_worker_running": False,
+                "workflow_worker_running": True, "webhook_worker_running": True}
+UNKNOWN_SOURCE = {"source_revision": None, "source_modified": None, "schema_version": len(MIGRATIONS), **IDLE_WORKERS}
 
 
 def health_without_uptime(response) -> dict:
@@ -631,6 +633,7 @@ def test_public_health_reports_source_revision_only_from_the_verified_release_ma
         assert health_without_uptime(response) == {
             "status": "ok", "initialized": False, "release_id": release, "source_revision": "b" * 40,
             "source_modified": dirty, "schema_version": len(MIGRATIONS),
+            **IDLE_WORKERS,
         }
         assert "private" not in response.text and str(tmp_path) not in response.text
         # The manifest is read once at startup; later changes to the file do not alter the reported identity.

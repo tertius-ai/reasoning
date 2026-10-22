@@ -728,7 +728,8 @@ def test_public_server_cli_starts_and_serves_real_http(tmp_path):
             assert type(health.pop("uptime_seconds")) is int and type(health.pop("schema_version")) is int
             # A server started without --deployment-release reports no release or commit.
             assert health == {"status": "ok", "initialized": False, "release_id": None,
-                              "source_revision": None, "source_modified": None}
+                              "source_revision": None, "source_modified": None, "inference_enabled": True,
+                              "inference_worker_running": True, "workflow_worker_running": True, "webhook_worker_running": True}
             result = client.post(
                 "/api/setup",
                 json={

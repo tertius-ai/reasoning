@@ -17,6 +17,7 @@ from .inference_timing import Spans
 from .openrouter import OpenRouter, ProviderError, Quote
 from .security import private_file
 from .store import StoreError
+from .worker_poll import claim_work, database_poll
 
 logger = logging.getLogger(__name__)
 DEFAULT_AGENT_CONCURRENCY = 8
@@ -91,7 +92,7 @@ class InferenceWorker:
                     task.result()
                 tasks -= finished
                 while len(tasks) < self.concurrency and not self._stop.is_set():
-                    row = self.state.claim()
+                    row = await asyncio.to_thread(claim_work, self.state.claim)
                     if row is None:
                         break
                     tasks.add(asyncio.create_task(self._execute(row, spans=Spans("worker"))))
@@ -113,8 +114,9 @@ class InferenceWorker:
                 await asyncio.to_thread(TopicAgents(self.state, self.compute).dispatch)
             except Exception:
                 logger.warning("topic-agent handoffs unavailable; retained state will be retried")
-            await ResearchReviews(self.state).dispatch(self.provider, stopped=self._stop.is_set)
-            await ResearchGoals(self.state).dispatch(self.provider, stopped=self._stop.is_set)
+            with database_poll():
+                await ResearchReviews(self.state).dispatch(self.provider, stopped=self._stop.is_set)
+                await ResearchGoals(self.state).dispatch(self.provider, stopped=self._stop.is_set)
             await asyncio.sleep(1)
 
     async def _execute(self, row: dict, *, spans: Spans | None = None) -> None:

@@ -563,9 +563,11 @@ def test_real_health_exposes_only_worker_liveness_not_mail_configuration(tmp_pat
         async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="https://chat.example.org") as client:
             result = await client.get("/api/health")
             assert {key: result.json()[key] for key in ("status", "initialized", "mail_worker_running")} == {
-                "status": "ok", "initialized": False, "mail_worker_running": False}
+                "status": "degraded", "initialized": False, "mail_worker_running": False}
+            assert result.status_code == 503
             async with app.router.lifespan_context(app):
                 result = await client.get("/api/health")
+                assert result.status_code == 200 and result.json()["status"] == "ok"
                 assert result.json()["mail_worker_running"] is True
             assert CONFIG.api_key not in result.text and CONFIG.sender not in result.text
 

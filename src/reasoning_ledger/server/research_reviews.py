@@ -13,6 +13,7 @@ from .model_recommendations import SHORTLIST
 from .openrouter import ProviderError
 from .research_context import encoded
 from .store import StoreError, _id
+from .worker_poll import database_busy
 
 REVIEW_PROMPT_VERSION = "mathematical-review-v1"
 REVIEW_PROMPT = """You are an independent adversarial mathematical reviewer in fresh context.
@@ -302,6 +303,8 @@ class ResearchReviews:
                     if goal:
                         ResearchGoals.event(db, goal["id"], None, {"type": "review", "run_id": runs[0]["id"], "review_id": review["id"]})
             except Exception as exc:
+                if database_busy(exc):
+                    raise
                 # Admission errors contain server-authored guidance, never raw
                 # provider response bodies or private proof material.
                 reason = (
