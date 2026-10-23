@@ -49,6 +49,39 @@ def listing(people, who):
     return response.json()
 
 
+def test_reactions_are_private_idempotent_replaceable_and_incrementally_visible(people):
+    direct = conversation(people)
+    message = post(people, direct["id"], SECRET, "reactions").json()
+    root = people["root"] + f"/direct-conversations/{direct['id']}"
+    path = root + f"/messages/{message['id']}/reactions"
+    first, second = people["first"], people["second"]
+    assert second.put(path, json={"emoji": "heart", "active": True}).json()["mine"] == ["heart"]
+    update = first.get(root + "/message-updates").json()
+    assert update["reaction_after"] > 0 and update["messages"][0]["reactions"]["counts"] == {"heart": 1}
+    assert update["messages"][0]["reactions"]["mine"] == []
+    assert second.put(path, json={"emoji": "heart", "active": True}).status_code == 200
+    assert first.get(root + "/message-updates", params={"reaction_after": update["reaction_after"]}).json()["messages"] == []
+    for outsider in (people["owner"], people["admin"]):
+        assert outsider.get(path).status_code == 404
+        assert outsider.put(path, json={"emoji": "up", "active": True}).status_code == 404
+    assert second.put(path, json={"emoji": "eyes", "active": True}).json()["counts"] == {"eyes": 1}
+    assert second.put(path, json={"emoji": "heart", "active": False}).json()["mine"] == ["eyes"]
+    assert first.put(path, json={"emoji": "eyes", "active": True}).json()["counts"] == {"eyes": 2}
+    latest = first.get(root + "/message-updates").json()["reaction_after"]
+    second.put(path, json={"emoji": "eyes", "active": False}).raise_for_status()
+    removed = first.get(root + "/message-updates", params={"reaction_after": latest}).json()
+    assert removed["reaction_after"] > latest and removed["messages"][0]["reactions"]["counts"] == {"eyes": 1}
+    assert second.put(path, json={"emoji": "not-an-emoji", "active": True}).status_code == 400
+    assert second.put(people["root"] + "/direct-blocks/" + people["first_id"], json={}).status_code == 204
+    assert first.put(path, json={"emoji": "up", "active": True}).status_code == 403
+    assert second.put(path, json={"emoji": "up", "active": True}).status_code == 403
+    assert second.get(path).status_code == 200
+    with people["store"].transaction(write=True) as db:
+        db.execute("UPDATE memberships SET role='viewer' WHERE organization_id=? AND user_id=?", (people["org"], people["first_id"]))
+    assert first.put(path, json={"emoji": "up", "active": True}).status_code == 403
+    assert first.get(path).status_code == 200
+
+
 def test_participants_exchange_messages_with_unread_state_and_edits(people):
     root = people["root"]
     created = people["first"].post(root + "/direct-conversations", json={"user_id": people["second_id"]})
@@ -278,12 +311,16 @@ def test_direct_event_stream_is_participant_only_and_announces_messages(people):
         stream = Stream(base, path, credential("second"))
         try:
             assert stream.next("ready")[1]["channels"] == ["messages"]
-            assert stream.next("messages")[1] == {"sequence": 0, "updates": 0}
+            assert stream.next("messages")[1] == {"sequence": 0, "updates": 0, "reactions": 0}
             sent = httpx.post(base + people["root"] + f"/direct-conversations/{direct['id']}/messages",
                               headers=credential("first"), json={"content": SECRET, "client_id": "dm-stream"})
             assert sent.status_code == 201, sent.text
             watermark = stream.next("messages", where=lambda data: data["sequence"] > 0)[1]
-            assert watermark == {"sequence": sent.json()["sequence"], "updates": 0}
+            assert watermark == {"sequence": sent.json()["sequence"], "updates": 0, "reactions": 0}
+            reacted = httpx.put(base + people["root"] + f"/direct-conversations/{direct['id']}/messages/{sent.json()['id']}/reactions",
+                               headers=credential("first"), json={"emoji": "heart", "active": True})
+            assert reacted.status_code == 200
+            assert stream.next("messages", where=lambda data: data["reactions"] > 0)[1]["sequence"] == sent.json()["sequence"]
             assert app.state.topic_events.watchers == 1
         finally:
             stream.close()

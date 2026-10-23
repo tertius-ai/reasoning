@@ -18,7 +18,8 @@
 .org-direct-controls { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
 .org-direct-confirm { display: inline-flex; align-items: center; gap: 6px; flex-wrap: wrap; font-size: 12px; }
 .org-direct-conversation .org-message { position: relative; }
-.org-direct-actions { position: absolute; top: 5px; right: 8px; display: flex; gap: 6px; }
+.org-direct-actions { position: absolute; top: 5px; right: 8px; z-index: 2; display: flex; gap: 6px; }
+.org-direct-actions .chat-action-launcher { position: static; opacity: 1; pointer-events: auto; }
 .org-direct-actions button { min-height: 22px; padding: 1px 7px; border-color: transparent; background: transparent; color: var(--muted); font-size: 11px; }
 .org-direct-actions button[aria-label="Edit message"] { opacity: 0; }
 .org-message:hover .org-direct-actions button, .org-direct-actions button:focus-visible { opacity: 1; }

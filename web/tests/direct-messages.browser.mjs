@@ -97,6 +97,15 @@ test("a member messages a colleague from People, who finds, reads and replies, t
     await member.getByRole("button", { name: "Send", exact: true }).click();
     await visible(conversation.locator(".org-message").filter({ hasText: "comments tomorrow" }));
 
+    // The same picker works in a private conversation and changes reach the other browser.
+    const received = reply.locator(".org-message").filter({ hasText: "section 3" });
+    await received.hover(); await received.getByRole("button", { name: "Add reaction", exact: true }).click();
+    await member.getByRole("menuitemcheckbox", { name: "Heart", exact: true }).click();
+    const original = conversation.locator(".org-message").filter({ hasText: "section 3" });
+    await visible(original.getByRole("button", { name: "Heart: Researcher", exact: true }));
+    await received.getByRole("button", { name: "Heart: Researcher", exact: true }).click();
+    await original.getByRole("button", { name: "Heart: Researcher", exact: true }).waitFor({ state: "detached" });
+
     // Muting hides the unread count; blocking stops the other person's messages with a neutral refusal.
     await reply.getByRole("button", { name: "Mute", exact: true }).click();
     await visible(ownerRow.getByLabel("Muted"));

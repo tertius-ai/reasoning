@@ -398,6 +398,8 @@ def test_more_reactions_are_accepted_and_older_installations_widen_the_check(ins
     feedback.set(user, org, topic, "message", message["id"], "upside_down", True)
     with store.transaction(write=True) as db:
         _reaction_check(db, " CHECK(emoji IN ('up','down','upside_down'))")
+        db.execute("DROP TABLE direct_reaction_changes")
+        db.execute("DROP TABLE direct_message_reactions")
         db.execute("ALTER TABLE workflow_runs DROP COLUMN capacity_released")
         db.execute("ALTER TABLE research_media DROP COLUMN extraction_json")
         with pytest.raises(sqlite3.IntegrityError):

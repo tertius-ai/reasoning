@@ -463,7 +463,8 @@ Use the prefix `/api/organizations/{organization_id}` for organization resources
 | `{prefix}/direct-conversations` | GET, POST | The current member's [direct conversations](#direct-messages) with unread state; open or create one with another human member |
 | `{prefix}/direct-conversations/{conversation_id}` | GET | One direct conversation's summary, for its participants only |
 | `{prefix}/direct-conversations/{conversation_id}/messages` | GET, POST | Direct-message history and submission, with the topic message cursors and limits |
-| `{prefix}/direct-conversations/{conversation_id}/message-updates` | GET | Incremental edited direct messages with a revision-event cursor |
+| `{prefix}/direct-conversations/{conversation_id}/message-updates` | GET | Incremental edited/reacted direct messages with independent revision and reaction cursors |
+| `{prefix}/direct-conversations/{conversation_id}/messages/{message_id}/reactions` | GET, PUT | Participant-only reactions; PUT sets or removes the caller's emoji |
 | `{prefix}/direct-conversations/{conversation_id}/messages/{message_id}` | PATCH | Author's optimistic edit with the current revision |
 | `{prefix}/direct-conversations/{conversation_id}/messages/{message_id}/history` | GET | Immutable original and edited versions |
 | `{prefix}/direct-conversations/{conversation_id}/read`, `.../mute` | PUT | Current participant's monotonic read cursor; mute preference |
@@ -637,8 +638,13 @@ message. Summaries contain `other_user` (`id`, `name`), `other_member`, `muted`,
 participant's messages after the read cursor. Sending advances the sender's own read
 cursor. Messages, edits, revision history, client-ID replay and cursors behave as for
 topic messages; direct messages carry `conversation_id` instead of `topic_id`, and
-mention syntax creates no mention records. Reactions and attachments are not
-available in direct conversations.
+mention syntax creates no mention records. Direct messages support the same 24
+emoji reactions as topic messages, with one reaction per participant per message.
+Message pages batch reaction counts, the caller's selection and participant names;
+reaction changes have an independent cursor and event watermark, including removals.
+Repeated sets/removals are idempotent. Only the participants can read reactions,
+and writing requires current membership, write access and an unblocked conversation.
+Attachments are unavailable in direct conversations.
 
 Owners, administrators and members can start conversations and send messages.
 Viewers cannot write organization content, so they can read, mute and block in

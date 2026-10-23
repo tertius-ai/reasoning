@@ -6,6 +6,7 @@ import { MessageMarkdown, alphaMessageGroups, resizeComposer } from "./Organizat
 import { ApiError, Account, Member, Message, aborted, errorMessage, mentionMarkdown, mergeMessages, organizationPath, request } from "./organization-api";
 import { startPolling } from "./polling";
 import { LIVE_SAFETY_POLL_MS, subscribeEvents } from "./topicEvents";
+import { ReactionControl } from "./ChatFeedback";
 
 type Draft = { text: string; clientId: string; attempted: boolean };
 const newDraft = (): Draft => ({ text: "", clientId: crypto.randomUUID(), attempted: false });
@@ -56,25 +57,29 @@ export function DirectConversationView({ organizationId, conversation, user, mem
   useEffect(() => {
     const controller = new AbortController();
     // The conversation's event stream announces new messages and edits; polling then fetches exactly what is missing.
-    let live = false, loaded = false, watermark = { sequence: 0, updates: 0 };
-    const behind = () => watermark.sequence > cursor.current || watermark.updates > editCursor.current;
+    let live = false, loaded = false, reactionCursor = 0;
+    let watermark: { sequence: number; updates: number; reactions?: number } = { sequence: 0, updates: 0 };
+    const behind = () => watermark.sequence > cursor.current || watermark.updates > editCursor.current
+      || (watermark.reactions ?? 0) > reactionCursor;
     const poll = async (): Promise<number | null> => {
-      const before = [cursor.current, editCursor.current];
+      const before = [cursor.current, editCursor.current, reactionCursor];
       try {
         const query = cursor.current ? `after=${cursor.current}&limit=200` : `before=${Number.MAX_SAFE_INTEGER}&limit=100`;
         const [incoming, updates] = await Promise.all([
           request<Message[]>(root + "/messages?" + query, { signal: controller.signal }),
-          request<{ after: number; messages: Message[] }>(root + "/message-updates?after=" + editCursor.current, { signal: controller.signal }),
+          request<{ after: number; reaction_after?: number; messages: Message[] }>(root + "/message-updates?after=" + editCursor.current
+            + "&reaction_after=" + reactionCursor, { signal: controller.signal }),
         ]);
         if (controller.signal.aborted) return null;
         if (!cursor.current) setOlder(incoming.length === 100);
         cursor.current = incoming.at(-1)?.sequence ?? cursor.current;
         editCursor.current = updates.after;
+        reactionCursor = updates.reaction_after ?? reactionCursor;
         setMessages(existing => mergeMessages(mergeMessages(existing, incoming), updates.messages.filter(message =>
           existing.some(prior => prior.id === message.id) || incoming.some(prior => prior.id === message.id))));
         setOnline(true); setLoading(false); loaded = true;
         if (incoming.some(message => message.client_id === currentDraft.current.clientId && message.author_id === user.id)) setDraft(newDraft());
-        if (behind() && (cursor.current !== before[0] || editCursor.current !== before[1])) return 0;
+        if (behind() && (cursor.current !== before[0] || editCursor.current !== before[1] || reactionCursor !== before[2])) return 0;
       } catch (cause) {
         if (aborted(cause)) return null;
         if (cause instanceof ApiError && cause.status === 401) { onAuthLost(); return null; }
@@ -160,6 +165,8 @@ export function DirectConversationView({ organizationId, conversation, user, mem
             onSaved={updated => { setMessages(existing => mergeMessages(existing, [updated])); setEditing(null); }} />
             : <MessageMarkdown markdown={normalizeMathDelimiters(mentionMarkdown(message.content, members))} />}
           <div className="org-direct-actions">
+            <ReactionControl path={root + "/messages/" + encodeURIComponent(message.id) + "/reactions"}
+              canWrite={writable} onAuthLost={onAuthLost} batched preloaded={message.reactions} />
             {Boolean(message.revision) && <button type="button" className="chat-edited" title={message.edited_at ? new Date(message.edited_at * 1000).toLocaleString() : undefined}
               onClick={() => void request<{ revision: number; content: string; created_at: number }[]>(root + "/messages/" + encodeURIComponent(message.id) + "/history")
                 .then(versions => setHistory({ id: message.id, versions })).catch(fail)}>edited</button>}

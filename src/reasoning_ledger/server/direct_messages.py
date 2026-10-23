@@ -15,6 +15,7 @@ from typing import Annotated, Any
 from fastapi import Depends, FastAPI, Query, Response
 from pydantic import Field
 
+from .reaction_emoji_schema import EMOJIS
 from .request_input import RequestInput
 from .store import Store, StoreError, _id, _row
 
@@ -102,7 +103,51 @@ class DirectMessages:
 
     @staticmethod
     def _message(row) -> dict[str, Any]:
-        return {**_row(row), "author_kind": "human"}
+        return {**_row(row), "author_kind": "human", "reactions": {"counts": {}, "mine": [], "reactors": {}}}
+
+    @staticmethod
+    def _reactions(db, user_id, messages):
+        by_id = {message["id"]: message for message in messages}
+        if not by_id:
+            return messages
+        rows = db.execute(
+            "SELECT r.message_id,r.user_id,r.emoji,u.name FROM direct_message_reactions r "
+            "JOIN users u ON u.id=r.user_id WHERE r.message_id IN (" + ",".join("?" for _ in by_id) + ") ORDER BY r.user_id",
+            tuple(by_id),
+        )
+        for row in rows:
+            feedback = by_id[row["message_id"]]["reactions"]
+            emoji = row["emoji"]
+            feedback["counts"][emoji] = feedback["counts"].get(emoji, 0) + 1
+            feedback["reactors"].setdefault(emoji, []).append({"id": row["user_id"], "name": row["name"]})
+            if row["user_id"] == user_id:
+                feedback["mine"].append(emoji)
+        return messages
+
+    def reaction(self, user_id, organization_id, conversation_id, message_id, emoji=None, active=None):
+        if active is not None and (emoji not in EMOJIS or type(active) is not bool):
+            raise StoreError(400, "invalid reaction")
+        with self.store.transaction(write=active is not None) as db:
+            _, conversation = self.access(db, user_id, organization_id, conversation_id, write=active is not None)
+            message = self._message(db.execute(
+                "SELECT * FROM direct_messages WHERE organization_id=? AND conversation_id=? AND id=?",
+                (organization_id, conversation_id, message_id),
+            ).fetchone())
+            if active is not None:
+                self._deliverable(db, organization_id, user_id, conversation["other_user_id"])
+                if self.store._postgres:
+                    self.store._postgres.lock(db.native, "direct-reaction:" + message_id)
+                old = db.execute("SELECT emoji FROM direct_message_reactions WHERE message_id=? AND user_id=?",
+                                 (message_id, user_id)).fetchone()
+                changed = (active and (not old or old[0] != emoji)) or (not active and old and old[0] == emoji)
+                if changed:
+                    db.execute("DELETE FROM direct_message_reactions WHERE message_id=? AND user_id=?", (message_id, user_id))
+                    if active:
+                        db.execute("INSERT INTO direct_message_reactions(organization_id,message_id,user_id,emoji) VALUES(?,?,?,?)",
+                                   (organization_id, message_id, user_id, emoji))
+                    db.execute("INSERT INTO direct_reaction_changes(organization_id,conversation_id,message_id) VALUES(?,?,?)",
+                               (organization_id, conversation_id, message_id))
+            return self._reactions(db, user_id, [message])[0]["reactions"]
 
     def conversations(self, user_id: str, organization_id: str) -> list[dict[str, Any]]:
         with self.store.transaction() as db:
@@ -150,7 +195,7 @@ class DirectMessages:
                 + ("<? ORDER BY sequence DESC LIMIT ?" if before is not None else ">? ORDER BY sequence LIMIT ?"),
                 (organization_id, conversation_id, before if before is not None else after, limit),
             ).fetchall()
-            result = [self._message(row) for row in rows]
+            result = self._reactions(db, user_id, [self._message(row) for row in rows])
             return list(reversed(result)) if before is not None else result
 
     def post(self, user_id, organization_id, conversation_id, content: str, client_id: str) -> dict[str, Any]:
@@ -166,7 +211,7 @@ class DirectMessages:
                 ).fetchone()
                 if existing["conversation_id"] != conversation_id or (original[0] if original else existing["content"]) != content:
                     raise StoreError(409, "client_id was already used for a different message")
-                return self._message(existing)
+                return self._reactions(db, user_id, [self._message(existing)])[0]
             self._deliverable(db, organization_id, user_id, conversation["other_user_id"])
             message_id = _id()
             db.execute(
@@ -177,7 +222,7 @@ class DirectMessages:
             message = self._message(db.execute("SELECT * FROM direct_messages WHERE id=?", (message_id,)).fetchone())
             # The author has read everything up to their own message.
             self._read(db, user_id, organization_id, conversation_id, message["sequence"])
-            return message
+            return self._reactions(db, user_id, [message])[0]
 
     def edit(self, user_id, organization_id, conversation_id, message_id, content, revision) -> dict[str, Any]:
         if not isinstance(content, str) or not content.strip() or len(content) > 16000 or type(revision) is not int or revision < 0:
@@ -192,11 +237,11 @@ class DirectMessages:
                 raise StoreError(403, "only the author can edit this message")
             # Exact retries are safe, but a different stale draft cannot overwrite a newer edit.
             if message["revision"] == revision + 1 and message["content"] == content:
-                return self._message(message)
+                return self._reactions(db, user_id, [self._message(message)])[0]
             if message["revision"] != revision:
                 raise StoreError(409, "message changed; review the current version before saving")
             if content == message["content"]:
-                return self._message(message)
+                return self._reactions(db, user_id, [self._message(message)])[0]
             self._deliverable(db, organization_id, user_id, conversation["other_user_id"])
             if revision == 0:
                 db.execute(
@@ -211,7 +256,8 @@ class DirectMessages:
                 (organization_id, message_id, revision + 1, content, user_id, now),
             )
             db.execute("UPDATE direct_messages SET content=?,revision=?,edited_at=? WHERE id=?", (content, revision + 1, now, message_id))
-            return self._message(db.execute("SELECT * FROM direct_messages WHERE id=?", (message_id,)).fetchone())
+            return self._reactions(db, user_id, [self._message(
+                db.execute("SELECT * FROM direct_messages WHERE id=?", (message_id,)).fetchone())])[0]
 
     def history(self, user_id, organization_id, conversation_id, message_id) -> list[dict[str, Any]]:
         with self.store.transaction() as db:
@@ -229,7 +275,7 @@ class DirectMessages:
                 (organization_id, message_id),
             )]
 
-    def updates(self, user_id, organization_id, conversation_id, after=0, limit=200) -> dict[str, Any]:
+    def updates(self, user_id, organization_id, conversation_id, after=0, limit=200, reaction_after=0) -> dict[str, Any]:
         with self.store.transaction() as db:
             self.access(db, user_id, organization_id, conversation_id)
             changes = db.execute(
@@ -237,11 +283,17 @@ class DirectMessages:
                 "WHERE r.organization_id=? AND m.conversation_id=? AND r.sequence>? ORDER BY r.sequence LIMIT ?",
                 (organization_id, conversation_id, after, limit),
             ).fetchall()
+            reactions = db.execute(
+                "SELECT sequence,message_id FROM direct_reaction_changes WHERE organization_id=? AND conversation_id=? "
+                "AND sequence>? ORDER BY sequence LIMIT ?", (organization_id, conversation_id, reaction_after, limit),
+            ).fetchall()
             messages = [
                 self._message(db.execute("SELECT * FROM direct_messages WHERE id=?", (message_id,)).fetchone())
-                for message_id in dict.fromkeys(row["message_id"] for row in changes)
+                for message_id in dict.fromkeys(row["message_id"] for row in [*changes, *reactions])
             ]
-            return {"after": changes[-1]["sequence"] if changes else after, "messages": messages}
+            return {"after": changes[-1]["sequence"] if changes else after,
+                    "reaction_after": reactions[-1]["sequence"] if reactions else reaction_after,
+                    "messages": self._reactions(db, user_id, messages)}
 
     def watermarks(self, user_id, organization_id, conversation_id) -> dict[str, int]:
         from .topic_events import direct_signature
@@ -249,7 +301,7 @@ class DirectMessages:
         with self.store.transaction() as db:
             self.access(db, user_id, organization_id, conversation_id)
             value = direct_signature(db, organization_id, conversation_id)["messages"]
-        return {"sequence": value[0], "updates": value[1]}
+        return {"sequence": value[0], "updates": value[1], "reactions": value[2]}
 
     @staticmethod
     def _read(db, user_id, organization_id, conversation_id, sequence) -> None:
@@ -329,6 +381,11 @@ class DirectMute(RequestInput):
     muted: bool
 
 
+class DirectReaction(RequestInput):
+    emoji: Annotated[str, Field(min_length=1, max_length=32)]
+    active: bool
+
+
 def install_routes(app: FastAPI, store: Store, authenticated: Callable) -> None:
     User = Annotated[str, Depends(authenticated)]
     direct = DirectMessages(store)
@@ -367,8 +424,17 @@ def install_routes(app: FastAPI, store: Store, authenticated: Callable) -> None:
 
     @app.get(conversation + "/message-updates")
     def message_updates(organization_id: str, conversation_id: str, user: User,
-                        after: Annotated[int, Query(ge=0, le=2**63 - 1)] = 0):
-        return direct.updates(user, organization_id, conversation_id, after)
+                        after: Annotated[int, Query(ge=0, le=2**63 - 1)] = 0,
+                        reaction_after: Annotated[int, Query(ge=0, le=2**63 - 1)] = 0):
+        return direct.updates(user, organization_id, conversation_id, after, reaction_after=reaction_after)
+
+    @app.get(conversation + "/messages/{message_id}/reactions")
+    def read_reactions(organization_id: str, conversation_id: str, message_id: str, user: User):
+        return direct.reaction(user, organization_id, conversation_id, message_id)
+
+    @app.put(conversation + "/messages/{message_id}/reactions")
+    def write_reaction(organization_id: str, conversation_id: str, message_id: str, body: DirectReaction, user: User):
+        return direct.reaction(user, organization_id, conversation_id, message_id, body.emoji, body.active)
 
     @app.patch(conversation + "/messages/{message_id}")
     def edit_message(organization_id: str, conversation_id: str, message_id: str, body: DirectMessageEdit, user: User):

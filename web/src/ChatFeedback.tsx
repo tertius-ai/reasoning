@@ -136,10 +136,16 @@ export function ReactionBar({ organizationId, topicId, targetKind, targetId, nod
   /** The conversation reads this target's reactions in one request for its whole message page. */
   batched?: boolean; preloaded?: Feedback;
 }) {
-  const [feedback, setFeedback] = useState<Feedback>(preloaded ?? { counts: {}, mine: [] });
-  const [busy, setBusy] = useState(false), [error, setError] = useState(""), [more, setMore] = useState(false);
   const path = topicPath(organizationId, topicId) + "/reactions/" + targetKind + "/" + encodeURIComponent(targetId)
     + (nodeId ? "?node_id=" + encodeURIComponent(nodeId) : "");
+  return <ReactionControl {...{ path, canWrite, onAuthLost, batched, preloaded }} />;
+}
+
+export function ReactionControl({ path, canWrite = true, onAuthLost, batched = false, preloaded }: {
+  path: string; canWrite?: boolean; onAuthLost?: () => void; batched?: boolean; preloaded?: Feedback;
+}) {
+  const [feedback, setFeedback] = useState<Feedback>(preloaded ?? { counts: {}, mine: [] });
+  const [busy, setBusy] = useState(false), [error, setError] = useState(""), [more, setMore] = useState(false);
   useEffect(() => { if (preloaded) setFeedback(preloaded); }, [preloaded]);
   useEffect(() => {
     if (batched) return;

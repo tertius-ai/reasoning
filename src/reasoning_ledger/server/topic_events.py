@@ -138,7 +138,11 @@ def direct_signature(db, organization_id: str, conversation_id: str) -> dict[str
         "WHERE r.organization_id=? AND m.conversation_id=?",
         (organization_id, conversation_id),
     ).fetchone()[0]
-    return {"messages": (messages or 0, revisions or 0), "active": False}
+    reactions = db.execute(
+        "SELECT MAX(sequence) FROM direct_reaction_changes WHERE organization_id=? AND conversation_id=?",
+        (organization_id, conversation_id),
+    ).fetchone()[0]
+    return {"messages": (messages or 0, revisions or 0, reactions or 0), "active": False}
 
 
 class _Subscription:

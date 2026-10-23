@@ -36,6 +36,7 @@ export type Hierarchy = { projects: Project[]; channels: Channel[]; topics: Topi
   direct_conversations?: DirectConversation[] };
 export type Member = Account & { role: Role };
 export type Message = { id: string; sequence: number; topic_id: string; author_id: string; content: string; client_id: string; created_at: number;
+  reactions?: import("./ChatFeedback").Feedback;
   /** The message of the same topic that this one answers. */
   reply_to?: string | null;
   revision?: number; edited_at?: number | null;

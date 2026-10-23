@@ -63,7 +63,10 @@ the toolbar shows the unread total while the panel is closed. Only the two of yo
 it: organization owners and administrators cannot, and it never appears in
 search, topic exports, shared knowledge, or bot and model context. Bots cannot be
 messaged or mentioned there. Viewers can receive and read direct messages but
-cannot start a conversation or reply.
+cannot start a conversation, reply or react. Use the message's reaction button
+for the same emoji picker as topic chat; choose another emoji to replace your
+reaction or press your selected emoji to remove it. Only the two participants
+can see these reactions.
 
 **Mute** hides a conversation's unread count. **Block** stops the other person
 from starting or continuing a conversation with you, and stops you from sending

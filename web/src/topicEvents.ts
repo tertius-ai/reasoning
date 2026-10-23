@@ -8,7 +8,7 @@ import { observeRelease } from "./release";
  * live, views poll only every LIVE_SAFETY_POLL_MS as a safety net; when it is unavailable they poll as before.
  */
 export type TopicStreamStatus = "connecting" | "live" | "unavailable";
-export type MessageWatermark = { sequence: number; updates: number };
+export type MessageWatermark = { sequence: number; updates: number; reactions?: number };
 export type AgentThread = { root_run: string; status: string; reason?: string | null; requested_by: string; tasks: number };
 export type TopicGoal = { id: string; status: string; owned_by: string } | null;
 export type TopicEventListener = {
@@ -195,7 +195,10 @@ class TopicConnection {
         else if (!ready) throw new Error("event before ready");
         else if (name === "messages") {
           if (!Number.isSafeInteger(value?.sequence) || !Number.isSafeInteger(value?.updates)) throw new Error("invalid watermark");
-          this.emit("messages", { sequence: value.sequence, updates: value.updates });
+          if (value.reactions !== undefined && (!Number.isSafeInteger(value.reactions) || value.reactions < 0))
+            throw new Error("invalid reaction watermark");
+          this.emit("messages", { sequence: value.sequence, updates: value.updates,
+            ...(value.reactions !== undefined ? { reactions: value.reactions } : {}) });
         } else if (name === "runs") this.emit("runs", applyRunPatch(known, value));
         else if (name === "agents" && Array.isArray(value)) this.emit("agents", value);
         else if (name === "goal") this.emit("goal", value);
