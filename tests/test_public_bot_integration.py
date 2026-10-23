@@ -30,6 +30,48 @@ def fixture(tmp_path):
     return bot_fixture.__wrapped__(tmp_path)
 
 
+def test_bot_account_tools_preserve_candidates_and_recheck_live_write_scope(fixture):
+    from reasoning_ledger.server.research_accounts import ResearchAccounts
+
+    store, owner, topics, _, _, _ = fixture
+    runtime, bot, _, run, _ = setup(fixture)
+    lease = runtime.claim(bot["token"])["lease"]
+    tools = BotTools(runtime)
+    names = {tool["name"] for tool in tools.context(bot["token"], run["id"], lease)["tools"]}
+    assert {"account_read", "account_update"} <= names and "account_request_review" not in names
+    arguments = {
+        "expected_revision": 0,
+        "changes": {
+            "question": "An exact sustained question",
+            "argument": "A candidate argument.",
+            "gaps": "This still needs independent checking.",
+        },
+    }
+    first = tools.invoke(bot["token"], run["id"], lease, "account_update", arguments, "first-account")
+    assert first["revision"] == 1 and first["created_by"] == bot["id"]
+    assert tools.invoke(bot["token"], run["id"], lease, "account_update", arguments, "first-account")["revision"] == 1
+    assert (
+        ResearchAccounts(store).read(owner["user_id"], owner["organization_id"], topics[1])["body"]["gaps"] == arguments["changes"]["gaps"]
+    )
+    runtime.bots.update(
+        owner["user_id"],
+        owner["organization_id"],
+        bot["id"],
+        "Codex",
+        topics[1:],
+        ["messages:read", "messages:write", "knowledge:read"],
+        personal=True,
+    )
+    with pytest.raises(StoreError):
+        tools.invoke(
+            bot["token"], run["id"], lease, "account_update", {"expected_revision": 1, "changes": {"gaps": "Overwrite"}}, "revoked-write"
+        )
+    assert (
+        tools.invoke(bot["token"], run["id"], lease, "account_read", {"revision": 1, "field": "argument"}, "read-account")["text"]
+        == "A candidate argument."
+    )
+
+
 def test_bot_publishes_workspace_tex_to_shared_revision_links_and_rechecks_write_grants(fixture, tmp_path):
     from types import SimpleNamespace
 
@@ -41,8 +83,14 @@ def test_bot_publishes_workspace_tex_to_shared_revision_links_and_rechecks_write
     runtime, bot, _, run, _ = setup(fixture)
     lease = runtime.claim(bot["token"])["lease"]
     service, registry = BotTools(runtime), ToolRegistry()
-    registry.register(ToolDefinition("artifact_write", "Save project text", {"type": "object"},
-                                    lambda **body: service.invoke(bot["token"], run["id"], lease, "artifact_write", body, "publish-text")))
+    registry.register(
+        ToolDefinition(
+            "artifact_write",
+            "Save project text",
+            {"type": "object"},
+            lambda **body: service.invoke(bot["token"], run["id"], lease, "artifact_write", body, "publish-text"),
+        )
+    )
     workspace = tmp_path / "workspace"
     workspace.mkdir(mode=0o700)
     source = "\\documentclass{article}\nA precise UTF-8 argument: α.\n"
@@ -51,8 +99,15 @@ def test_bot_publishes_workspace_tex_to_shared_revision_links_and_rechecks_write
     saved = registry.invoke("workspace_publish_text", {"path": "argument.tex"})
     assert saved["revision"] == 1 and saved["url"] in saved["markdown"]
     assert ResearchArtifacts(store).content(owner["user_id"], owner["organization_id"], topics[1], "argument.tex", 1)[0] == source.encode()
-    runtime.bots.update(owner["user_id"], owner["organization_id"], bot["id"], "Codex", topics[1:],
-                        ["messages:read", "messages:write", "knowledge:read"], personal=True)
+    runtime.bots.update(
+        owner["user_id"],
+        owner["organization_id"],
+        bot["id"],
+        "Codex",
+        topics[1:],
+        ["messages:read", "messages:write", "knowledge:read"],
+        personal=True,
+    )
     with pytest.raises(StoreError):
         registry.invoke("workspace_publish_text", {"path": "argument.tex"})
 
@@ -88,16 +143,22 @@ def test_effort_is_retained_and_unsupported_bot_override_is_refused(fixture):
     runtime, bot, model, first, _ = setup(fixture)
     run = runtime.claim(bot["token"])
     runtime.finish(bot["token"], first["id"], run["lease"], "succeeded", output="First")
-    runtime.advertise(bot["token"], "codex", ["gpt-fixture"], False, False,
-                      capabilities={"efforts": {"gpt-fixture": ["high"]}})
+    runtime.advertise(bot["token"], "codex", ["gpt-fixture"], False, False, capabilities={"efforts": {"gpt-fixture": ["high"]}})
     text = f"@[{bot['id']}:gpt-fixture!high] Continue"
     message = store.post_message(owner["user_id"], owner["organization_id"], topics[1], text, "effort-mention")
     admitted = runtime.from_message(bot["token"], message["id"])
     assert admitted["effort"] == "high"
     assert runtime.claim(bot["token"])["effort"] == "high"
     with pytest.raises(StoreError, match="does not advertise"):
-        runtime.enqueue(owner["user_id"], owner["organization_id"], topics[1], f"bot/{bot['id']}/gpt-fixture",
-                        "bad-effort", through=message["sequence"], effort="xhigh")
+        runtime.enqueue(
+            owner["user_id"],
+            owner["organization_id"],
+            topics[1],
+            f"bot/{bot['id']}/gpt-fixture",
+            "bad-effort",
+            through=message["sequence"],
+            effort="xhigh",
+        )
 
 
 def test_effort_metadata_uses_actual_model_levels_and_default_is_not_forced(monkeypatch):
@@ -132,12 +193,24 @@ def test_bot_goal_needs_no_openrouter_key_and_continues_until_checkpoint(fixture
     initial = runtime.claim(bot["token"])
     runtime.finish(bot["token"], first["id"], initial["lease"], "succeeded", output="Initial answer")
     goals = ResearchGoals(InferenceStore(store))
-    goal = goals.create(owner["user_id"], owner["organization_id"], topics[1], client_id="g" * 16,
-        objective="Investigate a question", acceptance=["Record the result"], model=model, budget_microusd=1,
-        max_turns=5, max_tool_calls=20, duration_seconds=3600)
+    goal = goals.create(
+        owner["user_id"],
+        owner["organization_id"],
+        topics[1],
+        client_id="g" * 16,
+        objective="Investigate a question",
+        acceptance=["Record the result"],
+        model=model,
+        budget_microusd=1,
+        max_turns=5,
+        max_tool_calls=20,
+        duration_seconds=3600,
+    )
+
     class NoProvider:
         async def quotes(self, models):
             raise AssertionError("bot goals must not contact OpenRouter")
+
     asyncio.run(goals.dispatch(NoProvider()))
     run = runtime.claim(bot["token"])
     assert "Continue the active goal" in run["prompt"]
@@ -146,8 +219,14 @@ def test_bot_goal_needs_no_openrouter_key_and_continues_until_checkpoint(fixture
     runtime.finish(bot["token"], run["id"], run["lease"], "succeeded", output="Progress")
     next_run = runtime.claim(bot["token"])
     assert next_run["id"] != run["id"]
-    tools.invoke(bot["token"], next_run["id"], next_run["lease"], "goal_checkpoint",
-                 {"summary": "Acceptance criterion met", "status": "complete"}, "cp2")
+    tools.invoke(
+        bot["token"],
+        next_run["id"],
+        next_run["lease"],
+        "goal_checkpoint",
+        {"summary": "Acceptance criterion met", "status": "complete"},
+        "cp2",
+    )
     runtime.finish(bot["token"], next_run["id"], next_run["lease"], "succeeded", output="Done")
     assert runtime.claim(bot["token"]) is None
     assert goals.current(owner["user_id"], owner["organization_id"], topics[1])["status"] == "complete"
@@ -160,7 +239,9 @@ def test_delegation_is_narrow_and_integrates_once(fixture):
     parent = runtime.claim(bot["token"])
     task = delegate(runtime, bot["token"], parent["id"], parent["lease"], "librarian", "Find sources", "Only this context")
     assert delegate(runtime, bot["token"], parent["id"], parent["lease"], "librarian", "Find sources", "Only this context") == {
-        "id": task["id"], "child_run": task["child_run"]}
+        "id": task["id"],
+        "child_run": task["child_run"],
+    }
     runtime.finish(bot["token"], first["id"], parent["lease"], "succeeded", output="Delegated")
     child = runtime.claim(bot["token"])
     assert child["context"] == [] and "Only this context" in child["prompt"]
@@ -177,22 +258,39 @@ def test_delegation_is_narrow_and_integrates_once(fixture):
 def test_bot_compute_uses_owner_approval_and_exact_existing_image_queue(compute):
     _, store, state, _, owner, topics = compute
     bots = BotStore(store)
-    bot = bots.create(owner["user_id"], owner["organization_id"], "Compute bot", [topics[1]["id"]],
-                      ["messages:read", "messages:write", "knowledge:read", "knowledge:write"], personal=True)
+    bot = bots.create(
+        owner["user_id"],
+        owner["organization_id"],
+        "Compute bot",
+        [topics[1]["id"]],
+        ["messages:read", "messages:write", "knowledge:read", "knowledge:write"],
+        personal=True,
+    )
     runtime = BotRuntime(bots)
     runtime.advertise(bot["token"], "codex", ["default"], False, False)
     msg = store.post_message(owner["user_id"], owner["organization_id"], topics[1]["id"], "Compute", "compute-message")
-    runtime.enqueue(owner["user_id"], owner["organization_id"], topics[1]["id"], f"bot/{bot['id']}/default", "compute-run",
-                    through=msg["sequence"])
+    runtime.enqueue(
+        owner["user_id"], owner["organization_id"], topics[1]["id"], f"bot/{bot['id']}/default", "compute-run", through=msg["sequence"]
+    )
     run = runtime.claim(bot["token"])
     bridge = BotCompute(runtime, state)
     parameters = {key: value for key, value in submission().items() if key != "client_id"}
     approval = bridge.request(bot["token"], run["id"], run["lease"], **parameters)
     assert approval == bridge.request(bot["token"], run["id"], run["lease"], **parameters)
     assert state.jobs(owner["user_id"], owner["organization_id"], topics[1]["id"]) == []
-    goal = ResearchGoals(InferenceStore(store)).create(owner["user_id"], owner["organization_id"], topics[1]["id"],
-        client_id="compute-goal" * 2, objective="Check the computation", acceptance=["Inspect the result"],
-        model=f"bot/{bot['id']}/default", budget_microusd=1, max_turns=5, max_tool_calls=20, duration_seconds=3600)
+    goal = ResearchGoals(InferenceStore(store)).create(
+        owner["user_id"],
+        owner["organization_id"],
+        topics[1]["id"],
+        client_id="compute-goal" * 2,
+        objective="Check the computation",
+        acceptance=["Inspect the result"],
+        model=f"bot/{bot['id']}/default",
+        budget_microusd=1,
+        max_turns=5,
+        max_tool_calls=20,
+        duration_seconds=3600,
+    )
     with store.transaction(write=True) as db:
         db.execute("UPDATE agent_goals SET bot_run_id=? WHERE id=?", (run["id"], goal["id"]))
     from reasoning_ledger.server.bot_goals import checkpoint

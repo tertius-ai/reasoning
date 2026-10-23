@@ -21,6 +21,7 @@ def fixture(postgres_configuration, tmp_path, monkeypatch):
     return value
 
 
+test_account = integration.test_bot_account_tools_preserve_candidates_and_recheck_live_write_scope
 test_followup = integration.test_tmp7_followup_receives_prior_question_and_gateway_tools
 test_effort = integration.test_effort_is_retained_and_unsupported_bot_override_is_refused
 test_context_revision = integration.test_bot_recent_context_preserves_admitted_message_revision

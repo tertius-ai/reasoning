@@ -40,6 +40,8 @@ class ToolSettings(RequestInput):
     additional_instructions: Annotated[str, Field(max_length=8000)] = ""
     context_target_percent: Annotated[int, Field(ge=40, le=80, strict=True)] = 60
     ledger_context_limit: Annotated[int, Field(ge=0, le=20, strict=True)] = 8
+    knowledge_context_limit: Annotated[int, Field(ge=0, le=20, strict=True)] = 8
+    knowledge_scope: Literal["working_set", "topic", "project"] = "working_set"
     compute_allowance_cpu_seconds: Annotated[int, Field(ge=0, le=1000000, strict=True)] = 0
 
 
@@ -51,12 +53,40 @@ class PinWrite(RequestInput):
     pinned: bool
 
 
+class AccountWrite(RequestInput):
+    changes: dict
+    expected_revision: Annotated[int, Field(ge=0, le=2**63 - 2, strict=True)]
+    client_id: Annotated[str, Field(min_length=1, max_length=200)]
+    new_approach: Annotated[bool, Field(strict=True)] = False
+    expected_links: dict = Field(default_factory=dict)
+
+
 def install_routes(app, inference, compute, workflows, authenticated, *, enabled=True):
     store = inference.store
     goals, context = ResearchGoals(inference), ResearchContext(store)
     proposals = ResearchProposals(inference, compute, workflows)
     User = Annotated[str, Depends(authenticated)]
     prefix = "/api/organizations/{organization_id}/topics/{topic_id}"
+
+    @app.get(prefix + "/research-account")
+    def research_account(organization_id: str, topic_id: str, user: User,
+                         revision: Annotated[int | None, Query(ge=1, le=2**63 - 1)] = None, summary: bool = False):
+        from .research_accounts import ResearchAccounts
+
+        return ResearchAccounts(store).read(user, organization_id, topic_id, revision, summary=summary)
+
+    @app.put(prefix + "/research-account")
+    def update_account(organization_id: str, topic_id: str, body: AccountWrite, user: User):
+        from .research_accounts import ResearchAccounts
+
+        return ResearchAccounts(store).update(user, organization_id, topic_id, body.changes, body.expected_revision,
+                                              body.client_id, new_approach=body.new_approach, expected_links=body.expected_links)
+
+    @app.get(prefix + "/research-account/knowledge")
+    def find_account_knowledge(organization_id: str, topic_id: str, user: User, query: Annotated[str, Query(min_length=1, max_length=200)]):
+        from .research_accounts import ResearchAccounts
+
+        return ResearchAccounts(store).find(user, organization_id, topic_id, query)
 
     @app.get(prefix + "/agents")
     def topic_agents(organization_id: str, topic_id: str, user: User):
@@ -170,6 +200,8 @@ def install_routes(app, inference, compute, workflows, authenticated, *, enabled
                 "tools": json.loads(row["tools_json"]) if row else DEFAULT_TOOLS,
                 **source_availability(),
                 "ledger_context_limit": policy.get("ledger_context_limit", 8),
+                "knowledge_context_limit": policy.get("ledger_context_limit", 8),
+                "knowledge_scope": policy.get("knowledge_scope", "working_set"),
                 "reviewer_model": row["reviewer_model"] if row else None,
                 "context_target_percent": json.loads(row["context_policy_json"]).get("target_percent", 60) if row else 60,
                 "compute_allowance_cpu_seconds": row["compute_allowance_cpu_seconds"] if row else 0,
@@ -200,7 +232,11 @@ def install_routes(app, inference, compute, workflows, authenticated, *, enabled
                 )
             policy_fields = {"context_target_percent": "target_percent", "review_enabled": "review_enabled",
                              "prompt_profile": "prompt_profile", "additional_instructions": "additional_instructions",
-                             "ledger_context_limit": "ledger_context_limit"}
+                             "ledger_context_limit": "ledger_context_limit", "knowledge_context_limit": "ledger_context_limit",
+                             "knowledge_scope": "knowledge_scope"}
+            if {"ledger_context_limit", "knowledge_context_limit"} <= body.model_fields_set \
+                    and body.ledger_context_limit != body.knowledge_context_limit:
+                raise StoreError(400, "automatic knowledge limits must agree")
             if body.model_fields_set & policy_fields.keys():
                 policy = json.loads(db.execute("SELECT context_policy_json FROM research_topic_settings "
                                                "WHERE organization_id=? AND topic_id=?", (organization_id, topic_id)).fetchone()[0])
@@ -220,10 +256,10 @@ def install_routes(app, inference, compute, workflows, authenticated, *, enabled
         return {"tools": sorted(body.tools)}
 
     @app.get(prefix + "/mathematical-reviews")
-    def mathematical_reviews(organization_id: str, topic_id: str, user: User):
+    def mathematical_reviews(organization_id: str, topic_id: str, user: User, scope: str | None = None):
         from .research_reviews import ResearchReviews
 
-        return ResearchReviews(inference).list(user, organization_id, topic_id)
+        return ResearchReviews(inference).list(user, organization_id, topic_id, scope=scope)
 
     @app.post(prefix + "/mathematical-reviews/{review_id}/cancel")
     def cancel_mathematical_review(organization_id: str, topic_id: str, review_id: str, user: User):

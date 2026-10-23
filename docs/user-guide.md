@@ -92,9 +92,22 @@ general web search. Native gamma comparisons have no research tools; use a beta
 topic with a tool-capable model for source research. Connected bots use their
 runner's actual grants.
 
-In `/tools`, **Automatic relevant ledger records (0 disables)** accepts 0–20,
-with eight matching records by default. It limits automatic prompt context,
-without changing access or removing on-demand knowledge readers. Model activity
+Use **Research account** or `/account` for a sustained question: keep its exact
+hypotheses, current argument, sources, failed approaches, gaps and next steps in
+one versioned place. Earlier candidates remain readable; conflicting edits retain
+your unsaved text. Link exact reusable knowledge through **Working knowledge**.
+**Prepare independent critique** drafts a request in your composer; sending it
+uses the normal model/budget controls. `/reviews` identifies the account version
+and earlier candidates. Account critiques do not certify mathematics or promote
+ledger status. Two critique requests are allowed per approach; a person can
+describe a changed strategy to start another bounded cycle.
+
+In `/tools`, **Default knowledge scope** selects the linked account working set
+(the topic until an account exists), this topic, or authorized project knowledge.
+On-demand readers can expand that scope. **Automatic knowledge records (0 disables)**
+accepts 0–20, with eight by default, shared across relevant ledger statements, scoped critiques and
+shared knowledge references. Zero disables automatic knowledge injection without
+removing the pinned account or granted readers. Model activity
 details can show **Latest answer checkpoint**, its remaining gap and sources.
 Retained checkpoints for interrupted work or review handoffs also appear in the
 conversation. A waiting review/delegate handoff remains an incomplete answer;

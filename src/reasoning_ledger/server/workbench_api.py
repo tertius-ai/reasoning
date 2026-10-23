@@ -58,7 +58,8 @@ def install_routes(app, store, authenticated):
         return import_records(store, user, organization_id, body.project_id, body.records, body.client_id)
 
     @app.get(prefix)
-    def status(organization_id: str, user: User, project_id: str | None = None, topic_id: str | None = None, q: str = ""):
+    def status(organization_id: str, user: User, project_id: str | None = None, topic_id: str | None = None,
+               q: str = "", scope: str | None = None):
         if topic_id:
             with store.transaction() as db:
                 project_id = store._topic_access(db, user, organization_id, topic_id)[1]["id"]
@@ -69,15 +70,16 @@ def install_routes(app, store, authenticated):
             {"text": q} if q else {},
             project=project_id,
             topic=topic_id,
-            agent=bool(topic_id),
+            agent=bool(topic_id), read_scope=scope if topic_id else False,
         )
 
     @app.get(prefix + "/graph")
-    def graph(organization_id: str, user: User, project_id: str | None = None, topic_id: str | None = None):
+    def graph(organization_id: str, user: User, project_id: str | None = None, topic_id: str | None = None, scope: str | None = None):
         if topic_id:
             with store.transaction() as db:
                 project_id = store._topic_access(db, user, organization_id, topic_id)[1]["id"]
-        return ledger.execute(user, organization_id, "ledger_graph", {}, project=project_id, topic=topic_id, agent=bool(topic_id))
+        return ledger.execute(user, organization_id, "ledger_graph", {}, project=project_id, topic=topic_id, agent=bool(topic_id),
+                              read_scope=scope if topic_id else False)
 
     @app.get(prefix + "/{ledger_id}")
     def read(organization_id: str, ledger_id: str, user: User, history: bool = False):

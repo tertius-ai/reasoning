@@ -79,7 +79,8 @@ class ResearchTools:
         if captured and json.loads(captured[0]).get("agent_narrow_context"):
             # Delegates receive the assigned task, not permission to broaden it
             # into a transcript harvest or to control the human's persistent goal.
-            excluded = {"topic_history", "topic_message_read", "topic_search", "goal_checkpoint", "tasks", "tool_receipt_read"}
+            excluded = {"topic_history", "topic_message_read", "topic_search", "goal_checkpoint", "tasks", "tool_receipt_read",
+                        "account_update", "account_request_review"}
             narrowed = ToolRegistry()
             for tool in self.registry.list():
                 if tool.name not in excluded:
@@ -172,6 +173,9 @@ class ResearchTools:
             "agent_read",
             "review_submit",
             "answer_checkpoint",
+            "account_read",
+            "account_update",
+            "account_request_review",
         }
         return [tool for tool in self.registry.list() if tool.name in core]
 
@@ -194,12 +198,13 @@ class ResearchTools:
                 raise StoreError(404, "agent tools can read only beta and gamma topics in this project")
             return target
 
-    def _knowledge_allowed(self, entry):
-        if entry["kind"] not in self.collections or entry["kind"] == "journal" and entry["state"] == "draft":
+    def _knowledge_allowed(self, entry, *, exact=False, allow_draft=False):
+        if entry["kind"] not in self.collections or not allow_draft and entry["kind"] == "journal" and entry["state"] == "draft":
             return False
-        if entry["scope_kind"] == "topic":
-            return entry["topic_id"] == self.topic
-        return entry["scope_kind"] == "organization" or entry["project_id"] == self.project
+        from .research_scope import KnowledgeWindow
+
+        with self.store.transaction() as db:
+            return KnowledgeWindow(self.store, db, self.user, self.org, self.topic).entry_allowed(entry, exact=exact)
 
     def _proposal(self, body):
         identity = hashlib.sha256((self.row["id"] + ":" + encoded(body)).encode()).hexdigest()[:32]
@@ -232,6 +237,9 @@ class ResearchTools:
 
         if "knowledge" in self.enabled:
             register_media(self)
+            from .account_tools import register as register_accounts
+
+            register_accounts(self)
         if "compute" in self.enabled:
             from ..agents.local_science import register_local_science_tools
 
@@ -393,15 +401,17 @@ class ResearchTools:
                         "query": string(),
                         "kind": {"enum": sorted(self.collections & {"ledger", "bibliography", "journal"})},
                         "limit": {"type": "integer", "minimum": 1, "maximum": 30},
+                        "scope": {"enum": ["working_set", "topic", "project"]},
+                        "before": string(100),
                     }
                 ),
             )
-            def knowledge_search(query="", kind=None, limit=20):
-                return [
-                    entry
-                    for entry in KnowledgeStore(self.store).list(self.user, self.org, kind=kind, query=query, published_only=True)
-                    if self._knowledge_allowed(entry)
-                ][:limit]
+            def knowledge_search(query="", kind=None, limit=20, scope=None, before=None):
+                from .research_scope import KnowledgeWindow
+
+                with self.store.transaction() as db:
+                    return KnowledgeWindow(self.store, db, self.user, self.org, self.topic, scope).search_entries(
+                        self.collections, kind=kind, query=query, limit=limit, before=before)
 
             @register(
                 name="knowledge_read",
@@ -414,7 +424,7 @@ class ResearchTools:
                     from .research_blog import published_post
 
                     entry = published_post(self.store, self.user, self.org, entry_id)
-                if not self._knowledge_allowed(entry):
+                if not self._knowledge_allowed(entry, exact=True):
                     raise StoreError(404, "knowledge is outside this topic's granted scope")
                 return entry
 
@@ -708,7 +718,7 @@ class ResearchTools:
                 elif actual in {"compute_submit", "noether_compute", "noether_capabilities", "noether_describe",
                                 "lean_check", "lean_project_check"} and retained.get("id"):
                     asynchronous.wait(self.row, "compute", retained["id"])
-                elif actual == "ledger_request_review" and retained.get("id"):
+                elif actual in {"ledger_request_review", "account_request_review"} and retained.get("id"):
                     asynchronous.wait(self.row, "review", retained["id"])
             serialized = encoded(result)
             # Preserve full receipts; return bounded text with an explicit receipt locator.
@@ -716,6 +726,10 @@ class ResearchTools:
                 raise StoreError(400, "tool result exceeds its durable receipt limit")
             self._authorize()
             with self.store.transaction(write=True) as db:
+                if isinstance(retained, dict) and ("knowledge_scope" in retained or actual in {"knowledge_read", "blog_read"}):
+                    from .research_scope import capture_knowledge_sources
+
+                    capture_knowledge_sources(self.store, db, self.row, retained)
                 if actual in {"media_read", "media_download_chunk", "media_finish"} and isinstance(retained, dict):
                     from .media_context import capture_tool_media
 

@@ -40,9 +40,10 @@ export function MathematicsBrowser({ organizationId, topicId, projectId, canWrit
   const [editing, setEditing] = useState(false), [statement, setStatement] = useState(""), [kind, setKind] = useState("claim");
   const [clientId, setClientId] = useState(() => crypto.randomUUID()), [busy, setBusy] = useState(false), [refresh, setRefresh] = useState(0);
   const root = organizationPath(organizationId) + "/mathematics";
+  const [scope, setScope] = useState("working_set");
   const [view, setView] = useState<"graph" | "list">("graph");
   const selection = useRef(0);
-  const scopeQuery = topicId ? "topic_id=" + encodeURIComponent(topicId) : projectId ? "project_id=" + encodeURIComponent(projectId) : "";
+  const scopeQuery = topicId ? "topic_id=" + encodeURIComponent(topicId) + "&scope=" + scope : projectId ? "project_id=" + encodeURIComponent(projectId) : "";
   const loadGraph = useCallback(() => request<GraphPayload>(root + "/graph?" + scopeQuery), [root, scopeQuery]);
   // The record that opened a statement is handed to its inspector once instead of being read again.
   const opened = useRef<{ id: string; refresh: number; at: number; detail: Promise<ClaimDetail> } | null>(null);
@@ -108,6 +109,7 @@ export function MathematicsBrowser({ organizationId, topicId, projectId, canWrit
       <p className="org-help">{topicId ? "Shared within this project." : "Shared with the organization."} Recording a statement does not certify it.</p>
       <button disabled={busy}>{busy ? "Saving…" : "Save statement"}</button><button type="button" disabled={busy} onClick={() => setEditing(false)}>Cancel</button>
     </form>}
+    {topicId && <label>Knowledge scope<select value={scope} onChange={event => setScope(event.target.value)}><option value="working_set">Account working set (topic if none)</option><option value="topic">This topic</option><option value="project">Authorized project</option></select></label>}
     <input aria-label="Search mathematical claims" type="search" placeholder="Find a definition, conjecture, or proof…" value={query} onChange={(event) => setQuery(event.target.value)} />
     {error && <p role="alert" className="org-error">{error}</p>}
     <nav className="org-ledger-tabs" aria-label="Ledger views"><button aria-pressed={view === "graph"} onClick={() => setView("graph")}>Dependency graph</button>

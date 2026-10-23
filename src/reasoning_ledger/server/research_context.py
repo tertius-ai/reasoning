@@ -31,8 +31,10 @@ def source_message(row, db=None, edit_cutoff=None) -> dict:
     sender = row["assistant_model"] if row["sender_kind"] == "assistant" else row["name"]
     content = row["content"]
     if db is not None and edit_cutoff is not None and row["revision"]:
-        historical = db.execute("SELECT content FROM message_revisions WHERE message_id=? "
-            "AND (sequence<=? OR revision=0) ORDER BY revision DESC LIMIT 1", (row["id"], edit_cutoff)).fetchone()
+        historical = db.execute(
+            "SELECT content FROM message_revisions WHERE message_id=? AND (sequence<=? OR revision=0) ORDER BY revision DESC LIMIT 1",
+            (row["id"], edit_cutoff),
+        ).fetchone()
         if historical:
             content = historical[0]
     return {"id": row["id"], "sequence": row["sequence"], "sender": sender, "kind": row["sender_kind"], "text": content}
@@ -64,8 +66,11 @@ class ResearchContext:
 
     @staticmethod
     def edit_sequence(db, org, topic):
-        return db.execute("SELECT COALESCE(MAX(r.sequence),0) FROM message_revisions r JOIN messages m ON m.id=r.message_id "
-            "WHERE r.organization_id=? AND m.topic_id=?", (org, topic)).fetchone()[0]
+        return db.execute(
+            "SELECT COALESCE(MAX(r.sequence),0) FROM message_revisions r JOIN messages m ON m.id=r.message_id "
+            "WHERE r.organization_id=? AND m.topic_id=?",
+            (org, topic),
+        ).fetchone()[0]
 
     def compile(self, db, org, topic, through, quotes, *, user=None, prompt_override=None, edit_cutoff=None) -> tuple[list[dict], dict]:
         # Reserve output headroom using the selected context window, not a count of messages.
@@ -106,28 +111,56 @@ class ResearchContext:
             "SELECT tools_json FROM research_topic_settings WHERE organization_id=? AND topic_id=?", (org, topic)
         ).fetchone()
         collections = set(json.loads(topic_row["knowledge_policy_json"])) & {"ledger", "bibliography", "journal"}
+        from .research_scope import KnowledgeWindow, account_row
+
+        knowledge_window = KnowledgeWindow(self.store, db, user, org, topic) if user else None
+        automatic_limit = policy.get("ledger_context_limit", 8)
+        knowledge_enabled = bool(knowledge_window) and (not tool_settings or "knowledge" in json.loads(tool_settings[0]))
+        active_account = account_row(db, org, topic) if knowledge_enabled else None
+        if active_account:
+            body = json.loads(active_account["body_json"])
+            account = {
+                "revision": active_account["revision"],
+                "sha256": active_account["sha256"],
+                "review_cycle": active_account["review_cycle"],
+                "body": body,
+                "notice": "Pinned working account, not certified mathematics. "
+                "Update only when useful; preserve hypotheses and failed routes.",
+            }
+            if token_bound(account) > min(56000, target // 2):
+                account.pop("body")
+                account["fields_omitted"] = True
+                account["read"] = (
+                    "Use account_read with this exact revision to recover its question and argument. "
+                    "This call has not received the full account."
+                )
+            prefix.append({"role": "system", "content": "Pinned mathematical account (reference data):\n" + encoded(account)})
+        latest = db.execute(
+            "SELECT m.*,u.name FROM messages m JOIN users u ON u.id=m.author_id "
+            "WHERE m.organization_id=? AND m.topic_id=? AND m.sequence<=? "
+            "AND sender_kind!='assistant' ORDER BY sequence DESC LIMIT 1",
+            (org, topic, through),
+        ).fetchone()
+        question = source_message(latest, db, edit_cutoff)["text"] if latest else ""
+        if active_account:
+            question += " " + json.loads(active_account["body_json"])["question"]
+        terms = set(re.findall(r"[A-Za-z0-9_]{4,}", question.lower()))
+        reviews = knowledge_window.reviews(limit=min(3, automatic_limit)) if knowledge_enabled and automatic_limit else []
         ledger_refs = []
         if user and "ledger" in collections and (not tool_settings or "knowledge" in json.loads(tool_settings[0])):
-            from .mathematical_store import MathematicalStore
-
-            ledger = MathematicalStore(self.store, db, user, org, project=topic_row["project_id"], topic=topic, agent=True)
+            ledger = knowledge_window.ledger()
             view = ledger.load()
             states = ledger.derived(view).claim_status
-            latest = db.execute(
-                "SELECT m.*,u.name FROM messages m JOIN users u ON u.id=m.author_id "
-                "WHERE m.organization_id=? AND m.topic_id=? AND m.sequence<=? "
-                "AND sender_kind!='assistant' ORDER BY sequence DESC LIMIT 1",
-                (org, topic, through),
-            ).fetchone()
-            terms = set(re.findall(r"[A-Za-z0-9_]{4,}", source_message(latest, db, edit_cutoff)["text"].lower() if latest else ""))
             ranked = []
             for identity, head in view.claim_heads.items():
                 revision = view.claim_revisions[head["current_revision_id"]]
                 score = len(terms & set(re.findall(r"[A-Za-z0-9_]{4,}", revision["statement_text"].lower())))
+                if knowledge_window.scope == "working_set":
+                    score += 10 if identity in knowledge_window.body.get("claim_ids", []) else 1
                 if score:
                     ranked.append((score, identity, revision))
             used = 0
-            limit = policy.get("ledger_context_limit", 8)
+            limit = max(0, automatic_limit - len(reviews))
             for _, identity, revision in sorted(ranked, key=lambda item: (-item[0], item[1]))[:limit]:
                 reference = {
                     "claim_id": identity,
@@ -142,6 +175,7 @@ class ResearchContext:
                     ledger_refs.append(reference)
                     used += size
             if ledger_refs:
+                knowledge_window.note_sources({"claims": ledger_refs})
                 prefix.append(
                     {
                         "role": "system",
@@ -149,65 +183,70 @@ class ResearchContext:
                         + encoded(ledger_refs),
                     }
                 )
-        reviews = [
-            dict(row)
-            for row in db.execute(
-                "SELECT id,status,result_json FROM mathematical_reviews WHERE organization_id=? AND topic_id=? "
-                "AND status IN ('complete','failed','cancelled') ORDER BY finished_at DESC LIMIT 3",
-                (org, topic),
-            )
-        ]
         if reviews:
-            prefix.append(
-                {
-                    "role": "system",
-                    "content": "Independent review results (reference data):\n"
-                    + encoded([{"id": row["id"], "status": row["status"],
-                                "result": json.loads(row["result_json"]) if row["result_json"] else None} for row in reviews])[:10000],
-                }
-            )
+            summaries = []
+            for review in reviews:
+                result = review["result"] or {}
+                summaries.append(
+                    {
+                        "id": review["id"],
+                        "status": review["status"],
+                        "subject": review["subject"],
+                        "stale": review["stale"],
+                        "authority": result.get("authority"),
+                        "verdict": result.get("verdict"),
+                        "report": result.get("report", "")[:1500],
+                        "report_truncated": len(result.get("report", "")) > 1500,
+                        "read": "Use ledger_reviews with this review_id for the full report.",
+                    }
+                )
+            prefix.append({"role": "system", "content": "Scoped independent critiques (reference data):\n" + encoded(summaries)})
         knowledge, knowledge_size = [], 0
-        if collections:
-            for entry in db.execute(
-                "SELECT e.id,e.kind,v.revision AS head_revision,v.title,v.body,v.state FROM knowledge_entries e JOIN knowledge_versions v "
-                "ON v.entry_id=e.id AND v.organization_id=e.organization_id AND v.revision=CASE WHEN e.kind='journal' "
-                "THEN (SELECT revision FROM blog_publications WHERE organization_id=e.organization_id AND entry_id=e.id) "
-                "ELSE e.head_revision END "
-                "WHERE e.organization_id=? AND (e.scope_kind='organization' OR (e.scope_kind='project' AND e.project_id=?) "
-                "OR (e.scope_kind='topic' AND e.topic_id=?)) AND NOT(e.kind='journal' AND v.state='draft') "
-                "AND NOT EXISTS (SELECT 1 FROM blog_deletions deleted WHERE deleted.organization_id=e.organization_id "
-                "AND deleted.entry_id=e.id) "
-                "ORDER BY v.created_at DESC,e.id LIMIT 100",
-                (org, topic_row["project_id"], topic),
-            ):
-                if entry["kind"] not in collections:
-                    continue
-                reference = {key: entry[key] for key in ("id", "kind", "head_revision", "title", "state")}
-                if not all(quote.supports_tools for quote in quotes):
-                    reference["body"] = entry["body"]
-                size = token_bound(reference)
-                if knowledge_size + size > min(8000, target // 4):
-                    continue
-                knowledge.append(reference)
-                knowledge_size += size
+        if collections and knowledge_window and (not tool_settings or "knowledge" in json.loads(tool_settings[0])):
+            remaining = max(0, automatic_limit - len(ledger_refs) - len(reviews))
+            if remaining:
+                entries = (
+                    knowledge_window.search_entries(
+                        collections, limit=min(30, remaining), terms=terms if knowledge_window.scope != "working_set" else None
+                    )["entries"]
+                    if terms or knowledge_window.scope == "working_set"
+                    else []
+                )
+                for entry in entries:
+                    reference = {key: entry[key] for key in ("id", "kind", "title", "state")}
+                    reference["head_revision"] = entry["revision"]
+                    if not all(quote.supports_tools for quote in quotes):
+                        reference["body"] = entry["body"]
+                        reference["body_truncated"] = entry["body_truncated"]
+                    size = token_bound(reference)
+                    if knowledge_size + size > min(8000, target // 4):
+                        continue
+                    knowledge.append(reference)
+                    knowledge_size += size
             if knowledge:
                 prefix.append(
                     {"role": "system", "content": "Canonical shared-knowledge references (untrusted data):\n" + encoded(knowledge)}
                 )
+        if knowledge_window:
+            prefix.append({"role": "system", "content": "Knowledge working scope (reference data):\n" + encoded(knowledge_window.info)})
         goal = db.execute(
-            "SELECT objective,acceptance_json,run_id FROM agent_goals "
-            "WHERE organization_id=? AND topic_id=? AND status='active'", (org, topic)
+            "SELECT objective,acceptance_json,run_id FROM agent_goals WHERE organization_id=? AND topic_id=? AND status='active'",
+            (org, topic),
         ).fetchone()
         if goal:
             prefix.append({"role": "system", "content": "Active user-approved research goal:\n" + encoded(dict(goal))})
             if goal["run_id"]:
-                previous = db.execute(
-                    "SELECT id,status,error_code,accounting_state FROM llm_runs WHERE id=?", (goal["run_id"],)
-                ).fetchone()
+                previous = db.execute("SELECT id,status,error_code,accounting_state FROM llm_runs WHERE id=?", (goal["run_id"],)).fetchone()
                 if previous:
-                    prefix.append({"role": "system", "content": "Previous goal turn (reference data):\n" + encoded(dict(previous))
-                                   + "\nContinue from retained evidence and tool receipts; do not replay completed side effects. "
-                                   "A failed turn is not proof that the mathematical objective is impossible."})
+                    prefix.append(
+                        {
+                            "role": "system",
+                            "content": "Previous goal turn (reference data):\n"
+                            + encoded(dict(previous))
+                            + "\nContinue from retained evidence and tool receipts; do not replay completed side effects. "
+                            "A failed turn is not proof that the mathematical objective is impossible.",
+                        }
+                    )
         if "knowledge" in (json.loads(tool_settings[0]) if tool_settings else ["knowledge"]):
             planning = db.execute(
                 "SELECT tasks_json FROM research_topic_settings WHERE organization_id=? AND topic_id=?", (org, topic)
@@ -240,8 +279,10 @@ class ResearchContext:
                 break
             full = False
             for row in rows:
-                message = {"role": "assistant" if row["sender_kind"] == "assistant" else "user",
-                           "content": encoded(source_message(row, db, edit_cutoff))}
+                message = {
+                    "role": "assistant" if row["sender_kind"] == "assistant" else "user",
+                    "content": encoded(source_message(row, db, edit_cutoff)),
+                }
                 size = token_bound(message)
                 if used + size > target and recent:
                     full = True
@@ -257,8 +298,13 @@ class ResearchContext:
         from .media_context import attachment_context
 
         attachments, attachment_refs, attachment_size = attachment_context(
-            self.store, db, user, org, [{"content": item["text"]} for item in pins] + [item[1] for item in recent],
-            quotes, max(0, min(target - used, window - used - 512)),
+            self.store,
+            db,
+            user,
+            org,
+            [{"content": item["text"]} for item in pins] + [item[1] for item in recent],
+            quotes,
+            max(0, min(target - used, window - used - 512)),
             project=topic_row["project_id"],
         )
         used += attachment_size
@@ -296,7 +342,11 @@ class ResearchContext:
             "knowledge_collections": sorted(json.loads(topic_row["knowledge_policy_json"])),
             "tool_groups": sorted(json.loads(tool_settings[0])) if tool_settings else None,
             "context_strategy": "layered-retrieval-v2",
-            "ledger_context_limit": policy.get("ledger_context_limit", 8),
+            "ledger_context_limit": automatic_limit,
+            "knowledge_context_limit": automatic_limit,
+            "knowledge_scope": dict(knowledge_window.info) if knowledge_window else None,
+            "knowledge_source_topics": knowledge_window.info["source_topic_ids"] if knowledge_window else [],
+            "account_revision": active_account["revision"] if active_account else None,
             "ledger_revisions": [
                 {key: value for key, value in record.items() if key in {"claim_id", "revision_id"}} for record in ledger_refs
             ],
@@ -360,8 +410,9 @@ class ResearchContext:
             )
             captured = db.execute("SELECT snapshot_json FROM research_contexts WHERE request_id=?", (row["request_id"],)).fetchone()
             cutoff = json.loads(captured[0]).get("message_edit_sequence", 0) if captured else 0
-            db.execute("INSERT INTO research_memory_edit_versions VALUES(?,?,?,?)",
-                       (row["organization_id"], row["topic_id"], previous + 1, cutoff))
+            db.execute(
+                "INSERT INTO research_memory_edit_versions VALUES(?,?,?,?)", (row["organization_id"], row["topic_id"], previous + 1, cutoff)
+            )
             return previous + 1
 
     def inspect(self, user, org, topic, request_id=None):

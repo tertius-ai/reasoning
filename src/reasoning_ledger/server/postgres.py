@@ -25,7 +25,7 @@ from .schema_operations import sqlite_migration
 _IDENTIFIER = re.compile(r"[a-z][a-z0-9_]{0,62}\Z")
 _SQL_LITERAL = re.compile(r"'(?:[^']|'')*'|\"(?:[^\"]|\"\")*\"|--[^\n]*|/\*.*?\*/|\$(\w*)\$.*?\$\1\$", re.S)
 _JSON_CALL = re.compile(r"\bjson_extract\(([^(),]+),\s*'(\$[^']*)'\)")
-_JSON_INTEGER = {"actual_microusd", "prompt_tokens", "completion_tokens", "max_completion_tokens", "max_concurrency"}
+_JSON_INTEGER = {"actual_microusd", "prompt_tokens", "completion_tokens", "max_completion_tokens", "max_concurrency", "account_cycle"}
 _JSON_FLOAT = {"input_kwh_per_million", "output_kwh_per_million", "grid_grams_co2e_per_kwh"}
 
 

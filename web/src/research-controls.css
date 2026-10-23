@@ -28,3 +28,12 @@
 @keyframes org-goal-pulse { 50% { opacity: .25; } }
 @media (prefers-reduced-motion: reduce) { .org-goal-live i { animation: none; } }
 @media (max-width: 700px) { .org-research-controls { padding: 0 12px; } .org-goal-live { display: none; } .org-research-tool-grid { grid-template-columns: repeat(2, 1fr); } .org-goal-limits { grid-template-columns: repeat(2, 1fr); } }
+
+.org-research-pane:has(.org-research-account) { max-height: 55vh; }
+.org-research-account { overflow-wrap: anywhere; }
+.org-research-account header { display: flex; align-items: baseline; flex-wrap: wrap; gap: .75rem; }
+.org-research-account h4 { margin-bottom: .4rem; font-size: 13px; }
+.org-research-account label { display: grid; gap: .4rem; margin: .75rem 0; }
+.org-research-account textarea, .org-research-account input, .org-research-account select { width: 100%; min-width: 0; }
+.org-research-account fieldset { min-width: 0; }
+.org-research-account button { margin: .25rem .5rem .25rem 0; }

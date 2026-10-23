@@ -92,7 +92,7 @@ test("ordinary beta conversation delegates, streams roles and integrates without
     const channel = await call(root + "/channels", { name: "research", project_id: project.id });
     const topic = await call(root + "/topics", { name: "Native agents", kind: "beta", channel_id: channel.id });
     browser = await chromium.launch({ headless: true }); const page = await browser.newPage();
-    page.on("pageerror", error => errors.push(error.message));
+    page.on("pageerror", error => { errors.push(error.message); console.error(error.message); });
     await page.goto(url + "/organization.html");
     await page.getByLabel("Email", { exact: true }).fill("owner@example.org");
     await page.getByLabel("Password", { exact: true }).fill(password);
@@ -101,6 +101,53 @@ test("ordinary beta conversation delegates, streams roles and integrates without
     assert.equal(await page.getByRole("link", { name: /^Work in/ }).count(), 0);
     await page.getByText("System prompt", { exact: true }).click();
     await page.getByText(/Ordinary questions and discussion need a useful reply/).waitFor();
+    const linked = await call(root + "/mathematics", { name: "ledger_claim", topic_id: topic.id,
+      arguments: { statement: "A supporting tensor hypothesis." }, client_id: "browser-source-001" });
+    // A sustained question has immutable candidates; ordinary discussion still sends normally.
+    await page.getByRole("button", { name: "Research account", exact: true }).click();
+    const account = page.getByRole("region", { name: "Research account", exact: true });
+    await account.getByRole("button", { name: "Start research account", exact: true }).click();
+    await account.getByLabel("Exact question", { exact: true }).fill("Does $H$ imply $C$?");
+    await account.getByLabel("Current argument", { exact: true }).fill("The candidate uses $H$ at the critical step.");
+    await account.getByLabel("Remaining gaps", { exact: true }).fill("Justify the critical step.");
+    await account.getByLabel("Search project knowledge", { exact: true }).fill("tensor");
+    await account.getByRole("button", { name: "Find knowledge to link", exact: true }).click();
+    await account.getByRole("button", { name: "Pin this version", exact: true }).click();
+    await account.getByRole("button", { name: "Save account", exact: true }).click();
+    await account.locator(".katex").first().waitFor();
+    await account.getByText("Version 1 · review cycle 1", { exact: true }).waitFor();
+    await account.getByRole("button", { name: "Prepare independent critique", exact: true }).click();
+    assert.match(await page.getByLabel("Message", { exact: true }).inputValue(), /account version 1 using account_request_review/);
+    assert.equal(calls.length, 0, "preparing a critique must not start a paid request");
+    await page.setViewportSize({ width: 390, height: 844 });
+    assert.equal(await account.evaluate(element => element.scrollWidth <= element.clientWidth + 1), true, "the account fits a phone viewport");
+    await page.setViewportSize({ width: 1280, height: 720 });
+    await account.getByRole("button", { name: "Edit current account", exact: true }).click();
+    await account.getByLabel("Remaining gaps", { exact: true }).fill("My unsaved correction survives a conflict.");
+    await call(root + "/topics/" + topic.id + "/research-account", { changes: { argument: "A collaborator's revised candidate." },
+      expected_revision: 1, client_id: "concurrent-account-save" }, "PUT");
+    await account.getByRole("button", { name: "Save account", exact: true }).click();
+    await account.getByRole("alert").getByText(/research account changed/).waitFor();
+    assert.equal(await account.getByLabel("Remaining gaps", { exact: true }).inputValue(), "My unsaved correction survives a conflict.");
+    await account.getByRole("button", { name: "Cancel edit", exact: true }).click();
+    await account.getByRole("button", { name: "Load current account", exact: true }).click();
+    await account.getByText("Version 2 · review cycle 1", { exact: true }).waitFor();
+    await call(root + "/mathematics", { name: "ledger_refine", topic_id: topic.id, arguments: { claim_id: linked.claim_id,
+      statement: "A revised supporting tensor hypothesis.", expected_revision_id: linked.revision_id }, client_id: "browser-source-002" });
+    await account.getByRole("button", { name: "Edit current account", exact: true }).click();
+    await account.getByLabel("Search project knowledge", { exact: true }).fill("tensor");
+    await account.getByRole("button", { name: "Find knowledge to link", exact: true }).click();
+    await account.getByRole("button", { name: "Pin this version", exact: true }).click();
+    await account.getByRole("button", { name: "Save account", exact: true }).click();
+    await account.getByText("Version 3 · review cycle 1", { exact: true }).waitFor();
+    const currentAccount = await call(root + "/topics/" + topic.id + "/research-account", undefined, "GET");
+    assert.notEqual(currentAccount.body.pins.claim_ids[0].revision_id, linked.revision_id, "repinning an existing link saves its new exact revision");
+    await account.getByLabel("Saved account candidate").selectOption("1");
+    await account.getByText("The candidate uses", { exact: false }).waitFor();
+    const accountLink = await account.getByRole("link", { name: "Link to this account version", exact: true }).getAttribute("href");
+    await page.goto(url + accountLink);
+    await page.getByRole("region", { name: "Research account", exact: true }).getByText("Version 1 · earlier candidate · review cycle 1", { exact: true }).waitFor();
+    await page.getByRole("button", { name: "Close research panel", exact: true }).click();
     await page.getByLabel("Message", { exact: true }).fill("Please compare two approaches and consult a librarian and critic.");
     await page.getByRole("button", { name: /^(Send|Send message)$/, exact: true }).click();
     await page.locator("article.org-message").getByText("Integrated comparison: the evidence is provisional.", { exact: true }).waitFor();

@@ -6,6 +6,7 @@ import { ApiError, OrganizationPrices, aborted, decimalBudget, errorMessage, req
 import { ModelPicker } from "./ModelBrowser";
 import { catalogModel, modelOptionGroups } from "./modelRecommendations";
 import { MathematicsBrowser, ResearchMarkdown } from "./MathematicsBrowser";
+import { ResearchAccount } from "./ResearchAccount";
 import { ResearchFiles } from "./ResearchFiles";
 import "./research-controls.css";
 import { useTopicCommand } from "./TopicCommands";
@@ -97,26 +98,33 @@ export function ResearchGoalSummary({ goal, canControl, busy, onControl }: { goa
 }
 
 export function ResearchControls({ organizationId, topicId, userId, selectedModel, catalog, allowedModels, canWrite, canManage, online,
-  goalDraft, onGoalDraftDone, onGoalStarted, onAuthLost, toolbarTarget, onSettingsChanged, selectedEffort = null }: {
+  goalDraft, onGoalDraftDone, onGoalStarted, onAuthLost, toolbarTarget, onSettingsChanged, onPrepareReview, selectedEffort = null }: {
   organizationId: string; topicId: string; userId: string; selectedModel: string; canWrite: boolean; canManage: boolean; online: boolean;
   catalog: OrganizationPrices | null; allowedModels: string[];
   goalDraft: string | null; onGoalDraftDone: () => void; onGoalStarted: (objective: string) => void; onAuthLost: () => void;
   toolbarTarget: HTMLElement | null;
   selectedEffort?: string | null;
   onSettingsChanged?: () => void;
+  onPrepareReview?: (text: string) => void;
 }) {
   const [goal, setGoal] = useState<Goal | null>(null); const [enabled, setEnabled] = useState<ResearchTool[]>([...RESEARCH_TOOLS]);
   const [context, setContext] = useState<Context | null>(null); const [proposals, setProposals] = useState<Proposal[]>([]);
-  const [pane, setPane] = useState<"goal" | "context" | "tools" | "proposals" | "ledger" | "files" | "reviews" | null>(null);
-  const [reviewer, setReviewer] = useState("");
+  const [pane, setPane] = useState<"goal" | "context" | "tools" | "proposals" | "ledger" | "files" | "reviews" | "account" | null>(() => typeof window !== "undefined" && new URLSearchParams(window.location.search).get("topic") === topicId && new URLSearchParams(window.location.search).has("account_revision") ? "account" : null);
+  useEffect(() => {
+    const linked = () => { const query = new URLSearchParams(window.location.search);
+      if (query.get("topic") === topicId && query.has("account_revision")) setPane("account"); };
+    window.addEventListener("popstate", linked); return () => window.removeEventListener("popstate", linked);
+  }, [topicId]);
+  const [reviewer, setReviewer] = useState(""), [reviewScope, setReviewScope] = useState("");
   const [reviewEnabled, setReviewEnabled] = useState(true), [profile, setProfile] = useState("workbench");
   const [additionalInstructions, setAdditionalInstructions] = useState("");
-  const [ledgerLimit, setLedgerLimit] = useState(8);
+  const [ledgerLimit, setLedgerLimit] = useState(8), [knowledgeScope, setKnowledgeScope] = useState("working_set");
   const [sourceConfig, setSourceConfig] = useState<{ web_search_configured: boolean; current_date: string } | null>(null);
   const [profiles, setProfiles] = useState<{ id: string; name: string; description: string }[]>([]);
   const [computeAllowance, setComputeAllowance] = useState(0);
   const [reviews, setReviews] = useState<{ id: string; status: string; requested_by: string; reviewer_model: string;
-    result: { report?: string; error?: string; distinct_model?: boolean; verdict?: { verdict: string } } | null }[]>([]);
+    subject?: { account_revision?: number; account_sha256?: string }; stale?: boolean;
+    result: { recurring_objection?: boolean; changed_fields?: string[]; report?: string; error?: string; distinct_model?: boolean; verdict?: { verdict: string } } | null }[]>([]);
   const [createOpen, setCreateOpen] = useState(false); const [objective, setObjective] = useState("");
   const [goalModel, setGoalModel] = useState("");
   const [goalEffort, setGoalEffort] = useState(selectedEffort ?? "");
@@ -162,7 +170,7 @@ export function ResearchControls({ organizationId, topicId, userId, selectedMode
           request<Proposal[]>(root + "/research-proposals", { signal: controller.signal }),
           // Summaries only: a receipt's arguments and result are read when it is opened.
           request<ToolReceipt[]>(root + "/research-tools?summary=1&after=" + toolReceiptAfter(toolState.current), { signal: controller.signal }),
-          request<typeof reviews>(root + "/mathematical-reviews", { signal: controller.signal }),
+          request<typeof reviews>(root + "/mathematical-reviews" + (reviewScope ? "?scope=" + reviewScope : ""), { signal: controller.signal }),
         ]);
         if (controller.signal.aborted) return; setGoal(current); setProposals(pending); setReviews(checked); setPollError("");
         const merged = mergeToolReceipts(toolState.current, toolReceipts);
@@ -188,15 +196,15 @@ export function ResearchControls({ organizationId, topicId, userId, selectedMode
     void poll();
     void request<{ tools: ResearchTool[]; reviewer_model?: string; compute_allowance_cpu_seconds?: number;
       review_enabled?: boolean; prompt_profile?: string; additional_instructions?: string;
-      ledger_context_limit?: number; web_search_configured: boolean; current_date: string;
+      ledger_context_limit?: number; knowledge_context_limit?: number; knowledge_scope?: string; web_search_configured: boolean; current_date: string;
       profiles?: { id: string; name: string; description: string }[] }>(root + "/research-settings", { signal: controller.signal }).then((value) => {
       if (!controller.signal.aborted) { setEnabled(value.tools); setReviewer(value.reviewer_model ?? ""); setComputeAllowance(value.compute_allowance_cpu_seconds ?? 0);
         setReviewEnabled(value.review_enabled ?? true); setProfile(value.prompt_profile ?? "workbench");
         setAdditionalInstructions(value.additional_instructions ?? ""); setProfiles(value.profiles ?? []);
-        setLedgerLimit(value.ledger_context_limit ?? 8); setSourceConfig(value); }
+        setLedgerLimit(value.knowledge_context_limit ?? value.ledger_context_limit ?? 8); setKnowledgeScope(value.knowledge_scope ?? "working_set"); setSourceConfig(value); }
     }).catch((cause) => { if (!aborted(cause)) fail(cause); });
     return () => { controller.abort(); clearTimeout(timer); };
-  }, [root, receiptKey, refresh, onAuthLost]);
+  }, [root, receiptKey, refresh, reviewScope, onAuthLost]);
   const loadContext = async () => {
     setPane(pane === "context" ? null : "context"); setError("");
     try { setContext(await request<Context>(root + "/research-context")); } catch (cause) { fail(cause); }
@@ -211,12 +219,13 @@ export function ResearchControls({ organizationId, topicId, userId, selectedMode
   const activeTool = recentTools.find((tool) => tool.status === "requested");
   useTopicCommand(topicId, command => {
     if (command === "context") { void loadContext(); return; }
-    if (["ledger", "files", "goal", "tools", "proposals", "reviews"].includes(command)) {
+    if (["ledger", "files", "goal", "tools", "proposals", "reviews", "account"].includes(command)) {
       if (command === "goal" && !goal && canWrite) { setCreateOpen(true); return; }
       setPane(current => current === command ? null : command as typeof pane);
     }
   });
   return <div className="org-research-controls">
+    <button type="button" className="org-project-files" aria-pressed={pane === "account"} onClick={() => setPane(current => current === "account" ? null : "account")}>Research account</button>
     <button type="button" className="org-project-files" aria-pressed={pane === "files"}
       onClick={() => setPane(current => current === "files" ? null : "files")}>Project files</button>
     <p className="org-help" aria-label="Effective model capabilities">{selectedModel.startsWith("bot/")
@@ -230,11 +239,16 @@ export function ResearchControls({ organizationId, topicId, userId, selectedMode
     {(goal?.status === "active" || activeTool) && <span role="status" className="org-goal-live"><i />{activeTool ? `Using ${activeTool.name.replaceAll("_", " ")}` : "Working toward your goal"}</span>}
   </div>, toolbarTarget)}
     {pane && <button type="button" aria-label="Close research panel" onClick={() => setPane(null)}>×</button>}
+    {pane === "account" && <div className="org-research-pane"><ResearchAccount key={root} root={root} canWrite={canWrite} online={online}
+      reviewAvailable={!!onPrepareReview && !selectedModel.startsWith("bot/") && !!catalogModel(catalog, selectedModel)?.supports_tools && enabled.includes("knowledge") && reviewEnabled}
+      onPrepareReview={onPrepareReview} onAuthLost={onAuthLost} /></div>}
     {pane === "ledger" && <div className="org-research-pane"><MathematicsBrowser organizationId={organizationId} topicId={topicId} canWrite={canWrite} onAuthLost={onAuthLost} /></div>}
     {pane === "files" && <div className="org-research-pane"><ResearchFiles organizationId={organizationId} topicId={topicId} canWrite={canWrite} onAuthLost={onAuthLost} /></div>}
-    {pane === "reviews" && <div className="org-research-pane">{reviews.map((review) => <details key={review.id}>
-      <summary>{review.result?.verdict?.verdict ?? review.status} · {review.reviewer_model}</summary>
-      <p className="org-help">Fresh-context {review.result?.distinct_model === false ? "same-model " : ""}LLM review, not formal certification.</p>
+    {pane === "reviews" && <div className="org-research-pane"><label>Review scope<select value={reviewScope} onChange={event => setReviewScope(event.target.value)}><option value="">Topic default</option><option value="working_set">Account working set</option><option value="topic">This topic</option><option value="project">Authorized project</option></select></label>{reviews.map((review) => <details key={review.id}>
+      <summary>{review.subject?.account_revision ? `Account v${review.subject.account_revision}${review.stale ? " · earlier candidate" : ""} · ` : ""}{review.result?.verdict?.verdict ?? review.status} · {review.reviewer_model}</summary>
+      <p className="org-help">{review.subject?.account_revision ? "Exact-version account critique; ledger status is unchanged. " : ""}Fresh-context {review.result?.distinct_model === false ? "same-model " : ""}LLM review, not formal certification.</p>
+      {review.result?.changed_fields && <p>Changed since previous critique: {review.result.changed_fields.join(", ") || "no account fields"}.</p>}
+      {review.result?.recurring_objection && <p>The same strongest objection recurs. Change approach or preserve the unresolved gap.</p>}
       <ResearchMarkdown>{review.result?.report ?? review.result?.error ?? "Review has not returned a report."}</ResearchMarkdown>
       {canWrite && (canManage || review.requested_by === userId) && ["pending", "running"].includes(review.status) && <button disabled={busy || !online} onClick={() => {
         setBusy(true); void request(root + "/mathematical-reviews/" + review.id + "/cancel", { method: "POST", body: {} })
@@ -264,16 +278,19 @@ export function ResearchControls({ organizationId, topicId, userId, selectedMode
     {pane === "tools" && <div className="org-research-pane"><form onSubmit={(event) => {
       event.preventDefault(); setBusy(true); setError(""); void request(root + "/research-settings", { method: "PUT", body: { tools: enabled, reviewer_model: reviewer || null,
         review_enabled: reviewEnabled, prompt_profile: profile, additional_instructions: additionalInstructions,
-        ledger_context_limit: ledgerLimit, compute_allowance_cpu_seconds: computeAllowance } })
+        knowledge_context_limit: ledgerLimit, knowledge_scope: knowledgeScope, compute_allowance_cpu_seconds: computeAllowance } })
         .then(() => { setRefresh((value) => value + 1); onSettingsChanged?.(); }).catch(fail).finally(() => setBusy(false));
     }}><label>Research strategy<select aria-label="Research strategy" value={profile} disabled={!canWrite || busy} onChange={event => setProfile(event.target.value)}>
       {profiles.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>
       <p className="org-help">{profiles.find(item => item.id === profile)?.description} All strategies use the same granted tools and ledger.</p>
       <label>Additional research instructions<textarea value={additionalInstructions} maxLength={8000} rows={2} disabled={!canWrite || busy}
         onChange={event => setAdditionalInstructions(event.target.value)} /></label>
-      <label>Automatic relevant ledger records (0 disables)<input type="number" min={0} max={20} value={ledgerLimit}
+      <label>Default knowledge scope<select value={knowledgeScope} disabled={!canWrite || busy} onChange={event => setKnowledgeScope(event.target.value)}>
+        <option value="working_set">Account working set (topic until an account exists)</option><option value="topic">This topic</option><option value="project">Authorized project knowledge</option>
+      </select></label>
+      <label>Automatic knowledge records (0 disables)<input type="number" min={0} max={20} value={ledgerLimit}
         disabled={!canWrite || busy} onChange={event => setLedgerLimit(Number(event.target.value))} /></label>
-      <p className="org-help">Only matching records within current topic/project access enter context. Wider knowledge is read on demand.</p>
+      <p className="org-help">The combined allowance covers relevant ledger records, critique summaries and shared knowledge references. Account links include supporting dependencies; wider authorized knowledge is available through explicit project searches and exact reads.</p>
       <div className="org-research-tool-grid">{RESEARCH_TOOLS.map((tool) => <label key={tool}><input type="checkbox" checked={enabled.includes(tool)} disabled={!canWrite || busy}
       onChange={(event) => setEnabled((current) => event.target.checked ? [...current, tool] : current.filter((item) => item !== tool))} />{TOOL_LABELS[tool]}</label>)}</div>
       <label><input type="checkbox" checked={reviewEnabled} disabled={!canWrite || busy} onChange={event => setReviewEnabled(event.target.checked)} />Fresh-context review</label>

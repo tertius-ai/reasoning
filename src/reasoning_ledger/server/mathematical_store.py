@@ -22,10 +22,12 @@ from .store import StoreError
 class MathematicalStore(LedgerStore):
     remote_sources = True
 
-    def __init__(self, store, db, user, organization, *, project=None, topic=None, agent=False):
+    def __init__(self, store, db, user, organization, *, project=None, topic=None, agent=False,
+                 allow_project_topics=False, topic_authorize=None):
         super().__init__(Path("/mathematical-records"))
         self.store, self.db, self.user, self.org = store, db, user, organization
         self.project, self.topic, self.agent = project, topic, agent
+        self.allow_project_topics, self.topic_authorize = allow_project_topics, topic_authorize
         self.importing = False
         self.role = store._require(db, user, organization, write=False)
         self._access_cache = {}
@@ -69,6 +71,7 @@ class MathematicalStore(LedgerStore):
             or self.agent
             and row["topic_id"]
             and row["topic_id"] != self.topic
+            and not self.allow_project_topics
         ):
             return False
         key = (row["project_id"], row["topic_id"])
@@ -78,6 +81,8 @@ class MathematicalStore(LedgerStore):
                     topic = self.store._topic_access(self.db, self.user, self.org, row["topic_id"])[4]
                     if self.agent and topic["kind"] == "alpha":
                         return False
+                    if self.topic_authorize:
+                        self.topic_authorize(self.db, row["topic_id"])
                 elif row["project_id"]:
                     self.store._project_access(self.db, self.user, self.org, row["project_id"])
                 self._access_cache[key] = True

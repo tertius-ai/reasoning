@@ -1178,6 +1178,10 @@ function Conversation({ organizationId, topic, members, user, canWrite, canManag
       selectedModel={selectedModel} canWrite={canWrite} canManage={canManage} online={online} goalDraft={goalDraft}
       onGoalDraftDone={() => setGoalDraft(null)} onGoalStarted={(objective) => {
         if (goalCommand(currentDraft.current.text) === objective) updateDraft(newDraft()); onPreference();
+      }} onPrepareReview={text => {
+        if (!canWrite || modelAttempt || currentDraft.current.attempted) return;
+        updateDraft({ ...currentDraft.current, text: [currentDraft.current.text.trim(), text].filter(Boolean).join("\n\n"), clientId: crypto.randomUUID(), attempted: false });
+        requestAnimationFrame(() => textarea.current?.focus());
       }} onSettingsChanged={() => setPromptRevision(value => value + 1)} onAuthLost={onAuthLost} />}
       {topic.kind === "gamma" && <WorkflowConversation organizationId={organizationId} topicId={topic.id} userId={user.id}
         canWrite={canWrite} canManage={canManage} attempt={workflowAttempt} onAttempt={onWorkflowAttempt}
@@ -1643,7 +1647,14 @@ export function OrganizationApp({ user, onAccount, onAuthenticated, onSignedOut,
 
   const select = (id: string, anchor: number | null = null, message?: string) => {
     setHelpOpen(false);
-    if (knowledgeView) { setKnowledgeView(null); const url = new URL(window.location.href); url.searchParams.delete("view"); url.searchParams.set("topic", id); window.history.pushState(null, "", url); }
+    const url = new URL(window.location.href);
+    if (knowledgeView || url.searchParams.get("topic") !== id) {
+      setKnowledgeView(null); url.searchParams.delete("view"); url.searchParams.delete("project");
+      url.searchParams.delete("account_revision"); url.searchParams.delete("claim"); url.searchParams.delete("message");
+      url.searchParams.set("organization", organizationId!); url.searchParams.set("topic", id);
+      if (message) url.searchParams.set("message", message);
+      window.history.pushState(null, "", url);
+    }
     setWorkspace(current=>({...current,topic:id,view:null,project:undefined,message:undefined}));
     setSelection({ topic: id, anchor, message }); setDirect(null);
     if (window.innerWidth <= 700) setNavOpen(false);

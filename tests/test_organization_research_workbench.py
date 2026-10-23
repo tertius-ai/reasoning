@@ -31,16 +31,308 @@ def source_run(installation):
     return state, owner, topics, row, tools
 
 
+def test_question_account_keeps_exact_candidates_retries_and_conflicts(installation):
+    from reasoning_ledger.server.research_accounts import ResearchAccounts
+    from reasoning_ledger.server.store import StoreError
+
+    state, owner, topics, _, tools = source_run(installation)
+    user, org, topic = owner["user_id"], owner["organization_id"], topics[1]["id"]
+    accounts = ResearchAccounts(state.store)
+    assert accounts.read(user, org, topic) is None
+    first = accounts.update(
+        user,
+        org,
+        topic,
+        {
+            "question": "Can H be removed?",
+            "argument": "Step 1 uses H.",
+            "gaps": "Find a replacement for step 1.",
+            "failed_approaches": "A naive limit fails.",
+        },
+        0,
+        "account-first",
+    )
+    second = accounts.update(user, org, topic, {"argument": "H is essential: a counterexample."}, 1, "account-second")
+    assert second["body"]["gaps"] == first["body"]["gaps"]
+    assert (
+        accounts.update(
+            user,
+            org,
+            topic,
+            {
+                "question": "Can H be removed?",
+                "argument": "Step 1 uses H.",
+                "gaps": "Find a replacement for step 1.",
+                "failed_approaches": "A naive limit fails.",
+            },
+            0,
+            "account-first",
+        )["revision"]
+        == 1
+    )
+    assert accounts.read(user, org, topic, 1)["body"]["argument"] == "Step 1 uses H."
+    with pytest.raises(StoreError, match="changed"):
+        accounts.update(user, org, topic, {"gaps": "Silently overwrite"}, 1, "stale-account")
+    with pytest.raises(StoreError, match="identity"):
+        accounts.update(user, org, topic, {"question": "Another question"}, 2, "account-first")
+    with pytest.raises(StoreError, match="beta"):
+        accounts.read(user, org, topics[0]["id"])
+    with pytest.raises(StoreError, match="person"):
+        accounts.update(user, org, topic, {"approach": "Another method"}, 2, "model-reset", run_id=tools.row["id"], new_approach=True)
+    with state.store.transaction() as db:
+        assert db.execute("SELECT COUNT(*) FROM mathematical_records").fetchone()[0] == 0
+    # Discovery and bounded exact field readers share the same persistent account.
+    result = tools.invoke("account_read", {"revision": 1, "field": "argument", "length": 6})["result"]
+    assert result["text"] == "Step 1" and result["truncated"] and result["revision"] == 1
+
+    from fastapi.testclient import TestClient
+    from test_public_server import PASSWORD, PUBLIC_URL
+
+    client = installation[2]
+    invitation = client.post(f"/api/organizations/{org}/invitations", json={"email": "reader@example.org", "role": "viewer"}).json()
+    reader = TestClient(client.app, base_url=PUBLIC_URL)
+    session = reader.post(
+        "/api/invitations/accept", json={"token": invitation["token"], "name": "Reader", "password": PASSWORD, "transport": "bearer"}
+    ).json()
+    reader.headers["Authorization"] = "Bearer " + session["access_token"]
+    path = f"/api/organizations/{org}/topics/{topic}/research-account"
+    assert reader.get(path).json()["revision"] == 2
+    assert (
+        reader.put(path, json={"expected_revision": 2, "changes": {"question": "Overwrite"}, "client_id": "reader-write"}).status_code
+        == 403
+    )
+    assert (
+        client.put(path, json={"expected_revision": True, "changes": {"question": "Overwrite"}, "client_id": "bool-version"}).status_code
+        == 422
+    )
+
+
+def test_account_working_scope_preserves_premises_and_allows_explicit_expansion(installation):
+    from reasoning_ledger.server.research_accounts import ResearchAccounts
+    from reasoning_ledger.server.store import StoreError
+
+    state, owner, topics, _, tools = source_run(installation)
+    user, org, topic = owner["user_id"], owner["organization_id"], topics[1]["id"]
+    premise = tools.invoke("ledger_claim", {"statement": "Hypothesis H holds."})["result"]
+    target = tools.invoke("ledger_claim", {"statement": "The desired conclusion follows from H."})["result"]
+    unrelated = tools.invoke("ledger_claim", {"statement": "An unrelated question remains open."})["result"]
+    tools.invoke(
+        "ledger_prove",
+        {
+            "claim_id": target["claim_id"],
+            "argument": "Apply the hypothesis.",
+            "premises": [{"claim_id": premise["claim_id"], "revision_id": premise["revision_id"]}],
+        },
+    )
+    accounts = ResearchAccounts(state.store)
+    with pytest.raises(StoreError, match="revision"):
+        accounts.update(user, org, topic, {"question": "Prove the conclusion", "claim_ids": [target["claim_id"]]}, 0, "unread-pin")
+    saved = accounts.update(
+        user,
+        org,
+        topic,
+        {"question": "Prove the conclusion", "claim_ids": [target["claim_id"]]},
+        0,
+        "root-pin",
+        expected_links={target["claim_id"]: target["revision_id"]},
+    )
+    scoped = tools.invoke("ledger_status", {"statements": "all"})["result"]
+    wide = tools.invoke("ledger_status", {"scope": "project", "statements": "all"})["result"]
+    assert {item["claim_id"] for item in scoped["claims"]} == {target["claim_id"], premise["claim_id"]}
+    assert unrelated["claim_id"] in {item["claim_id"] for item in wide["claims"]} and scoped["knowledge_scope"]["dependency_count"] == 1
+    assert (
+        next(item["status"] for item in scoped["claims"] if item["claim_id"] == target["claim_id"])
+        == next(item["status"] for item in wide["claims"] if item["claim_id"] == target["claim_id"])
+        != "established"
+    )
+    assert tools.invoke("ledger_read", {"ledger_id": unrelated["claim_id"]})["result"]["claim_id"] == unrelated["claim_id"]
+    revised = tools.invoke("ledger_refine", {"claim_id": target["claim_id"], "statement": "A changed conclusion."})["result"]
+    # An account does not silently adopt a changed linked statement.
+    assert accounts.read(user, org, topic)["linked_changes"] == [{"id": target["claim_id"], "changed": True, "unavailable": False}]
+    material = accounts.read(user, org, topic)["body"]["pins"]["claim_ids"][0]
+    assert (
+        material["revision_id"]
+        == saved["body"]["pins"]["claim_ids"][0]["revision_id"]
+        != revised.get("revision_id", revised.get("current_revision_id"))
+    )
+    with pytest.raises(StoreError, match="revision"):
+        accounts.update(
+            user, org, topic, {"claim_ids": [target["claim_id"]]}, 1, "old-pin", expected_links={target["claim_id"]: target["revision_id"]}
+        )
+    with state.store.transaction() as db:
+        packet = accounts.material(db, user, org, topic, 1)[1]
+    assert packet["linked_evidence"][0]["record"]["statement_text"] == "The desired conclusion follows from H."
+
+
+def test_scoped_entries_use_published_versions_and_keyset_pages(installation):
+    from reasoning_ledger.server.knowledge_store import KnowledgeStore
+    from reasoning_ledger.server.research_accounts import ResearchAccounts
+    from reasoning_ledger.server.research_scope import KnowledgeWindow
+
+    state, owner, topics, _, tools = source_run(installation)
+    user, org, topic = owner["user_id"], owner["organization_id"], topics[1]["id"]
+    knowledge = KnowledgeStore(state.store)
+    created = []
+    for index in range(4):
+        created.append(
+            knowledge.create(
+                user,
+                org,
+                client_id=f"shared-source-{index:04d}",
+                kind="bibliography",
+                title=f"Source {index}",
+                body="Read the full source.",
+                state="active",
+                scope_kind="topic",
+                scope_id=topic,
+            )
+        )
+    accounts = ResearchAccounts(state.store)
+    accounts.update(
+        user,
+        org,
+        topic,
+        {"question": "Compare these sources", "entry_ids": [created[0]["id"]]},
+        0,
+        "entry-scope",
+        expected_links={created[0]["id"]: 1},
+    )
+    small = tools.invoke("knowledge_search", {})["result"]
+    assert [entry["id"] for entry in small["entries"]] == [created[0]["id"]]
+    with state.store.transaction() as db:
+        window = KnowledgeWindow(state.store, db, user, org, topic, "project")
+        first = window.search_entries({"bibliography"}, limit=2)
+        second = window.search_entries({"bibliography"}, limit=2, before=first["next_before"])
+    assert len(first["entries"]) == len(second["entries"]) == 2
+    assert {entry["id"] for entry in first["entries"]}.isdisjoint(entry["id"] for entry in second["entries"])
+    draft = tools.invoke("blog_create", {"title": "A draft", "body": "Still working."})["result"]
+    assert tools.invoke("blog_read", {"entry_id": draft["id"]})["result"]["state"] == "draft"
+    assert draft["id"] not in [entry["id"] for entry in tools.invoke("knowledge_search", {"scope": "project"})["result"]["entries"]]
+
+
+def test_account_critique_is_exact_bounded_and_does_not_certify(installation):
+    from reasoning_ledger.server.research_accounts import ResearchAccounts
+
+    state, owner, topics, row, tools = source_run(installation)
+    user, org, topic = owner["user_id"], owner["organization_id"], topics[1]["id"]
+    accounts, reviews = ResearchAccounts(state.store), ResearchReviews(state)
+    claim = tools.invoke("ledger_claim", {"statement": "An unchecked assertion."})["result"]
+    first = accounts.update(
+        user,
+        org,
+        topic,
+        {"question": "Why is 2=2?", "argument": "By reflexivity.", "gaps": "Check the exact hypotheses."},
+        0,
+        "critique-account",
+    )
+    admitted = reviews.request(tools, account_revision=1)
+    assert admitted["status"] == "pending"
+    accounts.update(user, org, topic, {"next_steps": "Await critique."}, 1, "critique-next-step")
+    repeated = reviews.request(tools, account_revision=2)
+    assert repeated["id"] == admitted["id"] and repeated["reused"]
+    state.finish(row, "succeeded", usage=Usage(7, 20, 5))
+    fixture = ReviewerFixture()
+    asyncio.run(reviews.dispatch(fixture.provider))
+    child = state.claim()
+    ResearchAgent(state, fixture.provider, child, Quote(**json.loads(child["quote_json"]))).execute()
+    returned = reviews.list(user, org, topic)[0]
+    assert returned["stale"] and returned["subject"]["account_revision"] == first["revision"]
+    assert returned["result"]["canonical_status_changed"] is False
+    assert "PRIVATE AUTHOR DISCUSSION" not in json.dumps(fixture.requests)
+    with state.store.transaction() as db:
+        assert MathematicalStore(state.store, db, user, org).state().claim_status[claim["claim_id"]]["status"] != "established"
+        assert db.execute("SELECT COUNT(*) FROM mathematical_records WHERE record_type='verification'").fetchone()[0] == 0
+    accounts.update(user, org, topic, {"argument": "An alternative explicit derivation."}, 2, "repair-one")
+    second = reviews.request(tools, account_revision=3)
+    assert second["id"] != admitted["id"]
+    accounts.update(user, org, topic, {"argument": "Rephrasing alone cannot buy another critique."}, 3, "repair-two")
+    assert reviews.request(tools, account_revision=4)["status"] == "review_limit"
+    assert accounts.read(user, org, topic)["reviews_used"] == 2
+    accounts.update(
+        user, org, topic, {"approach": "Seek a counterexample instead of extending the argument."}, 4, "human-new-method", new_approach=True
+    )
+    assert accounts.read(user, org, topic)["review_cycle"] == 2 and accounts.read(user, org, topic)["reviews_used"] == 0
+
+    # The configured automatic allowance covers critiques too; zero keeps the account itself.
+    with state.store.transaction(write=True) as db:
+        policy = json.loads(
+            db.execute(
+                "SELECT context_policy_json FROM research_topic_settings WHERE organization_id=? AND topic_id=?", (org, topic)
+            ).fetchone()[0]
+        )
+        policy["ledger_context_limit"] = 0
+        db.execute(
+            "UPDATE research_topic_settings SET context_policy_json=? WHERE organization_id=? AND topic_id=?",
+            (json.dumps(policy), org, topic),
+        )
+    with state.store.transaction() as db:
+        snapshot = ResearchContext(state.store).compile(db, org, topic, row["context_through_sequence"], QUOTES, user=user)[1]
+    assert snapshot["layers"]["independent_reviews"] == 0 and not snapshot["ledger_revisions"]
+    assert snapshot["account_revision"] == 5
+
+
+def test_scoped_reads_reject_other_projects_alpha_and_revoked_sources(installation):
+    from reasoning_ledger.server.knowledge_store import KnowledgeStore
+    from reasoning_ledger.server.research_scope import authorize_knowledge_sources
+    from reasoning_ledger.server.store import StoreError
+
+    state, owner, topics, row, tools = source_run(installation)
+    user, org = owner["user_id"], owner["organization_id"]
+    knowledge = KnowledgeStore(state.store)
+    alpha = knowledge.create(
+        user,
+        org,
+        client_id="alpha-private-source",
+        kind="bibliography",
+        title="Never expose alpha",
+        body="Private alpha text",
+        state="active",
+        scope_kind="topic",
+        scope_id=topics[0]["id"],
+    )
+    client = installation[2]
+    other = client.post(
+        f"/api/organizations/{org}/projects", json={"name": "Another private project", "visibility": "private", "owner_id": user}
+    ).json()
+    hidden = knowledge.create(
+        user,
+        org,
+        client_id="other-private-source",
+        kind="bibliography",
+        title="Other project secret",
+        body="Not in this project's view",
+        state="active",
+        scope_kind="project",
+        scope_id=other["id"],
+    )
+    assert hidden["id"] not in json.dumps(tools.invoke("knowledge_search", {"scope": "project"})["result"])
+    with pytest.raises(ValueError):
+        tools.invoke("knowledge_read", {"entry_id": hidden["id"]})
+    assert alpha["id"] not in json.dumps(tools.invoke("knowledge_search", {"scope": "project"})["result"])
+    with pytest.raises(ValueError):
+        tools.invoke("knowledge_read", {"entry_id": alpha["id"]})
+    with state.store.transaction(write=True) as db:
+        captured = json.loads(
+            db.execute("SELECT snapshot_json FROM research_contexts WHERE request_id=?", (row["request_id"],)).fetchone()[0]
+        )
+        captured["knowledge_source_topics"] = [topics[0]["id"]]
+        db.execute("UPDATE research_contexts SET snapshot_json=? WHERE request_id=?", (json.dumps(captured), row["request_id"]))
+    with pytest.raises(StoreError, match="knowledge source"):
+        authorize_knowledge_sources(state.store, row)
+
+
 def test_claim_citation_refusal_is_actionable_and_nonmutating(installation):
     state, owner, _, row, tools = source_run(installation)
     with pytest.raises(ValueError, match="unknown-reference-id"):
         tools.invoke("ledger_claim", {"statement": "An attributed statement.", "reference_id": "A URL or prose citation"})
     with state.store.transaction() as db:
-        receipt = dict(db.execute("SELECT * FROM research_tool_receipts WHERE run_id=? ORDER BY sequence DESC LIMIT 1",
-                                  (row["id"],)).fetchone())
+        receipt = dict(
+            db.execute("SELECT * FROM research_tool_receipts WHERE run_id=? ORDER BY sequence DESC LIMIT 1", (row["id"],)).fetchone()
+        )
         assert json.loads(receipt["result_json"])["code"] == "unknown_reference_id"
         assert db.execute("SELECT COUNT(*) FROM mathematical_records").fetchone()[0] == 0
     from reasoning_ledger.server.research_goals import failed_read
+
     assert failed_read(receipt)
     reference = tools.invoke("ledger_reference", {"author": "Author", "title": "Paper", "url": "https://example.org/paper"})["result"]
     claim = tools.invoke("ledger_claim", {"statement": "An attributed statement.", "reference_id": reference["reference_id"]})["result"]
@@ -52,11 +344,23 @@ def test_agent_edits_published_blog_as_draft_without_replacing_publication(insta
     draft = tools.invoke("blog_create", {"title": "A result", "body": "Published result"})["result"]
     from reasoning_ledger.server.knowledge_store import KnowledgeStore
     from reasoning_ledger.server.research_blog import published_post
+
     knowledge = KnowledgeStore(state.store)
-    posted = knowledge.revise(owner["user_id"], owner["organization_id"], draft["id"], client_id="human-blog-publication-001",
-                              kind="journal", title=draft["title"], body=draft["body"], state="published", expected_revision=1)
-    revision = tools.invoke("blog_revise", {"entry_id": posted["id"], "title": "A result", "body": "Unpublished revision",
-                                           "expected_revision": posted["revision"]})["result"]
+    posted = knowledge.revise(
+        owner["user_id"],
+        owner["organization_id"],
+        draft["id"],
+        client_id="human-blog-publication-001",
+        kind="journal",
+        title=draft["title"],
+        body=draft["body"],
+        state="published",
+        expected_revision=1,
+    )
+    revision = tools.invoke(
+        "blog_revise",
+        {"entry_id": posted["id"], "title": "A result", "body": "Unpublished revision", "expected_revision": posted["revision"]},
+    )["result"]
     assert revision["state"] == "draft" and revision["created_by_kind"] == "bot"
     assert published_post(state.store, owner["user_id"], owner["organization_id"], draft["id"])["body"] == "Published result"
     with pytest.raises(ValueError):
@@ -160,8 +464,10 @@ def test_review_selects_allowed_fresh_context_automatically_without_topic_setup(
 def test_review_can_be_explicitly_disabled_without_changing_tool_grants(installation):
     state, owner, topics, row, tools = source_run(installation)
     with state.store.transaction(write=True) as db:
-        db.execute("UPDATE research_topic_settings SET context_policy_json=? WHERE organization_id=? AND topic_id=?",
-                   (json.dumps({"review_enabled": False}), owner["organization_id"], topics[1]["id"]))
+        db.execute(
+            "UPDATE research_topic_settings SET context_policy_json=? WHERE organization_id=? AND topic_id=?",
+            (json.dumps({"review_enabled": False}), owner["organization_id"], topics[1]["id"]),
+        )
     assert ResearchReviews(state).request(tools, claim_id="not-looked-up")["status"] == "disabled"
     with state.store.transaction() as db:
         assert db.execute("SELECT COUNT(*) FROM mathematical_reviews").fetchone()[0] == 0
@@ -189,8 +495,14 @@ def test_structured_review_is_retained_through_direct_and_discovery_tools(instal
     asyncio.run(reviews.dispatch(fixture.provider))
     reviewer = state.claim()
     review_tools = ResearchTools(state, reviewer)
-    verdict = {"verdict": "verified", "obligations": [{"statement": "2=2", "status": "holds"}],
-               "strongest_objection": "None", "given_concerns": [], "source_access": "none", "report": "Reflexivity."}
+    verdict = {
+        "verdict": "verified",
+        "obligations": [{"statement": "2=2", "status": "holds"}],
+        "strongest_objection": "None",
+        "given_concerns": [],
+        "source_access": "none",
+        "report": "Reflexivity.",
+    }
     arguments = verdict if tool == "review_submit" else {"name": "review_submit", "arguments": verdict}
     review_tools.invoke(tool, arguments)
     with pytest.raises(ValueError, match="tool refused"):
@@ -210,9 +522,19 @@ def test_goal_checkpoints_waits_for_review_then_resumes_with_exact_result(instal
     _, state, _, owner, topics = prepare(installation)
     user, org, topic = owner["user_id"], owner["organization_id"], topics[1]["id"]
     goals, fixture = ResearchGoals(state), ReviewerFixture()
-    goals.create(user, org, topic, client_id="review-handoff-goal", objective="Prove reflexivity",
-                 acceptance=["A reviewed proof"], model=MODELS[0], budget_microusd=1000000,
-                 max_turns=10, max_tool_calls=100, duration_seconds=3600)
+    goals.create(
+        user,
+        org,
+        topic,
+        client_id="review-handoff-goal",
+        objective="Prove reflexivity",
+        acceptance=["A reviewed proof"],
+        model=MODELS[0],
+        budget_microusd=1000000,
+        max_turns=10,
+        max_tool_calls=100,
+        duration_seconds=3600,
+    )
     asyncio.run(goals.dispatch(fixture.provider))
     row = state.claim()
     tools = ResearchTools(state, row)
@@ -220,8 +542,11 @@ def test_goal_checkpoints_waits_for_review_then_resumes_with_exact_result(instal
     proof = tools.invoke("ledger_prove", {"claim_id": claim["claim_id"], "argument": "Reflexivity."})["result"]
     review = ResearchReviews(state).request(tools, proof_id=proof["proof_id"])
     agent = ResearchAgent(state, fixture.provider, row, Quote(**json.loads(row["quote_json"])))
-    payload = {"messages": [{"role": "user", "content": "Continue"}], "tools": [
-        {"type": "function", "function": {"name": tool.name}} for tool in tools.available()], "tool_choice": "auto"}
+    payload = {
+        "messages": [{"role": "user", "content": "Continue"}],
+        "tools": [{"type": "function", "function": {"name": tool.name}} for tool in tools.available()],
+        "tool_choice": "auto",
+    }
     checkpoint = agent._transform(payload)
     assert checkpoint["tool_choice"]["function"]["name"] == "goal_checkpoint"
     assert len(checkpoint["tools"]) == 1
@@ -243,14 +568,20 @@ def test_goal_checkpoints_waits_for_review_then_resumes_with_exact_result(instal
     assert review["id"] in continuation["context_json"] and "LLM-reviewed" in continuation["context_json"]
 
 
-
 def test_prompt_profiles_pin_exact_context_and_do_not_expand_tool_grants(installation):
     _, state, client, owner, topics = prepare(installation)
     org, topic = owner["organization_id"], topics[1]["id"]
     root = f"/api/organizations/{org}/topics/{topic}"
     for profile in ("workbench", "blueprint", "fact_graph", "author_critic", "lean"):
-        settings = client.put(root + "/research-settings", json={"tools": ["history"], "prompt_profile": profile,
-                              "additional_instructions": "Keep the exact hypotheses.", "review_enabled": True})
+        settings = client.put(
+            root + "/research-settings",
+            json={
+                "tools": ["history"],
+                "prompt_profile": profile,
+                "additional_instructions": "Keep the exact hypotheses.",
+                "review_enabled": True,
+            },
+        )
         assert settings.status_code == 200
         current = client.get(root + "/research-instructions").json()
         assert current["prompt_profile"] == profile and "Keep the exact hypotheses." in current["system_prompt"]
@@ -308,15 +639,25 @@ def test_citation_cannot_pass_without_an_actual_source_read(installation):
 
 
 @pytest.mark.parametrize("nested", [False, True])
-@pytest.mark.parametrize("status,text,expected", [("unavailable", "", False), ("failed", "", False),
-                                                 ("partial", "One readable page", False), ("ready", "", False),
-                                                 ("ready", "The exact source text", True)])
+@pytest.mark.parametrize(
+    "status,text,expected",
+    [
+        ("unavailable", "", False),
+        ("failed", "", False),
+        ("partial", "One readable page", False),
+        ("ready", "", False),
+        ("ready", "The exact source text", True),
+    ],
+)
 def test_unreadable_or_partial_pdf_receipt_cannot_attest_full_source_access(nested, status, text, expected):
     from reasoning_ledger.server.research_reviews import completed_source_evidence
 
     result = {"text": text, "extraction": {"status": status}}
-    receipt = {"name": "tool_call" if nested else "web_fetch", "arguments_json": json.dumps({"name": "web_fetch"}),
-               "result_json": json.dumps({"result": result} if nested else result)}
+    receipt = {
+        "name": "tool_call" if nested else "web_fetch",
+        "arguments_json": json.dumps({"name": "web_fetch"}),
+        "result_json": json.dumps({"result": result} if nested else result),
+    }
     assert completed_source_evidence(receipt) is expected
 
 
@@ -389,8 +730,17 @@ def test_independent_reviewer_receives_only_read_tools(installation):
     reviewer = ResearchTools(state, state.claim())
     names = {tool.name for tool in reviewer.registry.list()}
     assert "tool_call" in names and "web_fetch" in names
-    assert not names & {"topic_history", "ledger_claim", "artifact_write", "blog_create", "compute_submit",
-                        "media_begin", "media_chunk", "media_finish", "media_download_chunk"}
+    assert not names & {
+        "topic_history",
+        "ledger_claim",
+        "artifact_write",
+        "blog_create",
+        "compute_submit",
+        "media_begin",
+        "media_chunk",
+        "media_finish",
+        "media_download_chunk",
+    }
     assert "media_read" in names
 
 

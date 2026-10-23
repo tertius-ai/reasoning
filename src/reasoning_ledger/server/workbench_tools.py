@@ -155,6 +155,7 @@ class MathematicalLedger:
         run_id=None,
         observations=None,
         bot_invocation=None,
+        read_scope=False,
     ):
         if name not in OPERATIONS and name != "ledger_read":
             raise StoreError(400, "unknown mathematical operation")
@@ -182,6 +183,20 @@ class MathematicalLedger:
             elif project:
                 self.store._project_access(db, user, org, project, write=write)
             ledger = MathematicalStore(self.store, db, user, org, project=project, topic=topic, agent=agent)
+            window = None
+            targeted = name == "ledger_read" or any(arguments.get(key) for key in ("claim_id", "proof_id", "reference_id"))
+            if read_scope is not False and not write and topic:
+                from .research_scope import KnowledgeWindow
+
+                def source_access(connection, source_topic):
+                    if bot is not None:
+                        runtime = BotRuntime(BotStore(self.store))
+                        runtime.access(connection, bot, source_topic)
+                        self.store._topic_access(connection, run["requested_by"], org, source_topic)
+
+                window = KnowledgeWindow(self.store, db, user, org, topic, "project" if targeted else read_scope,
+                                         topic_authorize=source_access if bot is not None else None)
+                ledger = window.base() if targeted else window.ledger()
             if write:
                 if not client_id or len(client_id) > 200:
                     raise StoreError(400, "mathematical writes require a stable client identity")
@@ -305,6 +320,8 @@ class MathematicalLedger:
                             "session": topic or project or org,
                         }
                     result = function(ledger, **values)
+                    if window and not targeted:
+                        result = window.bounded(result)
                     if observations and result.get("proof_id") and result.get("revision_id"):
                         observations.note(result["proof_id"], result["revision_id"])
                     if observations and result.get("reference_id") and result.get("revision_id"):
@@ -326,6 +343,8 @@ class MathematicalLedger:
                     )
             except (LedgerStoreError, LedgerRecordError, KeyError, TypeError, ValueError) as exc:
                 raise StoreError(409, str(exc)[:1000]) from exc
+            if window:
+                result = window.note_sources(result)
         return result
 
     def register(self, research):
@@ -335,6 +354,7 @@ class MathematicalLedger:
                 continue
 
             def handler(_name=name, **arguments):
+                read_scope = arguments.pop("scope", None) if _name in READS else False
                 if _name == "ledger_claim" and arguments.get("reference_id"):
                     with self.store.transaction() as db:
                         ledger = MathematicalStore(
@@ -359,10 +379,15 @@ class MathematicalLedger:
                     agent=True,
                     run_id=research.row["id"],
                     observations=research.observations,
+                    read_scope=read_scope,
                 )
 
+            inputs = operation_schema(function)
+            if name in READS:
+                inputs["properties"]["scope"] = {"enum": ["working_set", "topic", "project"],
+                    "description": "Default follows the topic working set; project explicitly broadens authorized retrieval."}
             research.registry.register(
-                ToolDefinition(name, DESCRIPTIONS[name], operation_schema(function), handler, risk="read" if name in READS else "write")
+                ToolDefinition(name, DESCRIPTIONS[name], inputs, handler, risk="read" if name in READS else "write")
             )
         aliases = {
             "bibliography_search": "ledger_search_references",
@@ -399,8 +424,9 @@ class MathematicalLedger:
             research.registry.tool(
                 name="bibliography_export",
                 description="Export accessible scholarly references as bounded BibTeX.",
-                input_schema={"type": "object", "properties": {}, "additionalProperties": False},
-            )(lambda: self.export(research))
+                input_schema={"type": "object", "properties": {"scope": {"enum": ["working_set", "topic", "project"]}},
+                              "additionalProperties": False},
+            )(lambda scope=None: self.export(research, scope))
 
     def read_handler(self, research):
         def read(ledger_id):
@@ -416,15 +442,17 @@ class MathematicalLedger:
                 topic=research.topic,
                 agent=True,
                 observations=research.observations,
+                read_scope="project",
             )
 
         return read
 
-    def export(self, research):
+    def export(self, research, scope=None):
         from ..agents.bibliography import _bibtex_escape
 
         refs = self.execute(
-            research.user, research.org, "ledger_references", {}, project=research.project, topic=research.topic, agent=True
+            research.user, research.org, "ledger_references", {}, project=research.project, topic=research.topic, agent=True,
+            read_scope=scope,
         )["references"]
         entries = []
         for reference in refs[:100]:

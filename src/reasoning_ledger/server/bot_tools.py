@@ -120,11 +120,24 @@ class BotTools:
                     "topic_id": {"type": "string", "pattern": "^[a-f0-9]{32}$"},
                     "limit": {"type": "integer", "minimum": 1, "maximum": 20}}, "required": ["query"], "additionalProperties": False}})
             tools.append(discovery_tool())
+            if topic["kind"] == "beta" and "knowledge" in research.enabled:
+                from .account_tools import DESCRIPTIONS as ACCOUNT_DESCRIPTIONS
+                from .account_tools import schemas
+
+                for name, definition in schemas().items():
+                    if name == "account_request_review":
+                        continue
+                    needed = "knowledge:write" if name == "account_update" else "knowledge:read"
+                    if needed in scopes:
+                        tools.append({"name": name, "description": ACCOUNT_DESCRIPTIONS[name], "input_schema": definition})
             for name, function in OPERATIONS.items():
                 collection = "bibliography" if "reference" in name else "ledger"
                 if collection not in collections or ("knowledge:read" if name in READS else "knowledge:write") not in scopes:
                     continue
-                tools.append({"name": name, "description": DESCRIPTIONS[name], "input_schema": operation_schema(function)})
+                definition = operation_schema(function)
+                if name in READS:
+                    definition["properties"]["scope"] = {"enum": ["working_set", "topic", "project"]}
+                tools.append({"name": name, "description": DESCRIPTIONS[name], "input_schema": definition})
             if "ledger" in collections and "knowledge:read" in scopes:
                 tools.append({"name": "ledger_read", "description": "Read an exact accessible mathematical record and revision.",
                               "input_schema": {"type": "object", "properties": {"ledger_id": {"type": "string", "maxLength": 100},
@@ -140,7 +153,9 @@ class BotTools:
                             "revision": {"type": "integer", "minimum": 1}}, "required": ["entry_id"],
                                          "additionalProperties": False}})
                     tools.append({"name": "blog_search", "description": "Search accessible project blog drafts and published posts.",
-                                  "input_schema": {"type": "object", "properties": {"query": {"type": "string", "maxLength": 200}},
+                                  "input_schema": {"type": "object", "properties": {"query": {"type": "string", "maxLength": 200},
+                                      "scope": {"enum": ["working_set", "topic", "project"]},
+                                      "before": {"type": "string", "maxLength": 100}},
                                                    "additionalProperties": False}})
                 if "knowledge:write" in scopes:
                     for name in ("blog_create", "blog_revise"):
@@ -204,7 +219,7 @@ class BotTools:
             self.runtime.progress(credential, run_id, lease, "using_tools", tool_activity(name))
         readonly = READS | {"blog_read", "blog_search", "topic_history", "messages_search", "topics_search", "media_list", "media_read",
                             "media_download_chunk",
-                            "artifact_list", "research_file_read"}
+                            "artifact_list", "research_file_read", "account_read"}
         if name in {"media_chunk", "media_download_chunk"}:
             from .security import digest
 
@@ -294,6 +309,36 @@ class BotTools:
                 db.execute("INSERT INTO bot_tool_receipts(run_id,name,result_json,created_at) VALUES(?,?,?,?)",
                            (run_id, name, json.dumps(result), int(time.time())))
                 return result
+        if name in {"account_read", "account_update"}:
+            from .account_tools import read_account
+            from .research_accounts import ResearchAccounts
+
+            def authorize_account(db):
+                bot, run = self.runtime.leased(db, credential, run_id, lease)
+                needed = "knowledge:write" if name == "account_update" else "knowledge:read"
+                if needed not in json.loads(bot["scopes_json"]):
+                    raise StoreError(403, "bot account permission changed")
+                settings = db.execute("SELECT tools_json FROM research_topic_settings WHERE organization_id=? AND topic_id=?",
+                                      (run["organization_id"], run["topic_id"])).fetchone()
+                if settings and "knowledge" not in json.loads(settings[0]):
+                    raise StoreError(403, "knowledge tools are disabled")
+
+            def source_access(db, topic):
+                bot, run = self.runtime.leased(db, credential, run_id, lease)
+                self.runtime.access(db, bot, topic)
+                self.store._topic_access(db, run["requested_by"], run["organization_id"], topic)
+
+            accounts = ResearchAccounts(self.store, authorize=authorize_account, topic_authorize=source_access)
+            if name == "account_read":
+                result = read_account(accounts, context["owner_id"], scope["organization_id"], scope["topic_id"], **arguments)
+            else:
+                result = accounts.update(context["owner_id"], scope["organization_id"], scope["topic_id"], **arguments,
+                                         client_id="bot-" + run_id + "-" + client_id, actor_id=context["bot_id"])
+            with self.store.transaction(write=True) as db:
+                self.runtime.leased(db, credential, run_id, lease)
+                db.execute("INSERT INTO bot_tool_receipts(run_id,name,result_json,created_at) VALUES(?,?,?,?)",
+                           (run_id, name, json.dumps(result), int(time.time())))
+            return result
         if name in {"artifact_list", "research_file_read", "artifact_write"}:
             from .research_artifacts import ResearchArtifacts
 
@@ -351,15 +396,20 @@ class BotTools:
                     raise StoreError(403, "topic no longer grants knowledge tools")
                 self.store._topic_access(db, run["requested_by"], run["organization_id"], run["topic_id"],
                                          write=name not in {"blog_read", "blog_search"})
+                from .research_scope import KnowledgeWindow
+
+                def source_access(connection, source_topic):
+                    self.runtime.access(connection, bot, source_topic)
+                    self.store._topic_access(connection, run["requested_by"], run["organization_id"], source_topic)
+
+                window = KnowledgeWindow(self.store, db, bot["created_by"], run["organization_id"], run["topic_id"],
+                                         arguments.get("scope"), topic_authorize=source_access)
                 if name == "blog_search":
-                    role = self.store._require(db, run["requested_by"], run["organization_id"])
-                    return [entry for entry in KnowledgeStore._listing(db, run["organization_id"], kind="journal",
-                        query=arguments.get("query", ""), user=run["requested_by"], role=role)
-                        if entry["project_id"] in {None, run["project_id"]} and entry["topic_id"] in {None, run["topic_id"]}][:30]
+                    return window.search_entries({"journal"}, kind="journal", query=arguments.get("query", ""),
+                                                 before=arguments.get("before"), published_only=False)
                 if name == "blog_read":
                     entry = KnowledgeStore._view(db, run["organization_id"], arguments["entry_id"], arguments.get("revision"))
-                    if (entry["kind"] != "journal" or entry["project_id"] not in {None, run["project_id"]}
-                        or entry["topic_id"] not in {None, run["topic_id"]}):
+                    if entry["kind"] != "journal" or not window.entry_allowed(entry, exact=True):
                         raise StoreError(404, "project blog post unavailable")
                     return entry
                 if arguments.get("entry_id"):
@@ -388,16 +438,17 @@ class BotTools:
                     for field in ("proof_id", "reference_id"):
                         if record.get(field) and revision.get("revision_id"):
                             observations.note(record[field], revision["revision_id"])
+        read_scope = arguments.pop("scope", None) if name in READS else None
         result = MathematicalLedger(self.store).execute(context["owner_id"], scope["organization_id"], name, arguments,
             client_id="bot-" + run_id + "-" + client_id, project=scope["project_id"], topic=scope["topic_id"], agent=True,
-            observations=observations, bot_invocation=(credential, run_id, lease))
+            observations=observations, bot_invocation=(credential, run_id, lease), read_scope=read_scope)
         with self.store.transaction(write=True) as db:
             self.runtime.leased(db, credential, run_id, lease)
             db.execute("INSERT INTO bot_tool_receipts(run_id,name,result_json,created_at) VALUES(?,?,?,strftime('%s','now'))",
                        (run_id, name, json.dumps(result)))
         return result
 
-    def knowledge(self, credential, run_id, lease, *, kind=None, query=""):
+    def knowledge(self, credential, run_id, lease, *, kind=None, query="", scope=None, before=None):
         self.runtime.bots._meter(credential, "read")
         with self.store.transaction() as db:
             bot, run = self.runtime.leased(db, credential, run_id, lease)
@@ -407,7 +458,12 @@ class BotTools:
             policy = set(json.loads(topic["knowledge_policy_json"]))
             if kind is not None and ("journal" if kind == "journal" else kind) not in policy:
                 raise StoreError(403, "topic does not grant this knowledge collection")
-            # Organization knowledge plus this project's sources, never unrelated private conversation context.
-            entries = KnowledgeStore._listing(db, run["organization_id"], kind=kind, query=query, bot=bot["id"], limit=100)
-            return [entry for entry in entries if entry["kind"] in policy and
-                    entry["project_id"] in {None, run["project_id"]} and entry["topic_id"] in {None, run["topic_id"]}][:20]
+            from .research_scope import KnowledgeWindow
+
+            def source_access(connection, source_topic):
+                self.runtime.access(connection, bot, source_topic)
+                self.store._topic_access(connection, run["requested_by"], run["organization_id"], source_topic)
+
+            window = KnowledgeWindow(self.store, db, bot["created_by"], run["organization_id"], run["topic_id"], scope,
+                                     topic_authorize=source_access)
+            return window.search_entries(policy, kind=kind, query=query, before=before)

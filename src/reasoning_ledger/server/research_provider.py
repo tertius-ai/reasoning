@@ -153,8 +153,10 @@ class ResearchCompletion:
         key = self.inference.execution_key(self.row)
         spans.mark("credential_check")
         from .media_context import authorize_captured_media
+        from .research_scope import authorize_knowledge_sources
 
         authorize_captured_media(self.inference.store, self.row, messages)
+        authorize_knowledge_sources(self.inference.store, self.row)
         if any(ord(character) < 32 or ord(character) > 126 for character in key):
             raise ProviderError("provider_key_invalid", no_charge=True)
         spans.mark("media_check")

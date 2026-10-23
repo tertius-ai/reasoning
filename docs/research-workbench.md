@@ -36,7 +36,9 @@ to the newest loaded message after scrolling away.
 3. Use `/tools` to select a research strategy or add topic
    instructions. Fresh-context review is available by default, with automatic
    reviewer selection when requested; optionally override its model or disable it.
-4. `/ledger` opens the scoped mathematical browser; **Project files** or `/files`
+4. **Research account** or `/account` opens the evolving account for this question.
+   Start one when sustained work needs a current argument; ordinary chat needs none.
+   `/ledger` opens the scoped mathematical browser; **Project files** or `/files`
    opens shared project text artifacts with source, copy, and complete-revision
    download actions. Saved-file tool results include clickable revision links.
    `/reviews` opens independent reviews.
@@ -66,6 +68,42 @@ when absent from a bot's registry. Local-ledger MCP instructions are separate.
 The expandable System prompt shows the complete rendered instructions. Nondefault
 instructions carry a strategy version and content hash. Queued runs retain their
 exact captured prompt; changing settings affects new turns, not historical evidence.
+
+## The current mathematical account
+
+A beta topic can pin one evolving account: the exact question, definitions and
+hypotheses, current argument, sources and checks, failed approaches, remaining
+gaps, next steps, and approach. People with topic write access and authorized
+research agents can edit it. The editor renders Markdown and TeX, retains saved
+candidates and version links, and refuses stale edits while preserving unsaved
+text. Writes carry a stable retry identity and expected current version. Omitted
+fields remain unchanged. Each account is limited to 48 KiB; link a complete
+manuscript through a saved-file revision when needed.
+
+**Working knowledge** searches authorized project knowledge and pins exact claim,
+reference, or published shared-entry revisions. At most 40 links per collection
+form the account's working set. Linked evidence stays pinned when the underlying
+record changes; read its current version and explicitly repin it to update the
+account. Saving an account does not certify the argument or alter ledger status.
+A fork has its own account; it does not copy the source topic's account.
+
+**Prepare independent critique** places an exact-version request in the message
+composer. Sending it uses the selected native tool-capable model, normal inference
+budget, and fresh-context review setting. A CLI bot can maintain the account but
+hands critique to a native model with review tools. The reviewer receives that
+frozen account and pinned evidence, with read-only source tools, without the
+author's chat history. `/reviews` labels account versions, earlier candidates,
+changed fields and exact recurring strongest objections. An LLM account critique
+never promotes ledger records, including after a favorable verdict.
+
+Each approach permits at most two critique requests, including failed or cancelled
+requests. An unchanged argument with the same reviewer reuses its retained
+pending or completed critique; changing only next steps is not another argument.
+After two requests, retain the best answer and explicit gaps or pursue another
+method without critic calls. A person can use **Describe a new approach** to
+record a changed mathematical strategy and start a new bounded review cycle;
+models cannot reset the allowance. Review is optional, and reaching this limit
+does not prove the mathematical question impossible.
 
 ## Mathematical state
 
@@ -143,12 +181,34 @@ Context is layered, not a fixed last-N-message buffer:
 - A token-budgeted recent dialogue tail; original messages and receipts remain
   available through scoped recovery tools.
 
-Automatic ledger context contains only records matching terms in the latest
-participant question, within the current project/topic's access and collection
-grants. It includes up to eight records by default. **Automatic relevant ledger
-records** in research settings accepts 0–20; zero excludes automatic ledger
-records. This limit does not remove granted on-demand ledger readers or widen
-access. Nonmatching records do not fill the allowance.
+In `/tools`, **Default knowledge scope** selects the account's linked working
+set, the current topic, or authorized project knowledge. The default working set
+falls back to the topic until an account exists. Topic selection includes records
+created or edited there; project-shared records keep their original access policy.
+A working-set ledger view includes the transitive supporting premises and exact
+revision histories needed to derive honest status. Unavailable or stale premises
+remain unresolved or stale; a filtered view cannot establish them.
+
+This scope applies to automatic context, default topic ledger status/search/graph,
+reference and bibliography tools, shared-entry and journal searches, and review
+results. Tool responses report the effective scope, source topics, truncation and
+recovery actions. List readers return bounded pages or previews; use exact IDs for
+complete records and explicit `scope="project"` for wider searches. Shared-entry
+and journal searches return `entries`, `knowledge_scope`, and `next_before`; pass
+the cursor as `before`. `ledger_reviews` returns scoped `reviews` and accepts a
+`review_id` for a full earlier report. Read-only scope controls in the topic ledger
+and reviews pane allow expansion without changing topic settings. The global
+organization libraries are deliberately broader authorized views.
+
+**Automatic knowledge records (0 disables)** accepts 0–20, with eight by default.
+This is a combined allowance for relevant ledger statements, scoped critiques and shared knowledge
+references. Outside an explicitly linked working set, automatic records must
+match terms in the latest question or pinned account question; nonmatching records
+do not fill the allowance. Zero disables this automatic knowledge injection; the
+pinned account, conversation and explicitly retrieved evidence remain available.
+All expansion still enforces current topic/project access, collection grants and
+bot owner/requester permissions. Native calls recheck captured cross-topic sources
+before sending them to the provider, including after context compaction.
 
 The composer reports selected-model tool support separately from enabled source
 readers and operator-configured web search. Native gamma comparisons remain
@@ -195,6 +255,7 @@ Discovery never adds permissions. Each invocation has a durable receipt.
 | --- | --- |
 | Mathematical record | `ledger_status`, `ledger_search`, `ledger_read`, `ledger_graph`, `ledger_blockers`, `ledger_blast_radius` |
 | Research writes | `ledger_claim`, `ledger_refine`, `ledger_prove`, `ledger_revise_proof`, `ledger_withdraw`, `ledger_abandon`, `ledger_verify` (negative/inconclusive review evidence only; `evidence` needs a nonempty string `kind`, for example `{"kind": "proof-review", "text": "…"}`) |
+| Current account | `account_read`, `account_update`, `account_request_review` |
 | Independent review | `ledger_request_review`, `ledger_reviews`, `ledger_cancel_review` |
 | Bibliography | `ledger_reference`, `ledger_refine_reference`, `ledger_references`, `ledger_search_references`, bibliography aliases |
 | Original context | `topic_history`, `topic_message_read`, `tool_receipt_read`, `tasks`, `goal_checkpoint` |

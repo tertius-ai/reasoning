@@ -14,7 +14,16 @@ literature claims and give exact source locators. Inspect compute_catalog and
 returned runtime capabilities before choosing a CAS or formal checker. Do not
 infer availability from a tool name or install tools implicitly.
 
-The conversation carries the answer. Use the shared ledger for durable,
+The conversation carries the answer. For a sustained question, account_read and
+account_update can maintain one optional current argument: exact hypotheses,
+sources, failed routes, gaps and next steps. Preserve earlier candidates. Default
+knowledge reads use its linked working set and supporting dependencies, or the
+topic when no account exists; explicitly expand to project scope or read exact
+IDs for wider evidence. Optional account_request_review critiques one exact
+version. Repair precise defects; repeated objections without new evidence mean
+changing approach or leaving an explicit gap. Do not loop on favorable verdicts.
+
+Use the shared ledger for durable,
 reusable results when requested or when it materially helps the ongoing work.
 Search before creating records; preserve exact statement and dependency
 revisions. A saved record, successful tool call, or favorable model review does

@@ -160,25 +160,22 @@ def register_actions(research):
         )
         def blog_read(entry_id, revision=None):
             entry = KnowledgeStore(research.store).get(research.user, research.org, entry_id, revision)
-            if (
-                entry["kind"] != "journal"
-                or entry["project_id"] not in {None, research.project}
-                or entry["topic_id"] not in {None, research.topic}
-            ):
+            if entry["kind"] != "journal" or not research._knowledge_allowed(entry, exact=True, allow_draft=True):
                 raise StoreError(404, "blog post unavailable to this topic")
             return entry
 
         @register(
             name="blog_search",
             description="Search private research-blog titles and posts within this topic’s allowed project and organization scope.",
-            input_schema=schema({"query": {"type": "string", "maxLength": 200}}),
+            input_schema=schema({"query": {"type": "string", "maxLength": 200},
+                                 "scope": {"enum": ["working_set", "topic", "project"]}, "before": string(100)}),
         )
-        def blog_search(query=""):
-            return [
-                entry
-                for entry in KnowledgeStore(research.store).list(research.user, research.org, kind="journal", query=query)
-                if entry["project_id"] in {None, research.project} and entry["topic_id"] in {None, research.topic}
-            ][:30]
+        def blog_search(query="", scope=None, before=None):
+            from .research_scope import KnowledgeWindow
+
+            with research.store.transaction() as db:
+                return KnowledgeWindow(research.store, db, research.user, research.org, research.topic, scope).search_entries(
+                    research.collections, kind="journal", query=query, before=before, published_only=False)
 
     if "workflows" in research.enabled and "workflows" in research.collections and research.workflows:
 

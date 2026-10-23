@@ -7,6 +7,7 @@ export const TOPIC_COMMANDS = [
   { id: "play", label: "Start or resume", kinds: ["beta", "gamma"] },
   { id: "stop", label: "Stop current work", kinds: ["beta", "gamma"] },
   { id: "goal", label: "Set or inspect a goal", kinds: ["beta"] },
+  { id: "account", label: "Current mathematical account", kinds: ["beta"] },
   { id: "ledger", label: "Shared ledger", kinds: ["beta", "gamma"] },
   { id: "files", label: "Topic files", kinds: ["beta", "gamma"] },
   { id: "context", label: "Inspect research context", kinds: ["beta"] },

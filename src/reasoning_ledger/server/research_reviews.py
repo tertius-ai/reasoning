@@ -70,6 +70,9 @@ REVIEW_TOOLS = {
     "research_file_read",
     "media_read",
     "artifact_read",
+    "ledger_read",
+    "knowledge_read",
+    "blog_read",
 }
 
 
@@ -120,7 +123,7 @@ class ResearchReviews:
     def __init__(self, inference):
         self.inference, self.store = inference, inference.store
 
-    def request(self, research, claim_id=None, proof_id=None):
+    def request(self, research, claim_id=None, proof_id=None, account_revision=None):
         with self.store.transaction(write=True) as db:
             self.store._topic_access(db, research.user, research.org, research.topic, write=True)
             model = reviewer_selection(
@@ -131,29 +134,84 @@ class ResearchReviews:
                     "status": "disabled",
                     "message": "Fresh-context review is disabled in this topic’s research settings.",
                 }
-            ledger = MathematicalStore(
-                self.store, db, research.user, research.org, project=research.project, topic=research.topic, agent=True
-            )
-            try:
-                subject = resolve_subject(ledger, claim_id=claim_id, proof_id=proof_id)
-                material = compose_review_input(ledger, subject)
-                _, separator, text = material["prompt"].partition("\n---\n\n")
-                if not separator:
-                    raise LedgerStoreError("review material requires an exact mathematical packet")
-                # The shared composer supplies the frozen mathematics, not a second
-                # conflicting output protocol embedded inside untrusted source data.
+            if account_revision is not None:
+                from .research_accounts import REVIEW_LIMIT, ResearchAccounts
+
+                if claim_id or proof_id:
+                    raise StoreError(400, "choose an account revision or a ledger subject")
+                account, packet = ResearchAccounts(self.store).material(db, research.user, research.org, research.topic, account_revision)
+                subject = {
+                    "account_revision": account["revision"],
+                    "topic_id": research.topic,
+                    "account_sha256": account["sha256"],
+                    "content_sha256": account["content_sha256"],
+                    "account_cycle": account["review_cycle"],
+                }
+                if self.store._postgres:
+                    self.store._postgres.lock(db.native, "account-review:" + research.org + ":" + research.topic)
+                repeated = db.execute(
+                    "SELECT id,status,subject_json FROM mathematical_reviews WHERE organization_id=? AND topic_id=? "
+                    "AND json_extract(subject_json,'$.content_sha256')=? AND reviewer_model=? "
+                    "AND json_extract(subject_json,'$.account_cycle')=? AND status IN ('pending','running','complete') "
+                    "ORDER BY created_at DESC LIMIT 1",
+                    (research.org, research.topic, account["content_sha256"], model, account["review_cycle"]),
+                ).fetchone()
+                if repeated:
+                    return {
+                        "id": repeated["id"],
+                        "status": repeated["status"],
+                        "subject": json.loads(repeated["subject_json"]),
+                        "reused": True,
+                        "next_action": "Use the retained critique; changing only next steps is not a new argument.",
+                    }
+                rounds = db.execute(
+                    "SELECT COUNT(*) FROM mathematical_reviews WHERE organization_id=? AND topic_id=? "
+                    "AND json_extract(subject_json,'$.account_cycle')=?",
+                    (research.org, research.topic, account["review_cycle"]),
+                ).fetchone()[0]
+                if rounds >= REVIEW_LIMIT:
+                    return {
+                        "status": "review_limit",
+                        "account_revision": account_revision,
+                        "next_action": "Return the best current argument and open obligations. "
+                        "Try a different approach without more critic calls. "
+                        "A participant can describe a new approach in the account to authorize another bounded review cycle.",
+                    }
                 material = {
-                    "mode": material["mode"],
+                    "mode": "working-account",
                     "subject": subject,
-                    "text": text,
+                    "text": encoded(packet),
+                    "source_topic_ids": packet.get("source_topic_ids", []),
                     "review_policy": {
                         "author_model": research.row["model"],
                         "fresh_context": True,
                         "distinct_model": model != research.row["model"],
                     },
                 }
-            except (LedgerStoreError, KeyError) as exc:
-                raise StoreError(409, str(exc)[:1000]) from exc
+            else:
+                ledger = MathematicalStore(
+                    self.store, db, research.user, research.org, project=research.project, topic=research.topic, agent=True
+                )
+                try:
+                    subject = resolve_subject(ledger, claim_id=claim_id, proof_id=proof_id)
+                    material = compose_review_input(ledger, subject)
+                    _, separator, text = material["prompt"].partition("\n---\n\n")
+                    if not separator:
+                        raise LedgerStoreError("review material requires an exact mathematical packet")
+                    # The shared composer supplies the frozen mathematics, not a second
+                    # conflicting output protocol embedded inside untrusted source data.
+                    material = {
+                        "mode": material["mode"],
+                        "subject": subject,
+                        "text": text,
+                        "review_policy": {
+                            "author_model": research.row["model"],
+                            "fresh_context": True,
+                            "distinct_model": model != research.row["model"],
+                        },
+                    }
+                except (LedgerStoreError, KeyError) as exc:
+                    raise StoreError(409, str(exc)[:1000]) from exc
             if len(encoded(material).encode()) > 128000:
                 raise StoreError(409, "review packet exceeds its bounded context; decompose the argument")
             old = db.execute(
@@ -190,18 +248,11 @@ class ResearchReviews:
             "and delivers its result to the next goal turn. Do not poll this pending review.",
         }
 
-    def list(self, user, org, topic):
+    def list(self, user, org, topic, *, scope=None, review_id=None):
+        from .research_scope import KnowledgeWindow
+
         with self.store.transaction() as db:
-            self.store._topic_access(db, user, org, topic)
-            return [
-                dict(row)
-                | {"subject": json.loads(row["subject_json"]), "result": json.loads(row["result_json"]) if row["result_json"] else None}
-                for row in db.execute(
-                    "SELECT id,status,requested_by,reviewer_model,subject_json,result_json,created_at FROM mathematical_reviews "
-                    "WHERE organization_id=? AND topic_id=? ORDER BY created_at DESC LIMIT 40",
-                    (org, topic),
-                )
-            ]
+            return KnowledgeWindow(self.store, db, user, org, topic, "project" if review_id else scope).reviews(review_id=review_id)
 
     def cancel(self, user, org, topic, identity):
         with self.store.transaction(write=True) as db:
@@ -288,6 +339,7 @@ class ResearchReviews:
                         "tool_groups": json.loads(settings["tools_json"]) if settings else DEFAULT_TOOLS,
                         "knowledge_collections": json.loads(topic["knowledge_policy_json"]),
                         "messages": messages,
+                        "knowledge_source_topics": json.loads(review["input_json"]).get("source_topic_ids", []),
                     }
                     maximum = None
                     parameters = self.inference.parameters([quote.model], maximum, 50, None)
@@ -391,46 +443,84 @@ class ResearchReviews:
                     ledger = MathematicalStore(
                         self.store, db, row["requested_by"], row["organization_id"], project=project, topic=row["topic_id"], agent=True
                     )
-                    revision = ledger.load().claim_revisions[subject["revision_id"]] if "proof_id" not in subject else None
-                    citation = revision is not None and revision.get("reference_id") is not None
-                    if citation and verdict["verdict"] == "verified":
-                        receipts = db.execute(
-                            "SELECT name,arguments_json,result_json FROM research_tool_receipts WHERE run_id=? AND status='completed'",
-                            (row["id"],),
+                    account_progress = {}
+                    if "account_revision" in subject:
+                        from .research_accounts import ResearchAccounts
+
+                        ResearchAccounts(self.store).material(
+                            db, row["requested_by"], row["organization_id"], row["topic_id"], subject["account_revision"]
                         )
-                        evidence = any(completed_source_evidence(receipt) for receipt in receipts)
-                        if verdict.get("source_access") != "full" or not evidence:
-                            verdict["verdict"] = "inconclusive"
-                            verdict["reason"] = "Citation verification requires a completed source read and attested full access."
-                    positive = verdict["verdict"] == "verified"
-                    record_verdict = (
-                        ("verified" if positive else verdict["verdict"]) if "proof_id" in subject else "established" if positive else None
-                    )
-                    if record_verdict:
-                        ledger.add_verification(
-                            subject,
-                            verdict=record_verdict,
-                            authority="review",
-                            evidence={"kind": "independent-review", "text": report, "review_id": review["id"]},
-                            author={"operator": row["requested_by"], "agent": "independent-reviewer", "session": row["topic_id"]},
-                            reviewer={"model": row["model"], "effort": "default", "review_id": review["id"]},
+                    else:
+                        revision = ledger.load().claim_revisions[subject["revision_id"]] if "proof_id" not in subject else None
+                        citation = revision is not None and revision.get("reference_id") is not None
+                        if citation and verdict["verdict"] == "verified":
+                            receipts = db.execute(
+                                "SELECT name,arguments_json,result_json FROM research_tool_receipts WHERE run_id=? AND status='completed'",
+                                (row["id"],),
+                            )
+                            evidence = any(completed_source_evidence(receipt) for receipt in receipts)
+                            if verdict.get("source_access") != "full" or not evidence:
+                                verdict["verdict"] = "inconclusive"
+                                verdict["reason"] = "Citation verification requires a completed source read and attested full access."
+                        positive = verdict["verdict"] == "verified"
+                        record_verdict = (
+                            ("verified" if positive else verdict["verdict"])
+                            if "proof_id" in subject
+                            else "established"
+                            if positive
+                            else None
                         )
+                        if record_verdict:
+                            ledger.add_verification(
+                                subject,
+                                verdict=record_verdict,
+                                authority="review",
+                                evidence={"kind": "independent-review", "text": report, "review_id": review["id"]},
+                                author={"operator": row["requested_by"], "agent": "independent-reviewer", "session": row["topic_id"]},
+                                reviewer={"model": row["model"], "effort": "default", "review_id": review["id"]},
+                            )
+                    if "account_revision" in subject:
+                        from .research_accounts import FIELDS
+                        from .research_scope import account_row
+
+                        previous = db.execute(
+                            "SELECT id,subject_json,result_json FROM mathematical_reviews WHERE organization_id=? AND topic_id=? "
+                            "AND id!=? AND status='complete' AND json_extract(subject_json,'$.account_cycle')=? "
+                            "ORDER BY finished_at DESC,id DESC LIMIT 1",
+                            (row["organization_id"], row["topic_id"], review["id"], subject["account_cycle"]),
+                        ).fetchone()
+                        if previous:
+                            prior_subject, prior_result = json.loads(previous["subject_json"]), json.loads(previous["result_json"])
+                            prior = account_row(db, row["organization_id"], row["topic_id"], prior_subject["account_revision"])
+                            current = account_row(db, row["organization_id"], row["topic_id"], subject["account_revision"])
+                            before, after = json.loads(prior["body_json"]), json.loads(current["body_json"])
+                            objection = " ".join(verdict["strongest_objection"].lower().split()).strip(" .")
+                            account_progress = {
+                                "previous_review_id": previous["id"],
+                                "changed_fields": [field for field in (*FIELDS, "pins") if before[field] != after[field]],
+                                "recurring_objection": objection not in {"", "none", "no objections"}
+                                and objection
+                                == " ".join(prior_result.get("verdict", {}).get("strongest_objection", "").lower().split()).strip(" ."),
+                            }
                     policy = json.loads(review["input_json"]).get("review_policy", {})
                     result, status = (
                         {
+                            **account_progress,
                             "verdict": verdict,
                             "report": report,
                             "subject": subject,
-                            "authority": "LLM-reviewed",
+                            "authority": "LLM-reviewed working account" if "account_revision" in subject else "LLM-reviewed",
+                            **({"canonical_status_changed": False} if "account_revision" in subject else {}),
                             "fresh_context": True,
                             "distinct_model": policy.get("distinct_model", True),
                         },
                         "complete",
                     )
                 except (ValueError, KeyError, TypeError, LedgerStoreError, StoreError) as exc:
-                    result = {"error": "Review response could not be validated; no positive verdict recorded.",
-                              "code": "review_verdict_invalid" if isinstance(exc, (ValueError, KeyError, TypeError))
-                                      else "review_record_refused"}
+                    result = {
+                        "error": "Review response could not be validated; no positive verdict recorded.",
+                        "code": "review_verdict_invalid" if isinstance(exc, (ValueError, KeyError, TypeError)) else "review_record_refused",
+                    }
             db.execute(
                 "UPDATE mathematical_reviews SET status=?,result_json=?,finished_at=? WHERE id=?",
                 (status, encoded(result), int(time.time()), review["id"]),
@@ -448,11 +538,29 @@ def register_reviews(research):
         "End the current turn when review is queued; do not poll.",
         input_schema=schema({"claim_id": string(200), "proof_id": string(200)}),
     )(lambda claim_id=None, proof_id=None: reviews.request(research, claim_id, proof_id))
-    research.registry.tool(
+
+    @research.registry.tool(
         name="ledger_reviews",
-        description="Read independent review jobs and exact revision-pinned verdicts in this topic.",
-        input_schema=schema({}),
-    )(lambda: reviews.list(research.user, research.org, research.topic))
+        description="Read scoped independent critiques and exact-version verdicts. Use review_id for a full earlier report.",
+        input_schema=schema({"scope": {"enum": ["working_set", "topic", "project"]}, "review_id": string(64)}),
+    )
+    def list_reviews(scope=None, review_id=None):
+        from .research_scope import KnowledgeWindow
+
+        with research.store.transaction() as db:
+            window = KnowledgeWindow(research.store, db, research.user, research.org, research.topic, "project" if review_id else scope)
+            rows = window.reviews(limit=10, review_id=review_id)
+            for row in rows:
+                if row["result"] and not review_id:
+                    report = row["result"].get("report", "")
+                    row["result"]["report"] = report[:3000]
+                    row["report_truncated"] = len(report) > 3000
+            return {
+                "reviews": rows,
+                "knowledge_scope": window.info,
+                "next_action": "Read a review_id for its full exact report; older candidates remain available.",
+            }
+
     research.registry.tool(
         name="ledger_cancel_review",
         description="Cancel an independent review you requested. Existing provider charges may remain.",

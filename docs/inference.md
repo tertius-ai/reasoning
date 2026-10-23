@@ -142,6 +142,16 @@ requires inspecting its call evidence, not attributing it to the router by guess
 
 ## Context and goals
 
+Beta topics support one optional versioned research account through `/account`.
+It preserves the exact question, hypotheses, current argument and gaps across
+model changes. Account links pin exact knowledge revisions. Its linked working
+set and supporting dependencies provide the default knowledge view; `/tools`
+can choose topic or authorized project scope and a combined automatic-knowledge
+allowance from zero to twenty. Explicit searches and exact-ID reads can expand
+within current access. Source-topic permissions are checked again before native
+provider calls. [Research workbench](research-workbench.md) describes the account,
+retrieval limits, exact-version critiques and human-controlled review cycles.
+
 Changing the reply model does not start a new conversation. New turns use the
 same canonical topic transcript, cited memory and shared project knowledge,
 compiled for the selected model's capacity; provider-private reasoning is not

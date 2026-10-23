@@ -143,6 +143,8 @@ class ToolInvocation(Lease):
 
 
 class KnowledgeQuery(Lease):
+    scope: Literal["working_set", "topic", "project"] | None = None
+    before: Annotated[str | None, Field(max_length=100)] = None
     kind: Literal["ledger", "bibliography", "journal"] | None = None
     query: Annotated[str, Field(max_length=200)] = ""
 

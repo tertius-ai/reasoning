@@ -181,9 +181,11 @@ class Gateway:
 
         @registry.tool(name="shared_knowledge_search", description="Search this project's ledger notes, bibliography, and blog on demand.",
                        input_schema={"type": "object", "properties": {"query": {"type": "string", "maxLength": 200},
-                                      "kind": {"enum": ["ledger", "bibliography", "journal"]}}})
-        def knowledge(query="", kind=None):
-            return self.request("/knowledge", query=query, kind=kind)
+                                      "kind": {"enum": ["ledger", "bibliography", "journal"]},
+                                      "scope": {"enum": ["working_set", "topic", "project"]},
+                                      "before": {"type": "string", "maxLength": 100}}})
+        def knowledge(query="", kind=None, scope=None, before=None):
+            return self.request("/knowledge", query=query, kind=kind, scope=scope, before=before)
 
         execute = None
         if self.local_tools:
