@@ -84,6 +84,7 @@ test("lost start replies recover the same body and accept current completed prog
 
 test("approval, cancellation, and retry replays preserve exact request and bind immutable receipts", async () => withFetch(async () => {
   for (const spec of [{ operation: "cancel" }, { operation: "retry", revision: 15 },
+    { operation: "release-capacity", revision: 15 },
     { operation: "approve", node_id: "review", attempt: 3, decision: "reject" }]) {
     const captured = api.captureWorkflowAction(runId, "workflow-action-001", spec), calls = [];
     const receipt = { run_id: runId, client_id: captured.client_id, requested_by: user, revision: 16, operation: spec.operation,

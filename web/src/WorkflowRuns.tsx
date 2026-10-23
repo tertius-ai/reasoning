@@ -12,6 +12,7 @@ import { normalizeMathDelimiters } from "./markdownMath";
 import { ApiError, BotRun, ModelRun, aborted, errorMessage, organizationPath, request, topicPath, usd } from "./organization-api";
 import { WorkflowDefinition, WorkflowVersion, workflowPath } from "./workflow-api";
 import "./workflow-conversation.css";
+import { WorkflowCapacity } from "./WorkflowCapacity";
 import { OutputActions } from "./ChatFeedback";
 import { TransportControls, dispatchTopicCommand, useComputeActivity, useTopicCommand } from "./TopicCommands";
 import { useBotActivity } from "./BotPlayback";
@@ -114,6 +115,7 @@ export function WorkflowRunView({ run, userId, canWrite, canManage, locked, onAc
     <p>{run.definition.name} · version {run.definition_version} · <code>{run.definition_digest}</code></p>
     {!!run.restore_fenced && <p role="status">Restored history only. New actions and dispatch are fenced; create a deliberate new run after recovery.</p>}
     {!!run.cancel_requested && !terminalWorkflow(run) && <p role="status">Cancellation requested. Active or uncertain children must settle before this run can finish.</p>}
+    {!!run.capacity_released && <p role="status">Admission slot released. Original child outcomes and held charges remain unresolved.</p>}
     {run.status === "outcome_unknown" && <p role="status">Child outcome unknown; reservations remain held. An administrator must verify provider usage or physical worker cleanup before reconciliation.</p>}
     <ol className="org-workflow-nodes">{run.node_order.map((id) => run.nodes.find((node) => node.node_id === id)).filter((node): node is WorkflowNodeAttempt => !!node).map((node) => {
       const spec = run.definition.nodes.find((value) => value.id === node.node_id)!;
@@ -331,6 +333,7 @@ export function WorkflowRuns({ organizationId, topicId, userId, canWrite, canMan
     if (!runId || pending.current || working.current || !canWrite) return;
     const message = spec.operation === "cancel" ? "Request cancellation of this workflow? Running or uncertain children retain their reservations until cleanup and usage settle." :
       spec.operation === "retry" ? "Retry unsuccessful nodes at this revision? Successful results are retained; new attempts may incur compute and model charges." :
+      spec.operation === "release-capacity" ? "Release this workflow slot while retaining uncertain outcomes and held charges?" :
       `${spec.decision === "approve" ? "Approve" : "Reject"} ${spec.node_id} attempt ${spec.attempt}? ${spec.decision === "approve" ? "Dependent computation or model calls may incur charges." : "This fails the node and blocks its dependents."}`;
     if (spec.operation !== "cancel" && !window.confirm(message)) return;
     try { void deliver(captureWorkflowAction(runId, crypto.randomUUID(), spec)); } catch (cause) { failure(cause); }
@@ -389,6 +392,7 @@ export function WorkflowRuns({ organizationId, topicId, userId, canWrite, canMan
     if (command === "uncap" && latest && terminalWorkflow(latest) && onUncap) void rerun(latest, true);
   });
   return <section className="org-workflow-runs" aria-label="Workflow activity controls">
+    <WorkflowCapacity {...{ organizationId, userId, canManage, onAuthLost }} />
     {!connected && <p role="status">{configuration ? "Reconnecting workflow progress…" : "Loading workflow configuration…"}</p>}
     {configuration && !configuration.worker_running && <p role="status">Workflow reconciler unavailable. Existing requests remain durable.</p>}
     {error && <p role="alert" className="org-error">{error}</p>}

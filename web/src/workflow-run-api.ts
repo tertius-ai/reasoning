@@ -12,7 +12,7 @@ export type WorkflowNodeAttempt = {
 export type WorkflowRunSummary = {
   sequence: number; id: string; organization_id: string; topic_id: string; workflow_id: string; definition_version: number; definition_digest: string;
   requested_by: string; client_id: string; created_at: number; status: WorkflowRunStatus; revision: number;
-  cancel_requested: number; restore_fenced: number; finished_at: number | null; name?: string; has_output_caps?: number;
+  cancel_requested: number; restore_fenced: number; capacity_released?: number; finished_at: number | null; name?: string; has_output_caps?: number;
   comparison?: { question: string; models: string[] } | null;
 };
 export type WorkflowRun = WorkflowRunSummary & {
@@ -24,13 +24,13 @@ export type WorkflowStartAttempt = {
   operation: "start"; client_id: string; workflow_id: string; version: number; definition: WorkflowDefinition; definition_digest: string;
 };
 export type WorkflowActionSpec = (
-  { operation: "cancel" } | { operation: "retry"; revision: number } |
+  { operation: "cancel" } | { operation: "retry"; revision: number } | { operation: "release-capacity"; revision: number } |
   { operation: "approve"; node_id: string; attempt: number; decision: "approve" | "reject" }
 );
 export type WorkflowActionAttempt = { client_id: string; run_id: string } & WorkflowActionSpec;
 export type WorkflowExecutionAttempt = WorkflowStartAttempt | WorkflowActionAttempt;
 export type WorkflowActionReceipt = {
-  run_id: string; client_id: string; requested_by: string; revision: number; operation: "cancel" | "retry" | "approve";
+  run_id: string; client_id: string; requested_by: string; revision: number; operation: "cancel" | "retry" | "approve" | "release-capacity";
   node_id?: string; attempt?: number; decision?: "approve" | "reject";
 };
 
@@ -68,9 +68,9 @@ export function captureWorkflowStart(version: WorkflowVersion, id: string): Work
 export function captureWorkflowAction(runId: string, id: string, action: WorkflowActionSpec): WorkflowActionAttempt {
   identifier(runId); clientId(id);
   if (action.operation === "cancel") return immutable({ operation: "cancel", run_id: runId, client_id: id });
-  if (action.operation === "retry") {
+  if (action.operation === "retry" || action.operation === "release-capacity") {
     whole(action.revision!);
-    return immutable({ operation: "retry", run_id: runId, client_id: id, revision: action.revision! });
+    return immutable({ operation: action.operation, run_id: runId, client_id: id, revision: action.revision! });
   }
   if (action.operation !== "approve" || !/^[a-z][a-z0-9_-]{0,63}$/.test(action.node_id ?? "") ||
       !["approve", "reject"].includes(action.decision ?? "")) throw new Error("Select an exact approval node and decision.");
@@ -95,12 +95,13 @@ export async function deliverWorkflowExecution(organizationId: string, topicId: 
   }
   const path = workflowRunPath(organizationId, attempt.run_id);
   const body = attempt.operation === "approve" ? { client_id: attempt.client_id, attempt: attempt.attempt, decision: attempt.decision } :
-    attempt.operation === "retry" ? { client_id: attempt.client_id, revision: attempt.revision } : { client_id: attempt.client_id };
+    (attempt.operation === "retry" || attempt.operation === "release-capacity")
+      ? { client_id: attempt.client_id, revision: attempt.revision } : { client_id: attempt.client_id };
   const suffix = attempt.operation === "approve" ? "/nodes/" + encodeURIComponent(attempt.node_id) + "/approval" : "/" + attempt.operation;
   const result = await request<WorkflowActionReceipt>(path + suffix, { method: "POST", body });
   if (!result || result.run_id !== attempt.run_id || result.client_id !== attempt.client_id || result.requested_by !== userId ||
       result.operation !== attempt.operation || !Number.isSafeInteger(result.revision) || result.revision < 1 ||
-      (attempt.operation === "retry" && result.revision <= attempt.revision) ||
+      ((attempt.operation === "retry" || attempt.operation === "release-capacity") && result.revision <= attempt.revision) ||
       (attempt.operation === "approve" && (result.node_id !== attempt.node_id || result.attempt !== attempt.attempt || result.decision !== attempt.decision))) {
     throw new Error("Workflow action receipt does not match the original request. Retain its ID and retry unchanged.");
   }

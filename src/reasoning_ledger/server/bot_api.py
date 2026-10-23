@@ -86,6 +86,12 @@ class Lease(Input):
     lease: Annotated[str, Field(pattern=r"^[A-Za-z0-9_-]{43}$")]
 
 
+class DiagnosticTarget(Lease):
+    topic_id: Annotated[str, Field(pattern=r"^[a-f0-9]{32}$")] | None = None
+    target_run_id: Annotated[str, Field(pattern=r"^[a-f0-9]{32}$")] | None = None
+    request_id: Annotated[str, Field(min_length=1, max_length=128, pattern=r"^[A-Za-z0-9_-]+$")] | None = None
+
+
 class Progress(Lease):
     phase: Literal["thinking", "reading", "writing", "using_tools", "waiting_approval", "finishing"] | None = None
     activity: Annotated[str, Field(max_length=40)] | None = None
@@ -234,8 +240,12 @@ def install_routes(app: FastAPI, state: BotStore, authenticated, *, compute=None
         return developer.context(credential(request), run_id, body.lease)
 
     @app.post("/api/bot/runs/{run_id}/diagnostics")
-    def diagnostics(run_id: str, body: Lease, request: Request):
-        return developer.diagnostics(credential(request), run_id, body.lease)
+    def diagnostics(run_id: str, body: DiagnosticTarget, request: Request):
+        value = developer.diagnostics(credential(request), run_id, **body.model_dump())
+        value["workers"] = {name: getattr(app.state, name + "_worker").running for name in ("inference", "workflow", "mail", "webhook")}
+        value["inference_enabled"] = app.state.config.inference_enabled
+        value["mail_enabled"] = app.state.config.mail is not None
+        return value
 
     @app.post("/api/bot/runs/{run_id}/issues")
     def issue_request(run_id: str, body: IssueRequest, request: Request):

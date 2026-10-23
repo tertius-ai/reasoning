@@ -111,12 +111,45 @@ class BotDeveloper:
                 return {"enabled": False}
             return {"enabled": True, "repositories": json.loads(grant["repositories_json"])}
 
-    def diagnostics(self, credential, run_id, lease):
-        from .bot_diagnostics import collect
+    def diagnostics(self, credential, run_id, lease, topic_id=None, target_run_id=None, request_id=None):
+        from .bot_diagnostics import IDENTITY, collect, details
+
+        if (topic_id is not None and (not isinstance(topic_id, str) or not IDENTITY.fullmatch(topic_id))
+                or target_run_id is not None and (not isinstance(target_run_id, str) or not IDENTITY.fullmatch(target_run_id))
+                or request_id is not None and (not isinstance(request_id, str)
+                                               or not re.fullmatch(r"[A-Za-z0-9_-]{1,128}", request_id))):
+            raise StoreError(400, "select an exact topic, run, or retained request identity")
+        if target_run_id and request_id:
+            raise StoreError(400, "select a run identity or a retained request identity")
 
         with self.store.transaction() as db:
-            _, run, _ = self.authorized(db, credential, run_id, lease)
-            return {**collect(db, run["organization_id"], run["topic_id"]), "deployment": self.deployment}
+            bot, run, _ = self.authorized(db, credential, run_id, lease)
+            org = run["organization_id"]
+            if target_run_id or request_id:
+                targets = []
+                for table in ("workflow_runs", "llm_runs", "bot_runs", "compute_jobs"):
+                    if request_id and table != "workflow_runs":
+                        continue
+                    column, value = ("client_id", request_id) if request_id else ("id", target_run_id)
+                    if table == "llm_runs":
+                        query = ("SELECT q.topic_id FROM llm_runs r JOIN llm_requests q "
+                                 "ON q.organization_id=r.organization_id AND q.id=r.request_id "
+                                 "WHERE r.organization_id=? AND r.id=? LIMIT 2")
+                    else:
+                        query = f"SELECT topic_id FROM {table} WHERE organization_id=? AND {column}=? LIMIT 2"
+                    rows = db.execute(query, (org, value))
+                    targets.extend(row[0] for row in rows)
+                targets = set(targets)
+                if len(targets) != 1 or topic_id is not None and topic_id not in targets:
+                    raise StoreError(404, "diagnostic target unavailable")
+                topic_id = targets.pop()
+            target = topic_id or run["topic_id"]
+            if target not in self.runtime.bots.topic_ids(db, bot) or "messages:read" not in json.loads(bot["scopes_json"]):
+                raise StoreError(404, "diagnostic target unavailable under this bot's topic grants")
+            self.store._topic_access(db, bot["created_by"], org, target)
+            self.store._topic_access(db, run["requested_by"], org, target)
+            return {**collect(db, org, target), "scope": "authorized_topic", "topic_id": target,
+                    **details(db, org, target, run_id=target_run_id, request_id=request_id), "deployment": self.deployment}
 
     def request(self, credential, run_id, lease, repository, title, body, client_id):
         if (not isinstance(repository, str) or not REPOSITORY.fullmatch(repository) or not isinstance(title, str)

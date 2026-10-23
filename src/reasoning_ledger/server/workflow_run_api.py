@@ -36,6 +36,10 @@ def install_routes(app: FastAPI, state: WorkflowRuns, authenticated: Callable):
             state.store._require(db, user, organization_id)
         return {"enabled": True, "worker_running": app.state.workflow_worker.running, "inference_enabled": state.inference_enabled}
 
+    @app.get("/api/organizations/{organization_id}/workflow-capacity")
+    def capacity(organization_id: str, user: User):
+        return state.capacity(user, organization_id)
+
     @app.post("/api/organizations/{organization_id}/workflows/{workflow_id}/runs", status_code=202)
     def start(organization_id: str, workflow_id: str, body: Start, user: User):
         return state.start(user, organization_id, workflow_id, body.version, body.client_id)
@@ -77,3 +81,7 @@ def install_routes(app: FastAPI, state: WorkflowRuns, authenticated: Callable):
     @app.post("/api/organizations/{organization_id}/workflow-runs/{run_id}/retry")
     def retry(organization_id: str, run_id: str, body: Retry, user: User):
         return state.retry(user, organization_id, run_id, body.revision, body.client_id)
+
+    @app.post("/api/organizations/{organization_id}/workflow-runs/{run_id}/release-capacity")
+    def release_capacity(organization_id: str, run_id: str, body: Retry, user: User):
+        return state.release_capacity(user, organization_id, run_id, body.revision, body.client_id)

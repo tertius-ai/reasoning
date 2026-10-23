@@ -108,6 +108,90 @@ def nodes(view):
     return {node["node_id"]: node for node in view["nodes"]}
 
 
+def uncertain_model_workflow(env, client):
+    run = env.start([llm_node()], client=client)
+    action = env.runs.advance(run["id"])
+    env.runs.advance(run["id"], quote_action=action, quotes=[QUOTE])
+    child = env.inference.claim()
+    env.inference.finish(child, "interrupted", error="worker_interrupted", accounting_unknown=True)
+    env.runs.advance(run["id"])
+    return env.view(run), child
+
+
+def test_administrator_releases_stranded_capacity_without_resolving_accounting_or_replaying(installation):
+    env = installation
+    retained = [uncertain_model_workflow(env, f"uncertain-workflow-{index}") for index in range(8)]
+    assert env.runs.capacity(env.user, env.org)["in_use"] == 8
+    with pytest.raises(StoreError, match="Workflow capacity"):
+        env.start([llm_node()], client="blocked-retained-start")
+    before = env.inference.balance(env.user, env.org)
+    run, child = retained[0]
+    receipt = env.runs.release_capacity(env.user, env.org, run["id"], run["revision"], "release-capacity-fixture")
+    assert env.runs.release_capacity(env.user, env.org, run["id"], run["revision"], "release-capacity-fixture") == receipt
+    after = env.view(run)
+    assert after["capacity_released"] == after["cancel_requested"] == 1
+    assert after["status"] == "outcome_unknown" and after["finished_at"] is None
+    assert receipt["uncertainty_retained"] is True
+    assert env.inference.balance(env.user, env.org) == before
+    with env.store.transaction() as db:
+        assert db.execute("SELECT accounting_state FROM llm_runs WHERE id=?", (child["id"],)).fetchone()[0] == "uncertain"
+        assert db.execute("SELECT COUNT(*) FROM llm_runs").fetchone()[0] == 8
+    assert env.runs.capacity(env.user, env.org)["in_use"] == 7
+    admitted = env.start([llm_node()], client="blocked-retained-start")
+    assert env.start([llm_node()], client="blocked-retained-start")["id"] == admitted["id"]
+    assert env.runs.capacity(env.user, env.org)["in_use"] == 8
+    with pytest.raises(StoreError, match="current failed or cancelled"):
+        env.runs.retry(env.user, env.org, run["id"], after["revision"], "no-uncertain-replay")
+
+
+def test_capacity_release_refuses_stale_revisions_and_nonadministrators(installation):
+    env = installation
+    run, _ = uncertain_model_workflow(env, "uncertain-authority-fixture")
+    with pytest.raises(StoreError, match="current uncertain"):
+        env.runs.release_capacity(env.user, env.org, run["id"], 1, "stale-capacity-fixture")
+    invitation = env.store.invite(env.user, env.org, "member@example.org", "member", 3600)
+    member = env.store.accept_invitation(invitation["token"], user_id=None, name="Member", password="member fixture password")["user_id"]
+    with pytest.raises(StoreError) as denied:
+        env.runs.release_capacity(member, env.org, run["id"], run["revision"], "member-capacity-fixture")
+    assert denied.value.status == 403
+    assert env.runs.capacity(env.user, env.org)["in_use"] == 1
+
+
+def test_capacity_release_refuses_a_workflow_with_another_active_child(installation):
+    env = installation
+    second = llm_node()
+    second["id"] = "another"
+    run = env.start([llm_node(), second], client="mixed-uncertain-active")
+    for _ in range(2):
+        action = env.runs.advance(run["id"])
+        env.runs.advance(run["id"], quote_action=action, quotes=[QUOTE])
+    child = env.inference.claim()
+    env.inference.finish(child, "interrupted", accounting_unknown=True, error="worker_interrupted")
+    env.runs.advance(run["id"])
+    current = env.view(run)
+    assert current["status"] == "outcome_unknown"
+    with pytest.raises(StoreError, match="stop active"):
+        env.runs.release_capacity(env.user, env.org, run["id"], current["revision"], "reject-active-release")
+    assert env.runs.capacity(env.user, env.org)["in_use"] == 1
+
+
+def test_restored_uncertain_work_can_release_its_slot_without_lifting_the_restore_fence(installation, tmp_path):
+    env = installation
+    run, _ = uncertain_model_workflow(env, "restored-capacity-fixture")
+    key, archive, target = tmp_path / "key", tmp_path / "copy.rnbk", tmp_path / "restored"
+    create_key(key)
+    result = backup(env.store.data_dir, archive, key)
+    restore(archive, key, result["sha256"], target, source_stopped=True)
+    store = Store(target)
+    state = WorkflowRuns(WorkflowStore(store), ComputeStore(store, {}), InferenceStore(store))
+    current = state.get(env.user, env.org, run["id"])
+    assert current["restore_fenced"] == 1
+    state.release_capacity(env.user, env.org, run["id"], current["revision"], "retire-restored-capacity")
+    after = state.get(env.user, env.org, run["id"])
+    assert after["restore_fenced"] == 1 and after["capacity_released"] == 1
+    assert state.advance(run["id"]) is None
+
+
 def test_comparison_history_retains_full_question_and_models_without_a_model_whitelist(installation):
     env = installation
     question = "Full retained comparison question\n" + "Explain every step. " * 90

@@ -186,6 +186,14 @@ Long-running invocations refresh bot presence and delegated access every 15
 seconds, including the active topic's current read/respond grants. A rejected
 access probe stops the local CLI process and retains its
 unknown invocation outcome for explicit recovery.
+Run `uv run --locked reasoning-bot recover --state-dir BOT_STATE --action inspect`
+to inspect content-free metadata and exact recovery commands. Inspection does not
+alter the journal or contact the server. Stop the runner before recovery. After
+reviewing the retained local CLI session and remote result, explicit `skip`
+archives the original receipt and releases the local runner fence. It does not
+settle a provider charge or prove that no side effect occurred. Runtime runners
+do not replay unknown CLI work; legacy `retry` requires explicit confirmation.
+The recovery output includes the exact command to restart the same bot state.
 Mentioning an enabled topic bot suppresses the composer's automatic OpenRouter
 reply in a beta-topic; it does not start both paid inference paths.
 Type `@BotName-` to autocomplete that bot's advertised CLI models. The selection
@@ -402,10 +410,13 @@ returns a notice telling the bot to explain that the owner must add that person
 as a permitted requester; it does not disclose the repositories. Disabling or changing
 developer access invalidates pending approvals. This grant is separate from local
 CAS execution and does not expose SSH, shell, deployment credentials or raw logs.
-The `server_diagnostics` tool returns sanitized counts, status buckets and
-allowlisted error codes for the current topic only, plus the deployment release
-identity and source commit when its immutable manifest can be verified. It never
-returns server logs, deployment credentials or another topic's contents.
+The `server_diagnostics` tool accepts an optional `topic_id`, `target_run_id`, or
+workflow `request_id`. Its target must be in the bot's current grants and readable
+by both its owner and the invocation's requester. It returns sanitized counts,
+allowlisted errors, up to 25 metadata records per run kind, workflow admission
+usage, worker liveness, and the deployment identity. It returns no conversation
+content, server logs, or deployment credentials. Missing and inaccessible targets
+are refused; diagnostics never retry or reconcile work.
 Managed release directories retain the exact public manifest beside `web/`;
 diagnostics return its source commit only when the manifest hash matches the
 running release identity. Missing or unverified manifests leave the commit null.

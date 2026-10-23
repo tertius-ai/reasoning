@@ -48,9 +48,13 @@ def publish_issue(repository, title, body, *, executable=None, directory=None):
 def register(gateway, registry, directory, policy):
     if not policy.get("enabled"):
         return
-    schema = {"type": "object", "properties": {}, "additionalProperties": False}
-    registry.register(ToolDefinition("server_diagnostics", "Read sanitized topic-scoped server counts and states, never logs or secrets.",
-                                    schema, lambda: gateway.request("/diagnostics"), risk="read"))
+    identity = {"type": "string", "pattern": "^[a-f0-9]{32}$"}
+    schema = {"type": "object", "properties": {"topic_id": identity, "target_run_id": identity,
+              "request_id": {"type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[A-Za-z0-9_-]+$"}},
+              "additionalProperties": False}
+    registry.register(ToolDefinition("server_diagnostics", "Inspect bounded run/request metadata and worker health for a granted topic. "
+                                    "Provide its topic_id, target_run_id, or retained request_id; no mutation, logs or secrets.",
+                                    schema, lambda **arguments: gateway.request("/diagnostics", **arguments), risk="read"))
     if directory is None:
         return
     directory = Path(directory).resolve(strict=True)

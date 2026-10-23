@@ -1109,6 +1109,7 @@ Using `/api/organizations/{organization_id}` as `{prefix}`:
 | Path | Methods | Purpose |
 | --- | --- | --- |
 | `{prefix}/workflow-configuration` | GET | Runtime availability and worker liveness |
+| `{prefix}/workflow-capacity` | GET | Organization admission usage and unfinished runs in accessible topics |
 | `{prefix}/workflows/{workflow_id}/runs` | POST | Start an exact version with `version` and `client_id` |
 | `{prefix}/topics/{topic_id}/workflow-runs` | GET | Newest-first summaries; `before` sequence and `limit` up to 50 |
 | `{prefix}/workflow-runs/{run_id}` | GET | Pinned definition/image records and current node attempts |
@@ -1118,6 +1119,7 @@ Using `/api/organizations/{organization_id}` as `{prefix}`:
 | `{prefix}/workflow-runs/{run_id}/nodes/{node_id}/approval` | POST | `client_id`, strict `attempt`, and `decision` (`approve`/`reject`) |
 | `{prefix}/workflow-runs/{run_id}/cancel` | POST | `client_id` |
 | `{prefix}/workflow-runs/{run_id}/retry` | POST | `client_id` and strict current `revision` |
+| `{prefix}/workflow-runs/{run_id}/release-capacity` | POST | Administrator retirement of stopped uncertain work; `client_id` and current `revision` |
 
 Requests use a stable 16–128 character ASCII letter/digit/underscore/hyphen
 client ID. Lost start replies replay the same run with its current progress.
@@ -1127,8 +1129,9 @@ authority is required on replay. All reads, children, attempts, actions, and
 events are organization-scoped. Cookie writes require ordinary origin/CSRF
 checks; bots and worker credentials cannot use these human routes. Provider
 credentials are not exposed in definitions, captures, events, or run responses.
-Restored runs are fenced from new actions/dispatch; recovery requires a new
-deliberate run rather than replaying work that may have executed after a snapshot.
+Restored runs are fenced from dispatch, retry, and approval; recovery requires a
+new deliberate run. Administrators may release their admission slots while
+retaining the restore fence and uncertain outcomes.
 
 The shared gamma frontend authors and inspects immutable definitions and starts
 the selected exact version. Shared run panels show current status, revision,
@@ -1139,6 +1142,16 @@ the server rechecks authorization for every action and replay. Attempt inspectio
 shows bounded history and captured dependency inputs, with linked computation
 logs/artifact downloads and model output/accounting. Unknown outcomes retain
 reservations and require verified operator reconciliation, not automatic retry.
+
+**Workflow capacity** lists unfinished runs and the organization admission limit
+of eight; installation admission is bounded to 64. An administrator can release
+the admission slot of an `outcome_unknown` workflow after inspecting its children.
+Known active children must stop first. This records an immutable action receipt,
+sets `capacity_released`, and fences further dispatch through cancellation. Child
+outcomes, usage reservations, unknown accounting, and original records remain.
+The workflow is still unresolved; settling a provider charge or physical compute
+cleanup is a separate operation. A justified retry after all children settle
+acquires capacity again. Exact action replay retains its original receipt.
 
 Execution requests are captured immutably per signed-in user/organization/topic.
 In-app navigation retains uncertain start and action requests. Explicit replay

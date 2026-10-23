@@ -109,3 +109,46 @@ def collect(db, org, topic):
                 "r.error_code" if kind == "inference" else "error_code") + " IS NOT NULL", (org, topic), ERRORS)
         result["runs"][kind] = counts
     return result
+
+
+def details(db, org, topic, *, run_id=None, request_id=None):
+    """Bounded metadata only; caller authorizes the target topic and both humans."""
+    result = {}
+    for kind, table in (("inference", "llm_runs"), ("bots", "bot_runs"), ("compute", "compute_jobs"), ("workflows", "workflow_runs")):
+        created = "q.created_at" if kind == "inference" else "r.created_at"
+        fields = f"r.id,r.status,{created} AS created_at"
+        if kind in {"inference", "bots", "compute"}:
+            fields += ",r.error_code"
+        if kind == "inference":
+            fields += ",r.accounting_state"
+        if kind == "workflows":
+            fields += ",r.client_id,r.revision,r.cancel_requested,r.capacity_released"
+        source = f"{table} r"
+        if kind == "inference":
+            source += " JOIN llm_requests q ON q.organization_id=r.organization_id AND q.id=r.request_id"
+        topic_column = "q.topic_id" if kind == "inference" else "r.topic_id"
+        query = f"SELECT {fields} FROM {source} WHERE r.organization_id=? AND {topic_column}=?"
+        parameters = [org, topic]
+        if run_id:
+            query += " AND r.id=?"
+            parameters.append(run_id)
+        if request_id:
+            if kind != "workflows":
+                result[kind] = []
+                continue
+            query += " AND r.client_id=?"
+            parameters.append(request_id)
+        rows = [dict(row) for row in db.execute(query + f" ORDER BY {created} DESC,r.id LIMIT 25", parameters)]
+        for row in rows:
+            row["status"] = row["status"] if row["status"] in STATES else "other"
+            if "error_code" in row:
+                row["error_code"] = row["error_code"] if row["error_code"] in ERRORS or row["error_code"] is None else "other"
+            if "accounting_state" in row:
+                allowed = {"reserved", "settled", "released", "uncertain"}
+                row["accounting_state"] = row["accounting_state"] if row["accounting_state"] in allowed else "other"
+        result[kind] = rows
+    used = db.execute("SELECT COUNT(*) FROM workflow_runs WHERE organization_id=? AND finished_at IS NULL "
+                      "AND capacity_released=0", (org,)).fetchone()[0]
+    return {"records": result, "workflow_capacity": {"limit": 8, "in_use": used}, "record_limit_per_kind": 25,
+            "next_action": "Inspect the matching run; use Workflow capacity for admission blockers. "
+                           "Unknown outcomes require owner/administrator review; diagnostics do not retry or reconcile work."}

@@ -15,6 +15,7 @@ from ..deployment.host import InstallError, atomic_write, canonical
 from ..deployment.private import read_private, write_document, write_private
 from .bot_agent import invoke
 from .bot_client import BotClientError, reconnect
+from .bot_recovery import interrupted
 from .bot_runtime import mentioned_models
 from .bot_store import IDENTITY
 
@@ -101,7 +102,7 @@ def runtime_step(client, directory, configuration, agent, binding, *, runner=inv
             write_journal(journal, state)
             return {"replied": False, "cursor": state["cursor"]}
         if pending["phase"] not in {"reply_ready", "failure_ready"}:
-            raise BotClientError("an invocation has an unknown outcome; inspect its local session and retained receipt before retrying")
+            raise BotClientError(interrupted(directory))
         completion = {"lease": pending["run"]["lease"], "status": "succeeded", "output": pending["text"]} \
             if pending["phase"] == "reply_ready" else {"lease": pending["run"]["lease"], "status": "failed",
                                                        "error": "gateway_not_attached"}

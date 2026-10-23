@@ -117,10 +117,67 @@ class WorkflowRuns:
 
     @staticmethod
     def _capacity(db, org):
-        if db.execute("SELECT COUNT(*) FROM workflow_runs WHERE organization_id=? AND finished_at IS NULL", (org,)).fetchone()[0] >= 8:
-            raise StoreError(429, "organization already has eight active or uncertain workflow runs")
-        if db.execute("SELECT COUNT(*) FROM workflow_runs WHERE finished_at IS NULL").fetchone()[0] >= 64:
+        if db.execute("SELECT COUNT(*) FROM workflow_runs WHERE organization_id=? AND finished_at IS NULL "
+                      "AND capacity_released=0", (org,)).fetchone()[0] >= 8:
+            raise StoreError(429, "organization already has eight active or uncertain workflow runs; "
+                             "open Workflow capacity to inspect blockers and administrator recovery")
+        if db.execute("SELECT COUNT(*) FROM workflow_runs WHERE finished_at IS NULL AND capacity_released=0").fetchone()[0] >= 64:
             raise StoreError(429, "installation already has 64 active or uncertain workflow runs")
+
+    def capacity(self, user, org):
+        with self.store.transaction() as db:
+            self.store._require(db, user, org)
+            rows = db.execute("SELECT id,topic_id,requested_by,created_at,status,revision,capacity_released "
+                              "FROM workflow_runs WHERE organization_id=? AND finished_at IS NULL "
+                              "ORDER BY capacity_released,created_at,id LIMIT 200", (org,)).fetchall()
+            visible = []
+            for row in rows:
+                try:
+                    self.store._topic_access(db, user, org, row["topic_id"])
+                except StoreError as error:
+                    if error.status not in {403, 404}:
+                        raise
+                    continue
+                visible.append(dict(row))
+            used = db.execute("SELECT COUNT(*) FROM workflow_runs WHERE organization_id=? AND finished_at IS NULL "
+                              "AND capacity_released=0", (org,)).fetchone()[0]
+            return {"limit": 8, "in_use": used, "runs": visible, "truncated": len(rows) == 200}
+
+    def release_capacity(self, user, org, run_id, revision, client_id):
+        """Retire stopped uncertain work from admission without resolving its effects."""
+        if type(revision) is not int or not 1 <= revision <= 2**63 - 1:
+            raise StoreError(400, "select the current workflow revision")
+        with self.store.transaction(write=True) as db:
+            run = self._run(db, org, run_id)
+            self.store._topic_access(db, user, org, run["topic_id"], write=True)
+            self.store._require(db, user, org, admin=True)
+
+            def operation():
+                if run["revision"] != revision or run["status"] != "outcome_unknown" or run["capacity_released"]:
+                    raise StoreError(409, "select the current uncertain workflow before releasing its capacity")
+                nodes = self._nodes(db, run)
+                if any(node["status"] == "running" for node in nodes.values()):
+                    raise StoreError(409, "stop active workflow children and inspect their outcomes before releasing capacity")
+                for node in nodes.values():
+                    for field, table in (("bot_run_id", "bot_runs"), ("compute_job_id", "compute_jobs"),
+                                         ("inference_run_id", "llm_runs")):
+                        if node[field]:
+                            child = db.execute(f"SELECT status FROM {table} WHERE organization_id=? AND id=?",
+                                               (org, node[field])).fetchone()
+                            if child is None or child[0] in {"queued", "running", "waiting_approval"}:
+                                raise StoreError(409, "stop active workflow children before releasing capacity")
+                # Cancellation fences queued admission and any late child response;
+                # unknown execution and accounting remain on the original children.
+                db.execute("UPDATE workflow_runs SET cancel_requested=1,capacity_released=1 WHERE organization_id=? AND id=?",
+                           (org, run_id))
+                run.update(cancel_requested=1, capacity_released=1)
+                self._sync(db, run, nodes)
+                self._event(db, run, {"type": "capacity_released", "uncertainty_retained": True, "released_by": user})
+                self.store._audit(db, org, user, "workflow.capacity.release", run_id)
+                return {"operation": "release-capacity", "uncertainty_retained": True}
+
+            return self._action(db, user, org, run, client_id,
+                                {"operation": "release-capacity", "revision": revision}, operation)
 
     def start(self, user, org, workflow_id, version, client_id):
         if type(version) is not int or not 1 <= version <= 128 or not isinstance(client_id, str) or not CLIENT.fullmatch(client_id):
@@ -181,7 +238,7 @@ class WorkflowRuns:
                 dict(row)
                 for row in db.execute(
                     "SELECT r.sequence,r.id,r.organization_id,r.topic_id,r.workflow_id,r.definition_version,r.requested_by,r.client_id,"
-                    "r.created_at,r.status,r.revision,r.cancel_requested,r.restore_fenced,r.finished_at,v.definition_digest,"
+                    "r.created_at,r.status,r.revision,r.cancel_requested,r.restore_fenced,r.capacity_released,r.finished_at,v.definition_digest,"
                     "EXISTS(SELECT 1 FROM json_each(v.definition_json,'$.nodes') n "
                     "WHERE json_extract(n.value,'$.kind')='llm' AND "
                     "json_type(n.value,'$.parameters.max_completion_tokens')='integer') AS has_output_caps,"
@@ -270,7 +327,7 @@ class WorkflowRuns:
             if old["request_json"] != encoded:
                 raise StoreError(409, "workflow action request ID was used with different input")
             return json.loads(old["result_json"])
-        if run["restore_fenced"]:
+        if run["restore_fenced"] and request.get("operation") != "release-capacity":
             raise StoreError(409, "restored workflow runs cannot resume; create a new run after recovery")
         if (
             db.execute(
@@ -386,7 +443,8 @@ class WorkflowRuns:
                         (org, run_id, node["node_id"], node["attempt"] + 1, node["kind"], int(time.time())),
                     )
                 db.execute(
-                    "UPDATE workflow_runs SET status='running',cancel_requested=0,finished_at=NULL WHERE organization_id=? AND id=?",
+                    "UPDATE workflow_runs SET status='running',cancel_requested=0,capacity_released=0,finished_at=NULL "
+                    "WHERE organization_id=? AND id=?",
                     (org, run_id),
                 )
                 self._event(db, run, {"type": "retry", "status": "running"})

@@ -290,9 +290,9 @@ def agent_step(client, journal, binding, *, runner=invoke):
     pending = state["pending"]
     if pending:
         if pending.get("phase") != "reply_ready":
-            raise BotClientError(
-                "a CLI invocation has an unknown outcome; inspect the local CLI session, then use recover to retry or skip explicitly"
-            )
+            from .bot_recovery import interrupted
+
+            raise BotClientError(interrupted(journal.parent, runtime=False))
         parts = [pending["text"][index : index + 16000] for index in range(0, len(pending["text"]), 16000)]
         for index, part in enumerate(parts):
             client.post(pending["topic_id"], part, f"agent-{pending['message_id']}-{index}")

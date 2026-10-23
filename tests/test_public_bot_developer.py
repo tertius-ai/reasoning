@@ -23,6 +23,28 @@ from reasoning_ledger.server.bot_issue_gateway import github_executable, publish
 from reasoning_ledger.server.store import StoreError
 
 
+def test_diagnostics_follow_authorized_topic_and_run_with_live_grants(fixture):
+    store, owner, topics, _, _, _ = fixture
+    developer, bot, run, lease = enabled(fixture)
+    args = (bot["token"], run["id"], lease)
+    org = owner["organization_id"]
+    target = topics[0]
+    # Setup grants only the beta topic. A supplied target does not widen them.
+    with pytest.raises(StoreError) as denied:
+        developer.diagnostics(*args, topic_id=target)
+    assert denied.value.status == 404
+    developer.runtime.bots.update(owner["user_id"], org, bot["id"], bot["name"], topics,
+                                  ["messages:read", "messages:write", "knowledge:read", "knowledge:write"])
+    value = developer.diagnostics(*args, topic_id=target)
+    assert value["topic_id"] == target and value["scope"] == "authorized_topic"
+    assert value["records"]["workflows"] == [] and value["workflow_capacity"]["limit"] == 8
+    value = developer.diagnostics(*args, target_run_id=args[1])
+    assert value["records"]["bots"][0]["id"] == args[1]
+    assert bot["token"] not in json.dumps(value)
+    with pytest.raises(StoreError):
+        developer.diagnostics(*args, topic_id=target, target_run_id=args[1])
+
+
 def test_actual_client_gateway_mcp_composes_developer_discovery_and_preserves_approval(fixture, tmp_path, monkeypatch):
     """Real client allowlist, FastAPI handlers, registry and MCP calls; no publisher effects."""
     from concurrent.futures import ThreadPoolExecutor

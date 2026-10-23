@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import getpass
+import hashlib
 import json
 import math
 import os
@@ -422,9 +423,9 @@ def main(argv=None) -> int:
                 "--allow-other-users", action="store_true",
                 help="deprecated: choose who can use this bot in My bots; only servers without that setting read this flag",
             )
-    recovery = commands.add_parser("recover", help="explicitly retry or skip a retained CLI invocation with an unknown outcome")
+    recovery = commands.add_parser("recover", help="inspect, then explicitly recover a retained invocation with an unknown outcome")
     recovery.add_argument("--state-dir", type=Path, required=True)
-    recovery.add_argument("--action", choices=("retry", "skip"), required=True)
+    recovery.add_argument("--action", choices=("inspect", "retry", "skip"), required=True)
     for name in ("identity", "topics", "post", "research"):
         command = commands.add_parser(name)
         command.add_argument("--config", type=Path, required=True)
@@ -456,6 +457,7 @@ def main(argv=None) -> int:
             args.once = False
             args.allow_other_users = False
         if args.command == "recover":
+            from .bot_recovery import guidance
             from .bot_runner import read_journal, write_journal
 
             with locked_directory(args.state_dir) as directory:
@@ -466,28 +468,39 @@ def main(argv=None) -> int:
                 if not isinstance(pending, dict) or pending.get("phase") not in (
                         {"executing", "reply_ready"} if journal == runtime_journal else {"executing"}):
                     raise BotClientError("there is no unknown CLI invocation to recover")
+                if args.action == "inspect":
+                    retained = pending.get("run", {})
+                    identity = retained.get("id") if isinstance(retained, dict) else None
+                    print(json.dumps({"status": "owner_review_required", "journal": str(journal),
+                                      "run_id": identity if isinstance(identity, str) and IDENTITY.fullmatch(identity) else None,
+                                      "phase": pending["phase"], **guidance(directory, runtime=journal == runtime_journal)}))
+                    return 0
                 if args.action == "retry":
                     if journal == runtime_journal:
                         raise BotClientError("use --action skip after inspecting the retained invocation, then submit a new "
                                              "request in Reasoning; unknown local work is not silently replayed")
                     print("Retry can spend again and repeat local side effects. Inspect the local CLI session first.")
-                else:
-                    state["cursor"] = pending.get("sequence", state["cursor"])
                 if input(f"Type {args.action} to confirm: ").strip() != args.action:
                     raise BotClientError("recovery not confirmed")
-                if journal == runtime_journal:
-                    identity = pending["run"]["id"]
-                    if not IDENTITY.fullmatch(identity):
-                        raise BotClientError("invalid retained invocation identity")
-                    archive = directory / f"recovered-{identity}.json"
-                    if not archive.exists():
+                identity = pending.get("run", {}).get("id") if journal == runtime_journal else pending.get("message_id")
+                if not isinstance(identity, str) or not IDENTITY.fullmatch(identity):
+                    raise BotClientError("invalid retained invocation identity")
+                suffix = "" if journal == runtime_journal else "-" + hashlib.sha256(journal.read_bytes()).hexdigest()[:16]
+                archive = directory / f"recovered-{identity}{suffix}.json"
+                if not archive.exists():
+                    if journal == runtime_journal:
                         write_journal(archive, state, new=True)
-                    print("Retained invocation receipt: " + str(archive))
+                    else:
+                        write_document(archive, state, new=True)
+                print("Retained invocation receipt: " + str(archive))
+                if args.action == "skip":
+                    state["cursor"] = pending.get("sequence", state["cursor"])
                 state["pending"] = None
                 if journal == runtime_journal:
                     write_journal(journal, state)
                 else:
                     write_document(journal, state)
+                print("Next: " + guidance(directory, runtime=journal == runtime_journal)["restart_command"])
             return 0
         if args.command == "configure":
             credential = (

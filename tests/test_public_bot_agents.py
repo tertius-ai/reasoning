@@ -200,6 +200,29 @@ def test_unknown_outcome_requires_explicit_recovery(tmp_path):
         agent_step(None, journal, binding)
 
 
+def test_recovery_inspection_is_read_only_and_skip_archives_evidence(tmp_path, monkeypatch, capsys):
+    from reasoning_ledger.server.bot_client import main
+
+    tmp_path.chmod(0o700)
+    journal = tmp_path / "runner.json"
+    secret = "retained-private-session-and-credential"
+    state = {"format": 1, "binding": {"credential": secret}, "cursor": 0, "sessions": {},
+             "pending": {"phase": "executing", "sequence": 3, "message_id": "a" * 32, "text": secret}}
+    write_document(journal, state)
+    original = journal.read_bytes()
+    monkeypatch.setattr("builtins.input", lambda _: pytest.fail("inspection must not prompt"))
+    assert main(["recover", "--state-dir", str(tmp_path), "--action", "inspect"]) == 0
+    value = json.loads(capsys.readouterr().out)
+    assert value["status"] == "owner_review_required" and "--action inspect" in value["inspect_command"]
+    assert secret not in json.dumps(value) and journal.read_bytes() == original
+    monkeypatch.setattr("builtins.input", lambda _: "skip")
+    assert main(["recover", "--state-dir", str(tmp_path), "--action", "skip"]) == 0
+    archive, = tmp_path.glob("recovered-" + "a" * 32 + "-*.json")
+    assert read_document(archive) == state
+    assert read_document(journal)["pending"] is None
+    assert "make bot-run" in capsys.readouterr().out
+
+
 def test_active_topic_probe_refuses_removed_grant_or_respond_scope():
     from reasoning_ledger.server.bot_agent import probe_access
 
