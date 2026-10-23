@@ -433,7 +433,8 @@ def register_reviews(research):
     research.registry.tool(
         name="ledger_request_review",
         description="Request an automatically selected fresh-context reviewer. Exact revisions are pinned; authors cannot self-certify. "
-        "A topic may override the model or disable review. End the current turn when review is queued; do not poll.",
+        "A topic may override the model or disable review. First retain a useful answer_checkpoint, then request review. "
+        "End the current turn when review is queued; do not poll.",
         input_schema=schema({"claim_id": string(200), "proof_id": string(200)}),
     )(lambda claim_id=None, proof_id=None: reviews.request(research, claim_id, proof_id))
     research.registry.tool(

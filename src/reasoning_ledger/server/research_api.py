@@ -7,6 +7,7 @@ from fastapi import Depends, Query
 from pydantic import Field
 
 from .request_input import RequestInput
+from .research_capabilities import source_availability
 from .research_context import ResearchContext
 from .research_export import export_topic
 from .research_goals import ResearchGoals
@@ -38,6 +39,7 @@ class ToolSettings(RequestInput):
     prompt_profile: Literal["workbench", "blueprint", "fact_graph", "author_critic", "lean"] = "workbench"
     additional_instructions: Annotated[str, Field(max_length=8000)] = ""
     context_target_percent: Annotated[int, Field(ge=40, le=80, strict=True)] = 60
+    ledger_context_limit: Annotated[int, Field(ge=0, le=20, strict=True)] = 8
     compute_allowance_cpu_seconds: Annotated[int, Field(ge=0, le=1000000, strict=True)] = 0
 
 
@@ -166,6 +168,8 @@ def install_routes(app, inference, compute, workflows, authenticated, *, enabled
             policy = json.loads(row["context_policy_json"]) if row else {}
             return {
                 "tools": json.loads(row["tools_json"]) if row else DEFAULT_TOOLS,
+                **source_availability(),
+                "ledger_context_limit": policy.get("ledger_context_limit", 8),
                 "reviewer_model": row["reviewer_model"] if row else None,
                 "context_target_percent": json.loads(row["context_policy_json"]).get("target_percent", 60) if row else 60,
                 "compute_allowance_cpu_seconds": row["compute_allowance_cpu_seconds"] if row else 0,
@@ -195,7 +199,8 @@ def install_routes(app, inference, compute, workflows, authenticated, *, enabled
                     (body.reviewer_model, organization_id, topic_id),
                 )
             policy_fields = {"context_target_percent": "target_percent", "review_enabled": "review_enabled",
-                             "prompt_profile": "prompt_profile", "additional_instructions": "additional_instructions"}
+                             "prompt_profile": "prompt_profile", "additional_instructions": "additional_instructions",
+                             "ledger_context_limit": "ledger_context_limit"}
             if body.model_fields_set & policy_fields.keys():
                 policy = json.loads(db.execute("SELECT context_policy_json FROM research_topic_settings "
                                                "WHERE organization_id=? AND topic_id=?", (organization_id, topic_id)).fetchone()[0])

@@ -266,6 +266,29 @@ def test_prompt_profiles_pin_exact_context_and_do_not_expand_tool_grants(install
     assert client.put(root + "/research-settings", json={"tools": [], "review_enabled": "yes"}).status_code == 422
 
 
+def test_automatic_ledger_context_contains_only_matching_records_with_an_explicit_limit(installation):
+    state, owner, topics, _, tools = source_run(installation)
+    org, topic, user = owner["organization_id"], topics[1]["id"], owner["user_id"]
+    for index in range(10):
+        tools.invoke("ledger_claim", {"statement": f"Tensor kernel example {index} has explicit hypotheses."})
+    tools.invoke("ledger_claim", {"statement": "An unrelated observation about prime numbers."})
+    message = state.store.post_message(user, org, topic, "Please explain the tensor kernel.", "tensor-question")
+
+    def compile_context():
+        with state.store.transaction() as db:
+            return ResearchContext(state.store).compile(db, org, topic, message["sequence"], QUOTES, user=user)[1]
+
+    snapshot = compile_context()
+    assert snapshot["ledger_context_limit"] == 8 and len(snapshot["ledger_revisions"]) == 8
+    # Change the persisted topic policy through the authenticated API.
+    _, _, client, _ = installation
+    root = f"/api/organizations/{org}/topics/{topic}"
+    for limit in (0, 2):
+        client.put(root + "/research-settings", json={"tools": sorted(tools.enabled), "ledger_context_limit": limit}).raise_for_status()
+        assert len(compile_context()["ledger_revisions"]) == limit
+    assert client.put(root + "/research-settings", json={"tools": [], "ledger_context_limit": 21}).status_code == 422
+
+
 def test_citation_cannot_pass_without_an_actual_source_read(installation):
     state, owner, topics, row, tools = source_run(installation)
     reference = tools.invoke("ledger_reference", {"author": "Example Author", "title": "A source", "url": "https://example.com/paper"})[

@@ -102,7 +102,9 @@ class ResearchFixture:
         assert request.headers["Authorization"] == "Bearer " + KEY
         body = json.loads(request.content)
         self.requests.append(body)
-        if self.mode == "credit_first" or (len(self.requests) > 1 and self.mode in {"credit_later", "credit_continuation"}):
+        if self.mode == "credit_first" or (
+            len(self.requests) > 1 and self.mode in {"credit_later", "credit_continuation", "checkpoint_credit"}
+        ):
             return httpx.Response(402, json={"error": {"message": KEY, "metadata": {
                 "limit_source": "openrouter_credits", "reason": "weight_exceeds_budget", "remedy_hint": KEY,
             }}})
@@ -116,7 +118,9 @@ class ResearchFixture:
             ]
             content = json.dumps(memory) if self.mode != "bad_compaction" else "unsupported ungrounded summary"
             delta, finish = {"content": content}, "stop"
-        elif self.turn == 0 and self.mode in {"tools", "uncertain", "goal", "credit_later", "invalid_arguments", "gemini_nullable"}:
+        elif self.turn == 0 and self.mode in {
+            "tools", "uncertain", "goal", "credit_later", "invalid_arguments", "gemini_nullable", "checkpoint_credit"
+        }:
             self.turn += 1
             name = "goal_checkpoint" if self.mode == "goal" else "topic_history"
             arguments = (
@@ -124,6 +128,10 @@ class ResearchFixture:
                 if name == "goal_checkpoint"
                 else {}
             )
+            if self.mode == "checkpoint_credit":
+                name = "answer_checkpoint"
+                arguments = {"summary": "The finite-dimensional case follows by rank-nullity.",
+                             "remaining": "The infinite-dimensional case is unresolved.", "sources": ["Given linear map, equation (1)"]}
             delta = {
                 "tool_calls": [
                     {
@@ -177,6 +185,74 @@ def turn(installation, fixture, maximum=256):
     claimed = state.claim()
     ResearchAgent(state, fixture.provider, claimed, quote).execute()
     return state, owner, topics, claimed
+
+
+def test_budget_refusal_keeps_a_useful_checkpoint_without_another_paid_retry(installation):
+    fixture = ResearchFixture("checkpoint_credit")
+    state, owner, topics, row = turn(installation, fixture)
+    result = state.run(owner["user_id"], owner["organization_id"], row["id"])
+    assert len(fixture.requests) == 2 and result["status"] == "failed"
+    assert result["answer_state"]["status"] == "partial"
+    assert "finite-dimensional" in result["answer_state"]["checkpoint"]["summary"]
+    with state.store.transaction() as db:
+        message = db.execute("SELECT content FROM messages WHERE id=?", (result["message_id"],)).fetchone()[0]
+    assert "infinite-dimensional" in message and "Not a completed answer" in message
+    assert result["actual_microusd"] == 8
+
+
+@pytest.mark.parametrize("stop", ["interrupted", "timeout", "review"])
+def test_checkpoint_survives_interruption_timeout_or_review_handoff(installation, stop):
+    from test_organization_research_workbench import source_run
+
+    from reasoning_ledger.server.research_reviews import ResearchReviews
+
+    state, owner, _, row, tools = source_run(installation)
+    tools.invoke("answer_checkpoint", {"summary": "A precise provisional answer.",
+                                      "remaining": "Check the stated hypothesis.", "sources": ["Definition 2"]})
+    if stop == "review":
+        claim = tools.invoke("ledger_claim", {"statement": "Every integer equals itself."})["result"]
+        proof = tools.invoke("ledger_prove", {"claim_id": claim["claim_id"], "argument": "Reflexivity."})["result"]
+        ResearchReviews(state).request(tools, proof_id=proof["proof_id"])
+    fixture = ResearchFixture("final")
+    agent = ResearchAgent(state, fixture.provider, row, Quote(**json.loads(row["quote_json"])),
+                          stopped=lambda: stop == "interrupted", timeout=-1 if stop == "timeout" else 1800)
+    agent.execute()
+    result = state.run(owner["user_id"], owner["organization_id"], row["id"])
+    assert fixture.requests == []
+    assert result["answer_state"]["status"] == ("waiting" if stop == "review" else "partial")
+    assert result["answer_state"]["reason"] == {"review": "independent review", "interrupted": "worker_interrupted",
+                                               "timeout": "execution_timeout"}[stop]
+    with state.store.transaction() as db:
+        message = db.execute("SELECT content FROM messages WHERE id=?", (result["message_id"],)).fetchone()[0]
+    assert "precise provisional answer" in message and "Check the stated hypothesis" in message
+    assert "not a completed answer" in message.lower()
+
+
+@pytest.mark.parametrize("mode", ["research", "plain_comparison", "plain_response"])
+def test_effective_invocation_tools_and_utc_date_match_the_provider_request(installation, mode):
+    import datetime
+
+    _, state, _, owner, topics = prepare(installation)
+    quote = Quote(MODELS[0], "0.000001", "0.000002", "0", 200000, 8192, supports_tools=mode != "plain_response")
+    parameters = state.parameters([MODELS[0]], 256, 50, None)
+    kwargs = {"workflow_context": [{"role": "system", "content": "Answer precisely."}, {"role": "user", "content": "A question."}]} \
+        if mode == "plain_comparison" else {}
+    if kwargs:
+        with state.store.transaction(write=True) as db:
+            state._enqueue(db, owner["user_id"], owner["organization_id"], topics[2]["id"],
+                           "capabilities-" + mode, parameters, [quote], **kwargs)
+    else:
+        state.enqueue(owner["user_id"], owner["organization_id"], topics[1]["id"], "capabilities-" + mode, parameters, [quote])
+    row, fixture = state.claim(), ResearchFixture("final")
+    ResearchAgent(state, fixture.provider, row, quote).execute()
+    result = state.run(owner["user_id"], owner["organization_id"], row["id"])
+    capabilities = result["capabilities"]
+    assert capabilities["mode"] == mode
+    assert capabilities["current_date"] == datetime.datetime.now(datetime.UTC).date().isoformat()
+    advertised = [tool["function"]["name"] for tool in fixture.requests[0].get("tools", [])]
+    assert sorted(advertised) == sorted(capabilities["advertised_tools"])
+    assert ("web_fetch" in capabilities["discoverable_tools"]) == (mode == "research")
+    assert capabilities["current_date"] in fixture.requests[0]["messages"][1]["content"]
 
 
 @pytest.mark.parametrize("native_status", ["failed", "completed"])

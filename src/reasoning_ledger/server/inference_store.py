@@ -422,12 +422,21 @@ class InferenceStore:
             "context_through_sequence",
         )
         from .inference_timing import run_timing
+        from .research_answers import answer_state
         from .usage_store import UsageStore, footprint
 
         activity = []
         cost_progress = None
         agent = None
+        capabilities = None
         if db is not None:
+            captured_capabilities = db.execute(
+                "SELECT event_json FROM llm_events WHERE organization_id=? AND run_id=? "
+                "AND json_extract(event_json,'$.phase')='capabilities' ORDER BY sequence DESC LIMIT 1",
+                (row["organization_id"], row["id"]),
+            ).fetchone()
+            if captured_capabilities:
+                capabilities = json.loads(captured_capabilities[0])
             snapshot = db.execute("SELECT snapshot_json FROM research_contexts WHERE request_id=?", (row["request_id"],)).fetchone()
             metadata = json.loads(snapshot[0]) if snapshot else {}
             thread = db.execute(
@@ -489,6 +498,8 @@ class InferenceStore:
             "activity": list(reversed(activity)),
             "cost_progress": cost_progress,
             "agent": agent,
+            "answer_state": answer_state(db, row) if db is not None else None,
+            "capabilities": capabilities,
             "timing": run_timing(db, row) if db is not None else None,
         }
 
@@ -722,11 +733,11 @@ class InferenceStore:
                 status = "cancelled"
             now, message_id = int(time.time()), None
             is_review = db.execute("SELECT 1 FROM mathematical_reviews WHERE reviewer_run_id=?", (row["id"],)).fetchone()
-            if current["output_text"].strip() and not is_review:
+            from .research_answers import retained_answer
+
+            content = retained_answer(db, current, status, error)
+            if content.strip() and not is_review:
                 message_id = _id()
-                content = current["output_text"]
-                if status != "succeeded":
-                    content += f"\n\n*Partial response: {status}. Not a completed answer.*"
                 db.execute(
                     "INSERT INTO messages(id,organization_id,topic_id,author_id,content,client_id,created_at,"
                     "author_kind,sender_kind,assistant_model,inference_run_id) "

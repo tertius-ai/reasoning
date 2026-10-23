@@ -37,6 +37,8 @@ test("progress follows its human message, retained failures stay inspectable, an
       else if (path.endsWith("/inference-configuration")) data = { allowed_models: [model.id], tools: [] };
       else if (path.endsWith("/model-prices")) data = { models: [model], allowed_models: [model.id] };
       else if (path.endsWith("/research-instructions")) data = { system_prompt: "Research safely.", prompt_version: "fixture" };
+      else if (path.endsWith("/research-settings")) data = { tools: ["history", "web", "arxiv"],
+        web_search_configured: false, current_date: "2026-10-23" };
       else if (path.endsWith("/compute-configuration")) data = { images: [], policy: { allowed_images: [] } };
       else if (path.endsWith("/navigation-usage")) data = { projects: {}, channels: {}, topics: {} };
       else if (path.endsWith("/messages")) data = [{ id: "human", sequence: 1, created_at: base.created_at,
@@ -47,6 +49,8 @@ test("progress follows its human message, retained failures stay inspectable, an
         { ...base, id: "working", status: "running", activity: [{ sequence: 1, phase: "round", round: 1 }] },
         { ...base, id: "failed", status: "failed", error_code: "provider_credit",
           diagnostics: { message: "Check provider credit.", action: "Inspect the provider account.", http_status: 402 } },
+        { ...base, id: "waiting-review", status: "succeeded", answer_state: { status: "waiting", reason: "independent review",
+          checkpoint: { summary: "The finite case is settled.", remaining: "Check the infinite case.", sources: ["Lemma 2"] } } },
       ];
       else if (path.endsWith("/bot-runs")) data = [{ id: "working", bot_id: bot, model: "default", status: "running", phase: "thinking",
         created_at: base.created_at, context_through_sequence: 1, requested_by: user, activity: [] }];
@@ -66,6 +70,13 @@ test("progress follows its human message, retained failures stay inspectable, an
     const failed = page.locator('[data-run-id="failed"]');
     await failed.locator("summary").click(); await failed.getByText("Check provider credit.", { exact: true }).waitFor();
     await failed.getByText("Inspect the provider account.", { exact: true }).waitFor();
+    await page.getByLabel("Effective model capabilities").filter({ hasText: "public source reader" }).waitFor();
+    assert.match(await page.getByLabel("Effective model capabilities").textContent(), /no general web search.*2026-10-23 UTC/);
+    const waiting = page.locator('[data-run-id="waiting-review"]');
+    await waiting.getByText("Waiting · answer incomplete", { exact: true }).waitFor();
+    await waiting.locator("summary").first().click();
+    await waiting.getByText("The finite case is settled.", { exact: true }).waitFor();
+    await waiting.getByText("Remaining: Check the infinite case.", { exact: true }).waitFor();
     const play = page.getByRole("button", { name: "Start or resume", exact: true });
     const stop = page.getByRole("button", { name: "Stop current work", exact: true });
     const upload = page.getByRole("button", { name: "Attach picture or PDF", exact: true });

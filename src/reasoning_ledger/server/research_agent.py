@@ -203,6 +203,10 @@ class ResearchAgent:
             available = self.tools.available() if self.quote.supports_tools and metadata is not None \
                 and not metadata.get("workflow_context_sha256") else []
             prepared_tools = self.tools.registry.prepared(available)
+            from .research_capabilities import runtime_capabilities, runtime_guidance
+
+            capabilities = runtime_capabilities(self.quote, metadata, self.tools)
+            self._event("capabilities", capabilities)
             spans.mark("tool_preparation")
             with self.store.transaction() as db:
                 goal = ResearchGoals.execution_goal(db, self.row["id"])
@@ -227,7 +231,7 @@ class ResearchAgent:
                 system_prompt,
                 user_prompt,
                 {"system": hashlib.sha256(system_prompt.encode()).hexdigest()},
-                context_messages=tuple(messages[1:-1]),
+                context_messages=({"role": "system", "content": runtime_guidance(capabilities)}, *messages[1:-1]),
                 tools=prepared_tools,
             )
             self.client.context_transform = self._transform

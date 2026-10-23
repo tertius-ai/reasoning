@@ -141,6 +141,8 @@ export type ModelRun = {
   cost_progress?: { confirmed_microusd: number; next_call_estimate_microusd: number; internal_hold_microusd: number } | null;
   created_at?: number; started_at?: number | null;
   activity?: { sequence: number; phase: string; tool?: string; round?: number; summary?: string }[];
+  answer_state?: { status: "working" | "waiting" | "partial" | "response_ready"; reason?: string | null;
+    checkpoint?: { summary: string; remaining?: string; sources?: string[] } | null } | null;
   diagnostics?: ProviderDiagnostics | null;
   usage?: MessageUsage;
   id: string; request_id: string; requested_by: string; model: string;

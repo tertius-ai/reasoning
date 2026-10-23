@@ -171,6 +171,7 @@ class ResearchTools:
             "agent_tasks",
             "agent_read",
             "review_submit",
+            "answer_checkpoint",
         }
         return [tool for tool in self.registry.list() if tool.name in core]
 
@@ -214,6 +215,20 @@ class ResearchTools:
     def _register(self):
         register = self.registry.tool
         from .research_media import register_media
+
+        if not self.enabled:
+            return
+
+        @register(name="answer_checkpoint", description="Retain a readable provisional answer, remaining gap and source locators. "
+                  "Use during substantial work and before a review handoff. This never marks a goal complete.", risk="write",
+                  input_schema=schema({"summary": string(8000), "remaining": {"type": "string", "maxLength": 4000},
+                                       "sources": {"type": "array", "maxItems": 30, "items": string(1000)}},
+                                      ["summary", "remaining", "sources"]))
+        def answer_checkpoint(summary, remaining, sources):
+            with self.store.transaction(write=True) as db:
+                self.inference._event(db, self.org, self.row["id"], {"type": "agent", "phase": "answer_checkpoint",
+                    "summary": summary, "remaining": remaining, "sources": sources})
+            return {"retained": True, "answer_complete": False}
 
         if "knowledge" in self.enabled:
             register_media(self)

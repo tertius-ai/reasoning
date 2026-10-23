@@ -111,6 +111,8 @@ export function ResearchControls({ organizationId, topicId, userId, selectedMode
   const [reviewer, setReviewer] = useState("");
   const [reviewEnabled, setReviewEnabled] = useState(true), [profile, setProfile] = useState("workbench");
   const [additionalInstructions, setAdditionalInstructions] = useState("");
+  const [ledgerLimit, setLedgerLimit] = useState(8);
+  const [sourceConfig, setSourceConfig] = useState<{ web_search_configured: boolean; current_date: string } | null>(null);
   const [profiles, setProfiles] = useState<{ id: string; name: string; description: string }[]>([]);
   const [computeAllowance, setComputeAllowance] = useState(0);
   const [reviews, setReviews] = useState<{ id: string; status: string; requested_by: string; reviewer_model: string;
@@ -186,10 +188,12 @@ export function ResearchControls({ organizationId, topicId, userId, selectedMode
     void poll();
     void request<{ tools: ResearchTool[]; reviewer_model?: string; compute_allowance_cpu_seconds?: number;
       review_enabled?: boolean; prompt_profile?: string; additional_instructions?: string;
+      ledger_context_limit?: number; web_search_configured: boolean; current_date: string;
       profiles?: { id: string; name: string; description: string }[] }>(root + "/research-settings", { signal: controller.signal }).then((value) => {
       if (!controller.signal.aborted) { setEnabled(value.tools); setReviewer(value.reviewer_model ?? ""); setComputeAllowance(value.compute_allowance_cpu_seconds ?? 0);
         setReviewEnabled(value.review_enabled ?? true); setProfile(value.prompt_profile ?? "workbench");
-        setAdditionalInstructions(value.additional_instructions ?? ""); setProfiles(value.profiles ?? []); }
+        setAdditionalInstructions(value.additional_instructions ?? ""); setProfiles(value.profiles ?? []);
+        setLedgerLimit(value.ledger_context_limit ?? 8); setSourceConfig(value); }
     }).catch((cause) => { if (!aborted(cause)) fail(cause); });
     return () => { controller.abort(); clearTimeout(timer); };
   }, [root, receiptKey, refresh, onAuthLost]);
@@ -215,6 +219,13 @@ export function ResearchControls({ organizationId, topicId, userId, selectedMode
   return <div className="org-research-controls">
     <button type="button" className="org-project-files" aria-pressed={pane === "files"}
       onClick={() => setPane(current => current === "files" ? null : "files")}>Project files</button>
+    <p className="org-help" aria-label="Effective model capabilities">{selectedModel.startsWith("bot/")
+      ? "CLI bot · tools depend on its live grants and runner"
+      : !catalogModel(catalog, selectedModel) ? "Checking selected model capabilities…"
+      : !catalogModel(catalog, selectedModel)?.supports_tools ? "Plain response · selected model has no research tools"
+        : !sourceConfig ? "Checking research capabilities…"
+          : `Research · ${enabled.includes("web") ? "public source reader" : "no web reader"} · ${enabled.includes("arxiv") ? "literature readers" : "no literature readers"} · ${enabled.includes("web") && sourceConfig.web_search_configured ? "web search" : "no general web search"}`}
+      {sourceConfig?.current_date && ` · ${sourceConfig.current_date} UTC`}</p>
     {toolbarTarget && createPortal(<div className="org-research-toolbar" aria-label="Research actions">
     {(goal?.status === "active" || activeTool) && <span role="status" className="org-goal-live"><i />{activeTool ? `Using ${activeTool.name.replaceAll("_", " ")}` : "Working toward your goal"}</span>}
   </div>, toolbarTarget)}
@@ -252,13 +263,17 @@ export function ResearchControls({ organizationId, topicId, userId, selectedMode
     </div>}
     {pane === "tools" && <div className="org-research-pane"><form onSubmit={(event) => {
       event.preventDefault(); setBusy(true); setError(""); void request(root + "/research-settings", { method: "PUT", body: { tools: enabled, reviewer_model: reviewer || null,
-        review_enabled: reviewEnabled, prompt_profile: profile, additional_instructions: additionalInstructions, compute_allowance_cpu_seconds: computeAllowance } })
+        review_enabled: reviewEnabled, prompt_profile: profile, additional_instructions: additionalInstructions,
+        ledger_context_limit: ledgerLimit, compute_allowance_cpu_seconds: computeAllowance } })
         .then(() => { setRefresh((value) => value + 1); onSettingsChanged?.(); }).catch(fail).finally(() => setBusy(false));
     }}><label>Research strategy<select aria-label="Research strategy" value={profile} disabled={!canWrite || busy} onChange={event => setProfile(event.target.value)}>
       {profiles.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>
       <p className="org-help">{profiles.find(item => item.id === profile)?.description} All strategies use the same granted tools and ledger.</p>
       <label>Additional research instructions<textarea value={additionalInstructions} maxLength={8000} rows={2} disabled={!canWrite || busy}
         onChange={event => setAdditionalInstructions(event.target.value)} /></label>
+      <label>Automatic relevant ledger records (0 disables)<input type="number" min={0} max={20} value={ledgerLimit}
+        disabled={!canWrite || busy} onChange={event => setLedgerLimit(Number(event.target.value))} /></label>
+      <p className="org-help">Only matching records within current topic/project access enter context. Wider knowledge is read on demand.</p>
       <div className="org-research-tool-grid">{RESEARCH_TOOLS.map((tool) => <label key={tool}><input type="checkbox" checked={enabled.includes(tool)} disabled={!canWrite || busy}
       onChange={(event) => setEnabled((current) => event.target.checked ? [...current, tool] : current.filter((item) => item !== tool))} />{TOOL_LABELS[tool]}</label>)}</div>
       <label><input type="checkbox" checked={reviewEnabled} disabled={!canWrite || busy} onChange={event => setReviewEnabled(event.target.checked)} />Fresh-context review</label>
@@ -268,7 +283,7 @@ export function ResearchControls({ organizationId, topicId, userId, selectedMode
       <p className="org-help">{reviewer ? "Explicit reviewer override." : "Automatic: prefer another allowed model family; otherwise use a fresh context."} LLM review is not formal certification.</p>
       <label>Monthly autonomous compute allowance (CPU seconds)<input type="number" min={0} max={1000000} value={computeAllowance} disabled={!canWrite || busy}
         onChange={(event) => setComputeAllowance(Number(event.target.value))} /></label>
-      <p className="org-help">Research records save automatically. The selected reviewer uses the organization’s inference budget. Compute beyond this allowance and workflow execution require approval. Alpha topics are excluded.</p>
+      <p className="org-help">The conversation carries the answer. Save reusable knowledge and request review when useful. The selected reviewer uses the organization’s inference budget. Compute beyond this allowance and workflow execution require approval. Alpha topics are excluded.</p>
       <button type="button" onClick={() => void loadContext()}>Inspect context</button>
       {canWrite && <button disabled={busy || !online}>Save tools</button>}</form>
       {recentTools.map((tool) => <button key={tool.id} onClick={() => void request(root + "/research-tools/" + tool.id).then(setReceipt).catch(fail)}>{tool.name.replaceAll("_", " ")} · {tool.status}</button>)}

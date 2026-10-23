@@ -101,6 +101,9 @@ function ComparisonSetup({ models, catalog, busy, onCancel, onSave }: {
     onSave(comparisonDefinition(question, selected, catalog, efforts)); setError("");
   } catch (cause) { setError(errorMessage(cause)); } }}>
     <header><div><h3>Compare models</h3><small>Every model receives the same question.</small></div><button type="button" onClick={onCancel}>Cancel</button></header>
+    <p className="org-help" aria-label="Comparison capabilities">Native comparisons have no research tools, browsing or source readers.
+      Referenced attachments supply extracted text and supported image previews. For source research, use a beta topic with a tool-capable model.
+      CLI bot models use their runner's current grants.</p>
     <label>Question<textarea autoFocus required rows={4} value={question} onChange={(event) => setQuestion(event.target.value)} /></label>
     <fieldset><legend>Models</legend>{selected.map((model, index) => <div className="org-workflow-model" key={index}>
       <ModelPicker label={`Model ${index + 1}`} models={models.filter(id => !selected.some((chosen, position) => position !== index && chosen === id))}

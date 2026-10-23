@@ -7,10 +7,10 @@ import hashlib
 import json
 from importlib import resources
 
-PROMPT_VERSION = "topic-agents-v7"
+PROMPT_VERSION = "topic-agents-v8"
 SYSTEM_PROMPT = (resources.files("reasoning_ledger") / "prompts" / "beta-research.md").read_text(encoding="utf8")
 PROFILES = {
-    "workbench": ("Research", "General work and research with shared evidence and scoped agents.", ""),
+    "workbench": ("Conversation and research", "Answer the question; use durable knowledge and review when useful.", ""),
     "blueprint": ("Proof blueprint", "One evolving argument with explicit gaps and review obligations.", """
 Maintain one evolving proof blueprint for the exact objective. Pin its target,
 definitions, and supporting claims in the canonical ledger; keep unresolved

@@ -1,6 +1,9 @@
 # Organization research workbench
 
-Beta topics are agentic research and work conversations. Humans, the selected model,
+Beta topics are research and work conversations. The default prompt answers the
+participant's question, uses sources and tools when useful, and records reusable
+knowledge when requested or helpful. Routine conversation does not require ledger
+writes or review. Humans, the selected model,
 the project's ledger, private blog, bibliography, and independently
 reviewed evidence share one organization server. No Codex installation or local
 filesystem is required. Gamma topics store reusable, versioned workflows; alpha
@@ -47,7 +50,7 @@ organization inference loop.
 
 ## Research strategies
 
-The selectable strategies are Research, Proof blueprint, Fact graph,
+The selectable strategies are Conversation and research, Proof blueprint, Fact graph,
 Author–critic, and Lean formalization. They supplement the common mathematical
 instructions with an evolving proof blueprint, dependency frontier, critique and
 repair loop, or faithful formal-statement and certificate obligations. Additional
@@ -56,6 +59,9 @@ tools, canonical ledger, execution approvals, and accounting. A strategy does no
 grant delegation or execution permission, install a prover, or enable a backend.
 The default [topic-agent runtime](topic-agents.md) supports scoped delegation and
 automatic result integration for ordinary messages; `/goal` adds persistence.
+The common beta instructions also accompany CLI bot requests; their actual tools
+come from live bot grants and the runner. Native `answer_checkpoint` is optional
+when absent from a bot's registry. Local-ledger MCP instructions are separate.
 
 The expandable System prompt shows the complete rendered instructions. Nondefault
 instructions carry a strategy version and content hash. Queued runs retain their
@@ -110,8 +116,8 @@ a tool-less paid progress call. Reviewers submit an explicit `review_submit`
 verdict; prose or multiline formatting does not substitute for structured
 evidence, and ambiguous verdicts are refused.
 
-For ledger deliverables the common prompt directs a finite search/read/write/
-review/repair cycle. Searches use short distinctive terms, because ledger search
+Proof blueprint, fact graph and author–critic strategies request structured,
+revision-pinned evidence and review for their deliverables. Searches use short distinctive terms, because ledger search
 matches substrings. Agent completion should cite exact promised records and their
 derived status, proof and independent review, not simply successful write receipts.
 Review objections and blockers guide specific repairs. Useful open-problem work
@@ -135,6 +141,30 @@ Context is layered, not a fixed last-N-message buffer:
   durable tasks, and a bounded project-file index.
 - A token-budgeted recent dialogue tail; original messages and receipts remain
   available through scoped recovery tools.
+
+Automatic ledger context contains only records matching terms in the latest
+participant question, within the current project/topic's access and collection
+grants. It includes up to eight records by default. **Automatic relevant ledger
+records** in research settings accepts 0–20; zero excludes automatic ledger
+records. This limit does not remove granted on-demand ledger readers or widen
+access. Nonmatching records do not fill the allowance.
+
+The composer reports selected-model tool support separately from enabled source
+readers and operator-configured web search. Native gamma comparisons remain
+tool-free and say so before submission; use a beta topic with a tool-capable
+model for external research. Each native invocation receives the current UTC
+date and its effective advertised and discoverable tool list; these facts are
+retained in a `capabilities` event and run detail. Source readers and general
+web search are distinct, and missing grants are not a source-reader failure.
+
+For substantial work, `answer_checkpoint` retains a readable provisional answer,
+remaining gap and source locators without completing a goal. Run detail exposes
+the latest checkpoint and an `answer_state` separate from execution/accounting:
+working, waiting, partial, or response_ready. A successful review/delegate
+handoff remains waiting and incomplete. Interruption, timeout and budget refusal
+retain useful output/checkpoints in the transcript with the stop reason; no
+automatic replay of uncertain paid calls is authorized. Execution success and a
+visible response do not certify the mathematics or satisfy a goal's criteria.
 
 The input target defaults to 60% of model capacity, adjustable from 40–80% through
 the research-settings API, with a conservative 128,000 UTF-8/framing upper-bound

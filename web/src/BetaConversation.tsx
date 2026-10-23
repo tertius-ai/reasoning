@@ -299,11 +299,16 @@ function BetaRunCard({ root, organizationId, topicId, run, canManage, canReact, 
   useEffect(() => { if (!expanded) setOpen(false); }, [expanded]);
   return <details data-run-id={run.id} data-status={run.status} className="org-model-run org-run-compact" open={open}
     onToggle={event => { if (event.target === event.currentTarget) setOpen(event.currentTarget.open); }}>
-    <summary><strong>{run.agent ? `${run.agent.role.replaceAll("_", " ")} · ` : ""}{run.model}</strong><span role="status">{run.cancel_requested && active ? "Cancelling…" : run.status}</span>
+    <summary><strong>{run.agent ? `${run.agent.role.replaceAll("_", " ")} · ` : ""}{run.model}</strong><span role="status">{run.cancel_requested && active ? "Cancelling…" : run.answer_state?.status === "waiting" ? "Waiting · answer incomplete" : run.status}</span>
       {!active && run.error_code && <span title={run.diagnostics?.message}>{run.diagnostics?.http_status ? `HTTP ${run.diagnostics.http_status}` : run.error_code.replaceAll("_", " ")}</span>}
       {run.actual_microusd != null && <small>{usd(run.actual_microusd)}</small>}
     </summary>
     <RunProgress run={run} />
+    {run.answer_state?.checkpoint && <details aria-label="Latest answer checkpoint" open={!run.output_text}>
+      <summary>Latest answer checkpoint</summary><p>{run.answer_state.checkpoint.summary}</p>
+      {run.answer_state.checkpoint.remaining && <p>Remaining: {run.answer_state.checkpoint.remaining}</p>}
+      {run.answer_state.checkpoint.sources?.map(source => <p key={source}>{source}</p>)}</details>}
+    {run.answer_state?.status === "waiting" && <p role="status">Waiting: {run.answer_state.reason}. Continue from the retained checkpoint when the result arrives.</p>}
     {run.output_text && <pre aria-label={"Streaming response from " + run.model}>{run.output_text}</pre>}
     {!active && run.output_text && <OutputActions {...{ organizationId, topicId, onAuthLost }} targetKind="run" targetId={run.id} canWrite={canReact} text={run.output_text} />}
     <MessageUsageDetails usage={run.usage} />

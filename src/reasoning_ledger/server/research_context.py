@@ -124,9 +124,11 @@ class ResearchContext:
             for identity, head in view.claim_heads.items():
                 revision = view.claim_revisions[head["current_revision_id"]]
                 score = len(terms & set(re.findall(r"[A-Za-z0-9_]{4,}", revision["statement_text"].lower())))
-                ranked.append((score, identity, revision))
+                if score:
+                    ranked.append((score, identity, revision))
             used = 0
-            for _, identity, revision in sorted(ranked, key=lambda item: (-item[0], item[1])):
+            limit = policy.get("ledger_context_limit", 8)
+            for _, identity, revision in sorted(ranked, key=lambda item: (-item[0], item[1]))[:limit]:
                 reference = {
                     "claim_id": identity,
                     "revision_id": revision["revision_id"],
@@ -294,6 +296,7 @@ class ResearchContext:
             "knowledge_collections": sorted(json.loads(topic_row["knowledge_policy_json"])),
             "tool_groups": sorted(json.loads(tool_settings[0])) if tool_settings else None,
             "context_strategy": "layered-retrieval-v2",
+            "ledger_context_limit": policy.get("ledger_context_limit", 8),
             "ledger_revisions": [
                 {key: value for key, value in record.items() if key in {"claim_id", "revision_id"}} for record in ledger_refs
             ],
