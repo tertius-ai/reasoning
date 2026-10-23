@@ -3,7 +3,7 @@
 import json
 
 
-def answer_state(db, row):
+def answer_state(db, row, *, status=None, error=None):
     latest = {}
     for phase in ("answer_checkpoint", "waiting"):
         event = db.execute(
@@ -13,15 +13,16 @@ def answer_state(db, row):
         ).fetchone()
         latest[phase] = json.loads(event[0]) if event else None
     waiting, checkpoint = latest["waiting"], latest["answer_checkpoint"]
-    state = "waiting" if waiting else "working" if row["status"] in {"queued", "running"} \
-        else "response_ready" if row["status"] == "succeeded" else "partial"
-    return {"status": state, "reason": waiting.get("reason") if waiting else row["error_code"],
+    status = status or row["status"]
+    state = "waiting" if waiting and status in {"running", "succeeded"} else "working" if status in {"queued", "running"} \
+        else "response_ready" if status == "succeeded" else "partial"
+    return {"status": state, "reason": waiting.get("reason") if state == "waiting" else error or row["error_code"],
             "checkpoint": {key: checkpoint[key] for key in ("summary", "remaining", "sources") if key in checkpoint}
             if checkpoint else None}
 
 
 def retained_answer(db, row, status, error):
-    state = answer_state(db, row)
+    state = answer_state(db, row, status=status, error=error)
     checkpoint = state["checkpoint"]
     text = row["output_text"]
     if not text.strip() and not checkpoint:
