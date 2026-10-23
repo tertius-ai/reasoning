@@ -255,6 +255,22 @@ def test_effective_invocation_tools_and_utc_date_match_the_provider_request(inst
     assert capabilities["current_date"] in fixture.requests[0]["messages"][1]["content"]
 
 
+def test_cancelling_during_a_handoff_keeps_the_checkpoint_partial(installation):
+    from test_organization_research_workbench import source_run
+
+    state, owner, _, row, tools = source_run(installation)
+    tools.invoke("answer_checkpoint", {"summary": "Retained useful progress.", "remaining": "An open gap.", "sources": []})
+    with state.store.transaction(write=True) as db:
+        state._event(db, owner["organization_id"], row["id"], {"type": "agent", "phase": "waiting", "reason": "independent review"})
+    state.cancel(owner["user_id"], owner["organization_id"], row["id"])
+    state.finish(row, "succeeded", no_charge=True)
+    result = state.run(owner["user_id"], owner["organization_id"], row["id"])
+    assert result["status"] == "cancelled" and result["answer_state"]["status"] == "partial"
+    with state.store.transaction() as db:
+        message = db.execute("SELECT content FROM messages WHERE id=?", (result["message_id"],)).fetchone()[0]
+    assert "Retained useful progress" in message and "Partial response: cancelled" in message and "*Waiting:" not in message
+
+
 @pytest.mark.parametrize("native_status", ["failed", "completed"])
 def test_final_admission_revocation_is_cancelled_even_without_another_native_callback(installation, monkeypatch, native_status):
     from reasoning_ledger.agents.contracts import AgentRunResult
