@@ -36,6 +36,7 @@ export function MathematicsBrowser({ organizationId, topicId, projectId, canWrit
   const [claims, setClaims] = useState<Claim[]>([]), [selected, setSelected] = useState<Detail | null>(null);
   const [reference, setReference] = useState<ReferenceSummary | null>(null);
   const [query, setQuery] = useState(""), [error, setError] = useState(""), [loading, setLoading] = useState(true);
+  const [scopeInfo, setScopeInfo] = useState<{ effective?: string; dependency_count?: number; truncated_lists?: Record<string, number> } | null>(null);
   const [counts, setCounts] = useState<Record<string, number>>({});
   const [editing, setEditing] = useState(false), [statement, setStatement] = useState(""), [kind, setKind] = useState("claim");
   const [clientId, setClientId] = useState(() => crypto.randomUUID()), [busy, setBusy] = useState(false), [refresh, setRefresh] = useState(0);
@@ -64,10 +65,10 @@ export function MathematicsBrowser({ organizationId, topicId, projectId, canWrit
     const controller = new AbortController(); let timer: ReturnType<typeof setTimeout>;
     const load = async () => {
       try {
-        const value = await request<{ claims?: Record<string, Claim>; matches?: Claim[]; counts?: Record<string, number> }>(
+        const value = await request<{ claims?: Record<string, Claim>; matches?: Claim[]; counts?: Record<string, number>; knowledge_scope?: typeof scopeInfo }>(
           root + `?q=${encodeURIComponent(query)}&${scopeQuery}`, { signal: controller.signal });
         if (controller.signal.aborted) return;
-        setClaims(value.matches ?? Object.values(value.claims ?? {})); setCounts(value.counts ?? {}); setLoading(false); setError("");
+        setClaims(value.matches ?? Object.values(value.claims ?? {})); setCounts(value.counts ?? {}); setScopeInfo(value.knowledge_scope ?? null); setLoading(false); setError("");
       } catch (cause) { if (!aborted(cause)) { fail(cause); setLoading(false); } }
       if (!controller.signal.aborted) timer = setTimeout(load, 5000);
     };
@@ -110,6 +111,10 @@ export function MathematicsBrowser({ organizationId, topicId, projectId, canWrit
       <button disabled={busy}>{busy ? "Saving…" : "Save statement"}</button><button type="button" disabled={busy} onClick={() => setEditing(false)}>Cancel</button>
     </form>}
     {topicId && <label>Knowledge scope<select value={scope} onChange={event => setScope(event.target.value)}><option value="working_set">Account working set (topic if none)</option><option value="topic">This topic</option><option value="project">Authorized project</option></select></label>}
+    {scopeInfo && <p className="org-help">{scopeInfo.effective === "working_set" ? "Linked working knowledge" : scopeInfo.effective === "topic" ? "Topic knowledge" : "Authorized project knowledge"}
+      {typeof scopeInfo.dependency_count === "number" && ` · ${scopeInfo.dependency_count} supporting premises included`}. This view is not an assignment.</p>}
+    {(Object.keys(scopeInfo?.truncated_lists ?? {}).length > 0 || claims.length < Object.values(counts).reduce((sum, value) => sum + value, 0)) &&
+      <p role="status">Some statements are outside this preview. Narrow the search, open an exact record, or change scope to inspect the supporting argument.</p>}
     <input aria-label="Search mathematical claims" type="search" placeholder="Find a definition, conjecture, or proof…" value={query} onChange={(event) => setQuery(event.target.value)} />
     {error && <p role="alert" className="org-error">{error}</p>}
     <nav className="org-ledger-tabs" aria-label="Ledger views"><button aria-pressed={view === "graph"} onClick={() => setView("graph")}>Dependency graph</button>

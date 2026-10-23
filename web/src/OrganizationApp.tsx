@@ -1178,8 +1178,8 @@ function Conversation({ organizationId, topic, members, user, canWrite, canManag
       selectedModel={selectedModel} canWrite={canWrite} canManage={canManage} online={online} goalDraft={goalDraft}
       onGoalDraftDone={() => setGoalDraft(null)} onGoalStarted={(objective) => {
         if (goalCommand(currentDraft.current.text) === objective) updateDraft(newDraft()); onPreference();
-      }} onPrepareReview={text => {
-        if (!canWrite || modelAttempt || currentDraft.current.attempted) return;
+      }} onPrepareReview={modelAttempt || draft.attempted ? undefined : text => {
+        if (!canWrite) return;
         updateDraft({ ...currentDraft.current, text: [currentDraft.current.text.trim(), text].filter(Boolean).join("\n\n"), clientId: crypto.randomUUID(), attempted: false });
         requestAnimationFrame(() => textarea.current?.focus());
       }} onSettingsChanged={() => setPromptRevision(value => value + 1)} onAuthLost={onAuthLost} />}
