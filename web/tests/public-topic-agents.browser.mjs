@@ -100,7 +100,7 @@ test("ordinary beta conversation delegates, streams roles and integrates without
     await page.getByRole("button", { name: /^beta topic -Native agents/ }).click();
     assert.equal(await page.getByRole("link", { name: /^Work in/ }).count(), 0);
     await page.getByText("System prompt", { exact: true }).click();
-    await page.getByText(/Agentic work is the default for ordinary messages/).waitFor();
+    await page.getByText(/Ordinary questions and discussion need a useful reply/).waitFor();
     await page.getByLabel("Message", { exact: true }).fill("Please compare two approaches and consult a librarian and critic.");
     await page.getByRole("button", { name: /^(Send|Send message)$/, exact: true }).click();
     await page.locator("article.org-message").getByText("Integrated comparison: the evidence is provisional.", { exact: true }).waitFor();

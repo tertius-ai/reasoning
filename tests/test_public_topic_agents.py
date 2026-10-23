@@ -47,7 +47,7 @@ class DelegatingProvider(ResearchFixture):
         body = json.loads(request.content)
         self.requests.append(body)
         if len(self.requests) == 1:
-            assert "Agentic work is the default" in body["messages"][0]["content"]
+            assert "Ordinary questions and discussion" in body["messages"][0]["content"]
             delta = {
                 "content": "I'll compare the two approaches.",
                 "tool_calls": [

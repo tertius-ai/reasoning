@@ -331,7 +331,8 @@ def test_real_executor_fails_bad_provider_data_without_losing_valid_progress_or_
     balance = ledger.balance(owner["user_id"], owner["organization_id"])
     assert balance["spent_microusd"] == (8 if known_usage else 0)
     assert balance["reserved_microusd"] == 0
-    assert balance["uncertain_microusd"] == (0 if known_usage else run["reserved_microusd"])
+    assert balance["uncertain_microusd"] == (0 if known_usage else result["reserved_microusd"])
+    assert result["reserved_microusd"] >= run["reserved_microusd"]
     assert len(requests) == 1 and responses[0].closed
     assert ledger.claim() is None
 

@@ -153,7 +153,7 @@ for (const loss of ["network", "gateway-timeout"]) test(`shared beta responses s
     }
     const [owner, member, reviewer] = pages;
     await member.getByText("System prompt", { exact: true }).click();
-    await visible(member.getByText(/Agentic work is the default for ordinary messages/));
+    await visible(member.getByText(/Ordinary questions and discussion need a useful reply/));
     await member.getByText("System prompt", { exact: true }).click();
     let pollingOffline = true;
     const pollRoutes = ["**/topics/*/inference-runs", "**/topics/*/goal"];
