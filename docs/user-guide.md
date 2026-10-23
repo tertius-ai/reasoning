@@ -77,11 +77,28 @@ messages.
 ## Agents and bots
 
 A beta coordinator works through the same conversation tools as its delegates.
+Ordinary questions receive a conversational answer; reusable ledger records and
+independent review are optional. `/tools` selects **Conversation and research**
+or a focused proof strategy. Fresh-context review enables requests for review;
+automatic reviewer selection happens when a review is requested.
 Workers investigate subproblems, critics review arguments, librarians retrieve
 sources, formalizers prepare formal statements/code, and verifiers check evidence.
 Model agreement is not formal certification. The system prompt is expandable at
 the top of a beta topic. `/goal` specifies an objective and acceptance criteria;
 ordinary beta messages do not require a goal to use the agent harness.
+
+Above the message box, the capability summary distinguishes source readers from
+general web search. Native gamma comparisons have no research tools; use a beta
+topic with a tool-capable model for source research. Connected bots use their
+runner's actual grants.
+
+In `/tools`, **Automatic relevant ledger records (0 disables)** accepts 0–20,
+with eight matching records by default. It limits automatic prompt context,
+without changing access or removing on-demand knowledge readers. Model activity
+details can show **Latest answer checkpoint**, its remaining gap and sources.
+Retained checkpoints for interrupted work or review handoffs also appear in the
+conversation. A waiting review/delegate handoff remains an incomplete answer;
+partial replies retain their stopping reason.
 
 From a source checkout, run `make bot-connect` to pair and start a local Codex or
 Claude Code runner. Run `make bot-doctor` for read-only setup diagnostics, and
@@ -116,6 +133,22 @@ evidence remain distinct. See [Organization ledger](organization-ledger.md).
 
 The published blog links to its editor. Agent edits become drafts and do not
 silently replace the current publication. Inspect a draft before publishing.
+
+**Project files** or `/files` opens saved project text and the current topic's
+attachments. TeX displays as source. **Open source**, **Copy complete source**,
+and **Download complete file** retrieve the complete saved revision rather than
+only its preview. Bot workspace files must be published before their links are
+shared. `/attach` uploads pictures and PDFs. PDF text extraction reports coverage
+and failures; topic writers can **Retry text extraction**, including for existing
+uploads. Scans need OCR or a TeX/text source, and extracted text can omit diagrams.
+See [Pictures, PDFs and TeX](media.md).
+
+In gamma topics, **Workflow capacity** shows admission usage and
+accessible unfinished work. An administrator can inspect stopped uncertain work
+and **Release workflow slot**; its unknown outcome and held charges are retained.
+This does not retry or settle the operation. For a bot with an unknown retained
+outcome, stop its runner and follow the printed inspection/recovery commands;
+see [Bots](bots.md). Inspection does not change the paired state.
 
 ## Small acceptance tests
 

@@ -74,23 +74,25 @@ approved tool and knowledge grants; a changed grant stops the turn for review.
 Source material and summaries are reference data, not additional system instructions.
 Queued turns execute their captured instructions and report the matching prompt
 version; upgrades do not silently replace that input.
-Research settings also select Research, Proof blueprint, Fact graph,
+Research settings also select Conversation and research, Proof blueprint, Fact graph,
 Author–critic, or Lean formalization instructions and up to 8,000 characters of
 additional topic instructions. Strategies use the same authorized tool registry;
 they do not enable execution backends, parallel workers, or advisory councils.
 The expandable System prompt and topic JSON expose the exact rendered instructions.
-Instructions require checking the requested statement and correcting prior model
-mistakes, not assuming a requested proof or disproof exists. These instructions
-do not certify mathematical correctness; evidence and independent review remain
-necessary.
+The default instructions answer the participant's exact question, preserve its
+hypotheses, and correct prior model mistakes without assuming a requested proof
+or disproof exists. Ledger curation and review are optional; focused proof
+strategies request structured evidence and review for their deliverables.
+Instructions and favorable model reviews do not certify mathematical correctness.
 
 The standard tools search/read original messages and immutable knowledge
 revisions; retrieve arXiv/Crossref sources; fetch bounded public HTTPS text;
 inspect gamma workflows, approved computation images, jobs and verified artifacts;
-and automatically record typed mathematical claims, proofs, references, private
-files and blog drafts. Authors cannot self-certify positive mathematical verdicts.
-Fresh-context review is enabled by default, without reviewer setup. The server
-selects an available model, prioritizing a distinct model from the mathematics
+and write typed mathematical claims, proofs, references, private files and blog
+drafts when authorized and useful. Ordinary replies do not require those writes.
+Authors cannot self-certify positive mathematical verdicts.
+Fresh-context review is available by default, without reviewer setup. When a
+review is requested, the server selects an available model, prioritizing a distinct model from the mathematics
 shortlist and then another family. Research settings can override the selection
 or disable review. If no other model is suggested, review uses the author's model
 in a separate fresh context and records that it is not a distinct-model review.

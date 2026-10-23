@@ -34,8 +34,8 @@ to the newest loaded message after scrolling away.
 2. Create a beta topic with its model and knowledge/tool grants. Ask a question
    in the composer; switch models beside Send.
 3. Use `/tools` to select a research strategy or add topic
-   instructions. Fresh-context review is automatic by default; optionally
-   override its model or disable it.
+   instructions. Fresh-context review is available by default, with automatic
+   reviewer selection when requested; optionally override its model or disable it.
 4. `/ledger` opens the scoped mathematical browser; **Project files** or `/files`
    opens shared project text artifacts with source, copy, and complete-revision
    download actions. Saved-file tool results include clickable revision links.
@@ -75,8 +75,8 @@ and verification evidence. Status is derived from the mathematical dependency
 graph, not assigned by a chat summary or majority model vote. Revising a premise
 can make dependent arguments stale; unread or concurrent claim/proof updates are
 refused. Records retain authorship and history. Normal beta writes require no
-approval; the prompt asks agents to record reusable mathematics as they work,
-not every utterance. The UI also supports recording and editing statements.
+approval; agents record reusable mathematics when requested or useful to the work.
+The UI also supports recording and editing statements.
 Proof creation rechecks the target claim revision against the writer's observed
 revision; a concurrent refinement returns the exact current statement before
 any proof is written. The agent must reconcile the argument, not silently prove

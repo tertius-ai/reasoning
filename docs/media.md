@@ -66,9 +66,9 @@ original captured attachment context.
 
 ## Project text files
 
-**Project files** in the research toolbar opens saved project text and the current
-topic's attachments. TeX and code display as source. Previews contain up to 16,000
-characters; **Open source**, **Copy complete source**, and **Download complete file**
+**Project files** above the beta message box, or `/files` in beta/gamma topics,
+opens saved project text and the current topic's attachments. TeX and code display
+as source. Previews contain up to 16,000 characters; **Open source**, **Copy complete source**, and **Download complete file**
 retrieve the full SHA-256-verified revision, including chunked files. The content
 URL names both the path and revision and rechecks current topic/project access;
 editing the file does not change an earlier link. Downloads preserve UTF-8 bytes
