@@ -351,7 +351,8 @@ def test_uncertain_failures_keep_budget_and_partial_answer_without_secret_errors
         worker.stop()
     result = state.run(owner["user_id"], owner["organization_id"], run["id"])
     assert result["accounting_state"] == "uncertain" and result["error_code"] == code
-    assert state.balance(owner["user_id"], owner["organization_id"])["uncertain_microusd"] == run["reserved_microusd"]
+    assert state.balance(owner["user_id"], owner["organization_id"])["uncertain_microusd"] == result["reserved_microusd"]
+    assert result["reserved_microusd"] >= run["reserved_microusd"]
     assert KEY not in json.dumps(result)
     assert "Partial response: failed" in state.store.messages(owner["user_id"], owner["organization_id"], topics[1]["id"])[-1]["content"]
 

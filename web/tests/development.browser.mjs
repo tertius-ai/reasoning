@@ -109,7 +109,7 @@ test('local hot-reload workflow signs in, streams a simulated beta answer, and c
     await page.keyboard.press('Enter');
     await page.locator('.org-message').filter({ hasText: 'Simulated development response.' }).waitFor({ timeout: 20000 });
     await page.getByText('System prompt', { exact: true }).click();
-    await page.getByText(/Agentic work is the default for ordinary messages/).waitFor();
+    await page.getByText(/Ordinary questions and discussion need a useful reply/).waitFor();
     await page.waitForTimeout(2200); // Polling must not pull an expanded prompt out of view.
     assert.ok(await page.getByText('System prompt', { exact: true }).isVisible());
     const history = page.getByLabel('Message history', { exact: true });
