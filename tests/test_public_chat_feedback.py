@@ -398,6 +398,7 @@ def test_more_reactions_are_accepted_and_older_installations_widen_the_check(ins
     feedback.set(user, org, topic, "message", message["id"], "upside_down", True)
     with store.transaction(write=True) as db:
         _reaction_check(db, " CHECK(emoji IN ('up','down','upside_down'))")
+        db.execute("ALTER TABLE workflow_runs DROP COLUMN capacity_released")
         with pytest.raises(sqlite3.IntegrityError):
             db.execute("UPDATE chat_reactions SET emoji='heart'")
         db.execute(f"PRAGMA user_version={store_module.MIGRATIONS.index(REACTION_EMOJI_SCHEMA)}")
