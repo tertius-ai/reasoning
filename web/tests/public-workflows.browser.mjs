@@ -324,6 +324,86 @@ test("rendered gamma runs share progress, approvals, attempts/results, immutable
     assert.ok(await owner.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 2), "approval controls overflow narrow viewport");
     await viewer.setViewportSize({ width: 390, height: 844 });
     assert.ok(await viewer.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 2), "workflow controls overflow narrow viewport");
+    // Retained records in deleted topics remain inspectable by administrators.
+    // Seed an interrupted fake child while the real server is stopped; no provider call is replayed.
+    await stop();
+    const seed = spawn(path.join(repository, ".venv/bin/python"), ["-c", String.raw`
+import json, os
+from pathlib import Path
+from reasoning_ledger.server.store import Store
+from reasoning_ledger.server.workflow_store import WorkflowStore
+from reasoning_ledger.server.workflow_runs import WorkflowRuns
+from reasoning_ledger.server.compute_store import ComputeStore
+from reasoning_ledger.server.inference_store import InferenceStore
+from reasoning_ledger.server.openrouter import Quote
+store = Store(Path(os.environ["CAPACITY_FIXTURE_STATE"]))
+user, org, channel = (os.environ[key] for key in ("CAPACITY_FIXTURE_USER", "CAPACITY_FIXTURE_ORG", "CAPACITY_FIXTURE_CHANNEL"))
+topic = store.create_entity(user, org, "topics", "Deleted uncertain topic", channel, "gamma")["id"]
+definitions, inference = WorkflowStore(store), InferenceStore(store)
+runs = WorkflowRuns(definitions, ComputeStore(store, {}), inference)
+version = definitions.create(user, org, topic, "retained-capacity-definition", {"format": 1, "name": "Retained uncertain workflow", "nodes": [
+    {"id": "check", "kind": "llm", "depends_on": [], "inputs": {}, "parameters": {"model": "fixture/model", "prompt": "Synthetic question", "max_completion_tokens": 128}}
+]})
+run = runs.start(user, org, version["workflow_id"], version["version"], "retained-capacity-start")
+action = runs.advance(run["id"])
+runs.advance(run["id"], quote_action=action, quotes=[Quote("fixture/model", "0.000001", "0.000002", "0", 200000, 8192)])
+child = inference.claim()
+inference.finish(child, "interrupted", error="worker_interrupted", accounting_unknown=True)
+runs.advance(run["id"])
+plan = store.deletion_plan(user, org, "topics", topic)
+store.delete_entity(user, org, "topics", topic, plan["name"], plan["plan_token"], stop_active=True)
+print(json.dumps({"id": run["id"]}))
+`], { cwd: repository, env: { ...process.env, CAPACITY_FIXTURE_STATE: state, CAPACITY_FIXTURE_USER: ownerSession.user_id,
+      CAPACITY_FIXTURE_ORG: org, CAPACITY_FIXTURE_CHANNEL: channel.id } });
+    let seedOutput = "", seedError = ""; seed.stdout.on("data", data => { seedOutput += data; }); seed.stderr.on("data", data => { seedError += data; });
+    const [seedCode] = await once(seed, "exit"); assert.equal(seedCode, 0, seedError); const retained = JSON.parse(seedOutput);
+    await start(); await owner.reload();
+    await owner.getByRole("button", { name: "Workflow activity", exact: true }).click();
+    const capacity = owner.getByRole("dialog", { name: "Organization workflows", exact: true });
+    await capacity.getByRole("button", { name: /^Inspect Retained uncertain workflow/ }).waitFor();
+    await capacity.getByText(/of 64/).waitFor();
+    assert.equal(await capacity.evaluate(element => element.scrollWidth <= element.clientWidth + 2), true, "workflow activity fits a phone");
+    await capacity.getByRole("button", { name: /^Inspect Permission probe/ }).click();
+    const completedInspection = owner.getByRole("dialog", { name: "Inspect workflow place", exact: true });
+    await completedInspection.getByText(/Place occupied/).waitFor();
+    await call(root + "/workflow-runs/" + narrowRun.id + "/cancel", { client_id: "capacity-completion-cancel" });
+    await completedInspection.getByText("Finished; this run no longer uses a place.", { exact: true }).waitFor();
+    await completedInspection.getByRole("button", { name: "Close inspect workflow place", exact: true }).click();
+    const beforeCapacity = await call(root + "/workflow-capacity", undefined, "GET");
+    assert.ok(beforeCapacity.runs.some(run => run.id === retained.id && run.topic_deleted));
+    const forbiddenRetained = await viewer.evaluate(async path => (await fetch("/api" + path)).status,
+      root + "/workflow-runs/" + retained.id + "/capacity-inspection");
+    assert.equal(forbiddenRetained, 404);
+    await capacity.getByRole("button", { name: /^Inspect Retained uncertain workflow/ }).click();
+    const inspection = owner.getByRole("dialog", { name: "Inspect workflow place", exact: true });
+    await inspection.getByText("Charge awaiting confirmation", { exact: false }).waitFor();
+    await inspection.getByText(/This topic was deleted/).waitFor();
+    assert.equal(await inspection.getByRole("link", { name: "Open workflow topic", exact: true }).count(), 0);
+    const releases = [];
+    await owner.route(`**/api${root}/workflow-runs/${retained.id}/release-capacity`, async route => {
+      if (route.request().method() === "POST") {
+        releases.push(route.request().postDataJSON());
+        if (releases.length === 1) { await route.fetch(); await route.abort("failed"); return; }
+      }
+      await route.continue();
+    });
+    await inspection.getByRole("button", { name: "Release workflow slot", exact: true }).click();
+    await inspection.getByRole("button", { name: "Confirm slot release", exact: true }).click();
+    await inspection.getByRole("button", { name: "Retry same slot release", exact: true }).waitFor();
+    await until(() => inspection.getByRole("button", { name: "Retry same slot release", exact: true }).isEnabled(), "lost release reply");
+    await inspection.getByRole("button", { name: "Retry same slot release", exact: true }).click();
+    await inspection.getByText("Place released; this run does not count toward the allowance.", { exact: true }).waitFor();
+    assert.deepEqual(releases[0], releases[1]);
+    const afterCapacity = await call(root + "/workflow-capacity", undefined, "GET");
+    assert.equal(afterCapacity.in_use, beforeCapacity.in_use - 1);
+    const retainedInspection = await call(root + "/workflow-runs/" + retained.id + "/capacity-inspection", undefined, "GET");
+    assert.equal(retainedInspection.nodes[0].children[0].accounting_state, "uncertain");
+    assert.equal(retainedInspection.run.status, "outcome_unknown");
+    await inspection.getByRole("button", { name: "Close inspect workflow place", exact: true }).click();
+    await capacity.locator("summary").filter({ hasText: "Released places" }).click();
+    await capacity.getByRole("button", { name: /^Inspect Retained uncertain workflow/ }).waitFor();
+    await capacity.getByRole("button", { name: "Close organization workflows", exact: true }).click();
+    assert.equal(calls.length, 1, "inspection and release must not replay the uncertain provider call");
     for (const page of pages) assert.equal(await page.evaluate((secret) => JSON.stringify({ ...localStorage, ...sessionStorage }).includes(secret), key), false);
     assert.deepEqual(errors, []);
     context.diagnostic("Real shared workflow HTTP/UI with synthetic provider/worker outputs. No Docker, live model requests, TLS, cloud scaling, or source-built native client is established.");

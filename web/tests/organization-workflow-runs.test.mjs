@@ -5,13 +5,14 @@ import { createServer } from "vite";
 import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 
-let server, api, definitions, components;
+let server, api, definitions, components, capacity;
 const org = "a".repeat(32), topic = "b".repeat(32), user = "c".repeat(32), workflow = "d".repeat(32), runId = "e".repeat(32);
 before(async () => {
   server = await createServer({ appType: "custom", logLevel: "silent", server: { middlewareMode: true } });
   api = await server.ssrLoadModule("/src/workflow-run-api.ts");
   definitions = await server.ssrLoadModule("/src/workflow-api.ts");
   components = await server.ssrLoadModule("/src/WorkflowRuns.tsx");
+  capacity = await server.ssrLoadModule("/src/WorkflowCapacity.tsx");
 });
 after(async () => { await server?.close(); });
 const version = () => {
@@ -166,4 +167,31 @@ test("retained execution requests disclose their original identity and do not la
   assert.doesNotMatch(markup, /localStorage|sessionStorage/);
   const readonly = renderToStaticMarkup(React.createElement(components.WorkflowRuns, { ...props, version: version(), canWrite: false }));
   assert.doesNotMatch(readonly, /Run workflow/);
+});
+
+
+test("workflow allowance explains hidden occupied places and collapses released history", () => {
+  const retained = { id: runId, topic_id: topic, created_at: 1700000000, status: "outcome_unknown", revision: 4,
+    capacity_released: 1, workflow_name: "Tensor comparison <script>", topic_name: "Motives", project_name: "Research",
+    channel_name: "Mathematics", requested_by_name: "Owner", topic_deleted: 1 };
+  const html = renderToStaticMarkup(React.createElement(capacity.WorkflowCapacitySummary, {
+    value: { limit: 64, in_use: 4, available: 60, hidden_in_use: 4, released_count: 1, runs: [retained], truncated: false }, onInspect: () => {},
+  }));
+  assert.match(html, /4 of 64/); assert.match(html, /60 available/); assert.match(html, /4 occupied runs are/);
+  assert.match(html, /<meter[^>]+max="64"[^>]+value="4"/);
+  assert.ok(html.indexOf("Released places") < html.indexOf("Tensor comparison &lt;script&gt;"));
+  assert.doesNotMatch(html, /<details open|<script>|outcome_unknown|Release workflow slot/);
+  assert.match(html, /do not occupy places/); assert.match(html, /Deleted topic/);
+});
+
+test("workflow allowance identifies occupied work separately from retained records", () => {
+  const html = renderToStaticMarkup(React.createElement(capacity.WorkflowCapacitySummary, {
+    value: { limit: 64, in_use: 1, available: 63, hidden_in_use: 0, released_count: 0, truncated: false, runs: [{
+      id: runId, topic_id: topic, created_at: 1700000000, status: "awaiting_approval", revision: 1, capacity_released: 0,
+      workflow_name: "Check the argument", project_name: "Research", channel_name: "Mathematics", topic_name: "Motives", requested_by_name: "Ben", topic_deleted: 0,
+    }] }, onInspect: () => {},
+  }));
+  assert.match(html, /Check the argument/); assert.match(html, /Research \/ Mathematics \/ Motives/); assert.match(html, /Waiting for approval/);
+  assert.ok(html.indexOf("Check the argument") < html.indexOf("Released places"));
+  assert.doesNotMatch(html, /cannot access|Deleted topic/);
 });

@@ -113,6 +113,8 @@ def collect(db, org, topic):
 
 def details(db, org, topic, *, run_id=None, request_id=None):
     """Bounded metadata only; caller authorizes the target topic and both humans."""
+    from .workflow_runs import ORGANIZATION_WORKFLOW_LIMIT
+
     result = {}
     for kind, table in (("inference", "llm_runs"), ("bots", "bot_runs"), ("compute", "compute_jobs"), ("workflows", "workflow_runs")):
         created = "q.created_at" if kind == "inference" else "r.created_at"
@@ -149,6 +151,6 @@ def details(db, org, topic, *, run_id=None, request_id=None):
         result[kind] = rows
     used = db.execute("SELECT COUNT(*) FROM workflow_runs WHERE organization_id=? AND finished_at IS NULL "
                       "AND capacity_released=0", (org,)).fetchone()[0]
-    return {"records": result, "workflow_capacity": {"limit": 8, "in_use": used}, "record_limit_per_kind": 25,
-            "next_action": "Inspect the matching run; use Workflow capacity for admission blockers. "
+    return {"records": result, "workflow_capacity": {"limit": ORGANIZATION_WORKFLOW_LIMIT, "in_use": used}, "record_limit_per_kind": 25,
+            "next_action": "Inspect the matching run; use Workflow activity to inspect occupied places. "
                            "Unknown outcomes require owner/administrator review; diagnostics do not retry or reconcile work."}

@@ -20,6 +20,10 @@ TERMINAL = {"succeeded", "failed", "cancelled"}
 NODE_TERMINAL = TERMINAL | {"blocked"}
 
 
+ORGANIZATION_WORKFLOW_LIMIT = 64
+INSTALLATION_WORKFLOW_LIMIT = 256
+
+
 class WorkflowRuns:
     def __init__(self, definitions: WorkflowStore, compute: ComputeStore, inference: InferenceStore, *, inference_enabled=True):
         self.definitions, self.store = definitions, definitions.store
@@ -117,40 +121,43 @@ class WorkflowRuns:
 
     @staticmethod
     def _capacity(db, org):
-        if db.execute("SELECT COUNT(*) FROM workflow_runs WHERE organization_id=? AND finished_at IS NULL "
-                      "AND capacity_released=0", (org,)).fetchone()[0] >= 8:
-            raise StoreError(429, "organization already has eight active or uncertain workflow runs; "
-                             "open Workflow capacity to inspect blockers and administrator recovery")
-        if db.execute("SELECT COUNT(*) FROM workflow_runs WHERE finished_at IS NULL AND capacity_released=0").fetchone()[0] >= 64:
-            raise StoreError(429, "installation already has 64 active or uncertain workflow runs")
+        if (
+            db.execute(
+                "SELECT COUNT(*) FROM workflow_runs WHERE organization_id=? AND finished_at IS NULL AND capacity_released=0", (org,)
+            ).fetchone()[0]
+            >= ORGANIZATION_WORKFLOW_LIMIT
+        ):
+            raise StoreError(
+                429,
+                f"organization has reached its allowance of {ORGANIZATION_WORKFLOW_LIMIT} unfinished workflow runs; "
+                "open Workflow activity to inspect occupied places and administrator recovery",
+            )
+        if (
+            db.execute("SELECT COUNT(*) FROM workflow_runs WHERE finished_at IS NULL AND capacity_released=0").fetchone()[0]
+            >= INSTALLATION_WORKFLOW_LIMIT
+        ):
+            raise StoreError(429, f"installation has reached its allowance of {INSTALLATION_WORKFLOW_LIMIT} unfinished workflow runs")
 
     def capacity(self, user, org):
-        with self.store.transaction() as db:
-            self.store._require(db, user, org)
-            rows = db.execute("SELECT id,topic_id,requested_by,created_at,status,revision,capacity_released "
-                              "FROM workflow_runs WHERE organization_id=? AND finished_at IS NULL "
-                              "ORDER BY capacity_released,created_at,id LIMIT 200", (org,)).fetchall()
-            visible = []
-            for row in rows:
-                try:
-                    self.store._topic_access(db, user, org, row["topic_id"])
-                except StoreError as error:
-                    if error.status not in {403, 404}:
-                        raise
-                    continue
-                visible.append(dict(row))
-            used = db.execute("SELECT COUNT(*) FROM workflow_runs WHERE organization_id=? AND finished_at IS NULL "
-                              "AND capacity_released=0", (org,)).fetchone()[0]
-            return {"limit": 8, "in_use": used, "runs": visible, "truncated": len(rows) == 200}
+        from .workflow_capacity import WorkflowCapacity
+
+        return WorkflowCapacity(self, ORGANIZATION_WORKFLOW_LIMIT).summary(user, org)
+
+    def inspect_capacity(self, user, org, identity):
+        from .workflow_capacity import WorkflowCapacity
+
+        return WorkflowCapacity(self, ORGANIZATION_WORKFLOW_LIMIT).inspect(user, org, identity)
 
     def release_capacity(self, user, org, run_id, revision, client_id):
         """Retire stopped uncertain work from admission without resolving its effects."""
         if type(revision) is not int or not 1 <= revision <= 2**63 - 1:
             raise StoreError(400, "select the current workflow revision")
         with self.store.transaction(write=True) as db:
-            run = self._run(db, org, run_id)
-            self.store._topic_access(db, user, org, run["topic_id"], write=True)
             self.store._require(db, user, org, admin=True)
+            run = self._run(db, org, run_id)
+            from .workflow_capacity import WorkflowCapacity
+
+            WorkflowCapacity(self, ORGANIZATION_WORKFLOW_LIMIT).entry(db, user, org, run_id, write=True)
 
             def operation():
                 if run["revision"] != revision or run["status"] != "outcome_unknown" or run["capacity_released"]:
@@ -159,25 +166,25 @@ class WorkflowRuns:
                 if any(node["status"] == "running" for node in nodes.values()):
                     raise StoreError(409, "stop active workflow children and inspect their outcomes before releasing capacity")
                 for node in nodes.values():
-                    for field, table in (("bot_run_id", "bot_runs"), ("compute_job_id", "compute_jobs"),
-                                         ("inference_run_id", "llm_runs")):
+                    for field, table in (("bot_run_id", "bot_runs"), ("compute_job_id", "compute_jobs"), ("inference_run_id", "llm_runs")):
                         if node[field]:
-                            child = db.execute(f"SELECT status FROM {table} WHERE organization_id=? AND id=?",
-                                               (org, node[field])).fetchone()
+                            child = db.execute(
+                                f"SELECT status FROM {table} WHERE organization_id=? AND id=?", (org, node[field])
+                            ).fetchone()
                             if child is None or child[0] in {"queued", "running", "waiting_approval"}:
                                 raise StoreError(409, "stop active workflow children before releasing capacity")
                 # Cancellation fences queued admission and any late child response;
                 # unknown execution and accounting remain on the original children.
-                db.execute("UPDATE workflow_runs SET cancel_requested=1,capacity_released=1 WHERE organization_id=? AND id=?",
-                           (org, run_id))
+                db.execute(
+                    "UPDATE workflow_runs SET cancel_requested=1,capacity_released=1 WHERE organization_id=? AND id=?", (org, run_id)
+                )
                 run.update(cancel_requested=1, capacity_released=1)
                 self._sync(db, run, nodes)
                 self._event(db, run, {"type": "capacity_released", "uncertainty_retained": True, "released_by": user})
                 self.store._audit(db, org, user, "workflow.capacity.release", run_id)
                 return {"operation": "release-capacity", "uncertainty_retained": True}
 
-            return self._action(db, user, org, run, client_id,
-                                {"operation": "release-capacity", "revision": revision}, operation)
+            return self._action(db, user, org, run, client_id, {"operation": "release-capacity", "revision": revision}, operation)
 
     def start(self, user, org, workflow_id, version, client_id):
         if type(version) is not int or not 1 <= version <= 128 or not isinstance(client_id, str) or not CLIENT.fullmatch(client_id):
@@ -660,8 +667,13 @@ class WorkflowRuns:
                                 raise ProviderError("quote_unavailable", no_charge=True)
                             if not self.inference_enabled:
                                 raise StoreError(503, "inference disabled")
-                            params = self.inference.parameters([proposed["model"]], spec["parameters"]["max_completion_tokens"], 1, None,
-                                                              effort=spec["parameters"].get("effort"))
+                            params = self.inference.parameters(
+                                [proposed["model"]],
+                                spec["parameters"]["max_completion_tokens"],
+                                1,
+                                None,
+                                effort=spec["parameters"].get("effort"),
+                            )
                             context = [
                                 SYSTEM_MESSAGE,
                                 {"role": "user", "content": spec["parameters"]["prompt"]},

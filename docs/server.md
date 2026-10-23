@@ -1093,7 +1093,7 @@ retry requires a current failed/cancelled revision and settled child accounting.
 It appends attempts for unsuccessful nodes, retains successful results and
 approvals, and rechecks original-requester authority and current policy. Changed
 compute image records require a new run. There are at most 16 attempts per node,
-eight active/uncertain runs per organization, and 64 per installation, including
+64 unfinished runs per organization, and 256 per installation, including
 retries. New starts are limited to 20 per requester/organization per 15 minutes;
 actions to 120 per 15 minutes and 4,096 per run. Child admission limits also apply.
 
@@ -1115,8 +1115,9 @@ Using `/api/organizations/{organization_id}` as `{prefix}`:
 | Path | Methods | Purpose |
 | --- | --- | --- |
 | `{prefix}/workflow-configuration` | GET | Runtime availability and worker liveness |
-| `{prefix}/workflow-capacity` | GET | Organization admission usage and unfinished runs in accessible topics |
 | `{prefix}/workflows/{workflow_id}/runs` | POST | Start an exact version with `version` and `client_id` |
+| `{prefix}/workflow-capacity` | GET | Organization allowance, named occupied runs, released history and anonymous hidden count |
+| `{prefix}/workflow-runs/{run_id}/capacity-inspection` | GET | Scoped node/child states; administrators can inspect retained operational records from deleted topics |
 | `{prefix}/topics/{topic_id}/workflow-runs` | GET | Newest-first summaries; `before` sequence and `limit` up to 50 |
 | `{prefix}/workflow-runs/{run_id}` | GET | Pinned definition/image records and current node attempts |
 | `{prefix}/workflow-runs/{run_id}/events` | GET | Up to 200 events after exclusive `after` sequence |
@@ -1149,15 +1150,30 @@ shows bounded history and captured dependency inputs, with linked computation
 logs/artifact downloads and model output/accounting. Unknown outcomes retain
 reservations and require verified operator reconciliation, not automatic retry.
 
-**Workflow capacity** lists unfinished runs and the organization admission limit
-of eight; installation admission is bounded to 64. An administrator can release
-the admission slot of an `outcome_unknown` workflow after inspecting its children.
-Known active children must stop first. This records an immutable action receipt,
-sets `capacity_released`, and fences further dispatch through cancellation. Child
-outcomes, usage reservations, unknown accounting, and original records remain.
-The workflow is still unresolved; settling a provider charge or physical compute
-cleanup is a separate operation. A justified retry after all children settle
-acquires capacity again. Exact action replay retains its original receipt.
+**Workflow activity** opens the organization workflow allowance and retained-run
+inspector. Each unfinished workflow occupies one place; a multi-model comparison
+counts as one workflow. The allowance is 64 per organization and 256 per
+installation, and includes waiting/uncertain work. Actual model and compute
+execution use their separate worker, quota and spending controls. Released places
+appear in collapsed history and do not count toward the allowance.
+
+Rows identify the workflow, project/channel/topic, requester and time. The total
+includes all organization work; inaccessible runs contribute only an anonymous
+occupied count. Administrators can inspect operational records from deleted topics,
+including current node/child states and model accounting state. This read surface
+contains no transcript, definition, output or credentials and does not restore
+ordinary access to a deleted topic. Up to 200 records are returned, with occupied
+places first and released records newest first; the summary reports truncation.
+
+An administrator can release the place of an `outcome_unknown` workflow after
+inspection, including one in a deleted topic. Known active children must stop
+first; a missing child record prevents release. The inspector asks for explicit
+confirmation. This records an immutable action receipt, sets `capacity_released`,
+and prevents further dispatch through cancellation. Child outcomes, usage
+reservations, unknown accounting and original records remain. Settling a provider
+charge or physical compute cleanup is a separate operation. A justified retry
+after all children settle acquires a place again and still requires current topic
+access. Exact action replay retains its original receipt.
 
 Execution requests are captured immutably per signed-in user/organization/topic.
 In-app navigation retains uncertain start and action requests. Explicit replay

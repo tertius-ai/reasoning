@@ -1,0 +1,13 @@
+.org-capacity-launcher { border: 0; background: transparent; color: var(--muted); font-size: 11px; min-height: 26px; }
+.org-workflow-capacity .org-capacity-count { font-size: 15px; }
+.org-workflow-capacity meter { width: 100%; height: 12px; }
+.org-capacity-runs, .org-capacity-nodes { list-style: none; padding: 0; }
+.org-capacity-runs > li { display: flex; align-items: center; gap: .75rem; padding: .65rem 0; border-bottom: 1px solid var(--border); }
+.org-capacity-run { flex: 1; min-width: 0; text-align: left; background: transparent; border: 0; }
+.org-capacity-run strong, .org-capacity-run span, .org-capacity-run small { display: block; overflow-wrap: anywhere; }
+.org-capacity-run span, .org-capacity-run small { margin-top: .2rem; color: var(--muted); }
+.org-capacity-status { font-size: 11px; color: var(--muted); }
+.org-capacity-nodes li { margin: .75rem 0; overflow-wrap: anywhere; }
+.org-workflow-capacity code { overflow-wrap: anywhere; }
+.org-capacity-confirm { padding: .75rem; border: 1px solid var(--border); border-radius: var(--radius-card); }
+@media (max-width: 600px) { .org-capacity-runs > li { align-items: flex-start; flex-direction: column; gap: .25rem; } }

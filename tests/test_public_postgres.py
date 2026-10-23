@@ -153,6 +153,17 @@ def test_postgres_workflow_inputs(postgres_configuration, tmp_path):
     workflow_tests.test_compute_approval_llm_compute_with_frozen_inputs_and_no_duplicate_dispatch(env)
 
 
+@pytest.mark.parametrize("check", [
+    workflow_tests.test_default_workflow_allowance_accepts_more_than_eight_waiting_runs,
+    workflow_tests.test_capacity_inspection_follows_a_run_that_finishes_while_open,
+    workflow_tests.test_capacity_names_separates_and_inspects_deleted_topic_runs_without_settling_them,
+    workflow_tests.test_capacity_counts_hidden_work_without_exposing_private_or_deleted_topics,
+])
+def test_postgres_workflow_capacity(postgres_configuration, tmp_path, check):
+    env = workflow_tests.installation.__wrapped__(tmp_path)
+    check(env)
+
+
 def test_postgres_workflow_atomic_link(postgres_configuration, tmp_path, monkeypatch):
     env = workflow_tests.installation.__wrapped__(tmp_path)
     workflow_tests.test_child_link_and_budget_reservation_roll_back_together(env, monkeypatch)

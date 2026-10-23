@@ -118,11 +118,34 @@ def uncertain_model_workflow(env, client):
     return env.view(run), child
 
 
-def test_administrator_releases_stranded_capacity_without_resolving_accounting_or_replaying(installation):
+def test_default_workflow_allowance_accepts_more_than_eight_waiting_runs(installation):
+    env = installation
+    runs = [env.start([approval_node()], client=f"workflow-allowance-{index:02d}") for index in range(10)]
+    value = env.runs.capacity(env.user, env.org)
+    assert value["limit"] == 64 and value["in_use"] == 10 and value["available"] == 54
+    assert {row["id"] for row in value["runs"]} == {run["id"] for run in runs}
+    assert value["hidden_in_use"] == value["released_count"] == 0
+    with env.store.transaction() as db:
+        assert db.execute("SELECT COUNT(*) FROM llm_runs").fetchone()[0] == 0
+        assert db.execute("SELECT COUNT(*) FROM compute_jobs").fetchone()[0] == 0
+
+
+def test_capacity_inspection_follows_a_run_that_finishes_while_open(installation):
+    env = installation
+    run = env.start([approval_node()], client="capacity-inspection-completion")
+    assert env.runs.inspect_capacity(env.user, env.org, run["id"])["run"]["finished_at"] is None
+    env.runs.cancel(env.user, env.org, run["id"], "capacity-inspection-cancel")
+    value = env.runs.inspect_capacity(env.user, env.org, run["id"])
+    assert value["run"]["finished_at"] is not None and not value["can_release"]
+    assert env.runs.capacity(env.user, env.org)["in_use"] == 0
+
+
+def test_administrator_releases_stranded_capacity_without_resolving_accounting_or_replaying(installation, monkeypatch):
+    monkeypatch.setattr("reasoning_ledger.server.workflow_runs.ORGANIZATION_WORKFLOW_LIMIT", 8)
     env = installation
     retained = [uncertain_model_workflow(env, f"uncertain-workflow-{index}") for index in range(8)]
     assert env.runs.capacity(env.user, env.org)["in_use"] == 8
-    with pytest.raises(StoreError, match="Workflow capacity"):
+    with pytest.raises(StoreError, match="Workflow activity"):
         env.start([llm_node()], client="blocked-retained-start")
     before = env.inference.balance(env.user, env.org)
     run, child = retained[0]
@@ -142,6 +165,65 @@ def test_administrator_releases_stranded_capacity_without_resolving_accounting_o
     assert env.runs.capacity(env.user, env.org)["in_use"] == 8
     with pytest.raises(StoreError, match="current failed or cancelled"):
         env.runs.retry(env.user, env.org, run["id"], after["revision"], "no-uncertain-replay")
+
+
+def test_capacity_names_separates_and_inspects_deleted_topic_runs_without_settling_them(installation):
+    env = installation
+    run, child = uncertain_model_workflow(env, "retained-deleted-workflow")
+    before = env.inference.balance(env.user, env.org)
+    plan = env.store.deletion_plan(env.user, env.org, "topics", env.topic)
+    env.store.delete_entity(env.user, env.org, "topics", env.topic, plan["name"], plan["plan_token"], stop_active=True)
+    value = env.runs.capacity(env.user, env.org)
+    assert value["in_use"] == 1 and value["hidden_in_use"] == 0
+    retained = value["runs"][0]
+    assert retained["workflow_name"] == "Fixture" and retained["topic_name"] == "Workflow"
+    assert retained["project_name"] == "Project" and retained["requested_by_name"] == "Owner" and retained["topic_deleted"] == 1
+    inspection = env.runs.inspect_capacity(env.user, env.org, run["id"])
+    assert inspection["can_release"] and inspection["nodes"][0]["children"][0]["accounting_state"] == "uncertain"
+    assert "definition" not in inspection and "output" not in json.dumps(inspection)
+    with pytest.raises(StoreError):
+        env.runs.get(env.user, env.org, run["id"])
+    env.runs.release_capacity(env.user, env.org, run["id"], inspection["run"]["revision"], "release-deleted-workflow")
+    after = env.runs.capacity(env.user, env.org)
+    assert after["in_use"] == 0 and after["released_count"] == 1
+    assert after["runs"][0]["capacity_released"] == 1
+    assert not env.runs.inspect_capacity(env.user, env.org, run["id"])["can_release"]
+    assert env.inference.balance(env.user, env.org) == before
+    with env.store.transaction() as db:
+        original = db.execute("SELECT status,finished_at FROM workflow_runs WHERE id=?", (run["id"],)).fetchone()
+        assert original["status"] == "outcome_unknown" and original["finished_at"] is None
+        assert db.execute("SELECT accounting_state FROM llm_runs WHERE id=?", (child["id"],)).fetchone()[0] == "uncertain"
+        assert db.execute("SELECT deleted_at FROM topics WHERE id=?", (env.topic,)).fetchone()[0] is not None
+
+
+def test_capacity_counts_hidden_work_without_exposing_private_or_deleted_topics(installation):
+    env = installation
+    public = env.start([approval_node()], client="public-capacity-fixture")
+    invitation = env.store.invite(env.user, env.org, "member@example.org", "member", 3600)
+    member = env.store.accept_invitation(invitation["token"], user_id=None, name="Member", password="member fixture password")["user_id"]
+    private = env.store.create_entity(env.user, env.org, "projects", "PRIVATE CAPACITY PROJECT", visibility="private", owner_id=env.user)
+    channel = env.store.create_entity(env.user, env.org, "channels", "PRIVATE CHANNEL", private["id"])
+    topic = env.store.create_entity(env.user, env.org, "topics", "PRIVATE WORKFLOW", channel["id"], "gamma")["id"]
+    env.topic = topic
+    hidden, _ = uncertain_model_workflow(env, "private-capacity-fixture")
+    value = env.runs.capacity(member, env.org)
+    assert value["in_use"] == 2 and value["hidden_in_use"] == 1
+    assert [row["id"] for row in value["runs"]] == [public["id"]]
+    assert "PRIVATE" not in json.dumps(value) and hidden["id"] not in json.dumps(value)
+    with pytest.raises(StoreError) as denied:
+        env.runs.inspect_capacity(member, env.org, hidden["id"])
+    assert denied.value.status == 404
+    plan = env.store.deletion_plan(env.user, env.org, "projects", private["id"])
+    env.store.delete_entity(env.user, env.org, "projects", private["id"], plan["name"], plan["plan_token"], stop_active=True)
+    assert env.runs.capacity(member, env.org)["hidden_in_use"] == 1
+    with pytest.raises(StoreError):
+        env.runs.inspect_capacity(member, env.org, hidden["id"])
+    for identity in (hidden["id"], "f" * 32):
+        with pytest.raises(StoreError) as denied:
+            env.runs.release_capacity(member, env.org, identity, hidden["revision"], "member-deleted-release")
+        assert denied.value.status == 403
+    assert env.runs.inspect_capacity(env.user, env.org, hidden["id"])["can_release"]
+    assert env.runs.inspect_capacity(member, env.org, public["id"])["release_blocked_reason"] == "administrator_required"
 
 
 def test_capacity_release_refuses_stale_revisions_and_nonadministrators(installation):
@@ -566,7 +648,8 @@ def test_scope_roles_and_requester_revocation_cancel_existing_work(installation)
         env.runs.get(member, env.org, owned["id"])
 
 
-def test_start_replay_conflicts_and_active_limit_also_applies_to_retry(installation):
+def test_start_replay_conflicts_and_active_limit_also_applies_to_retry(installation, monkeypatch):
+    monkeypatch.setattr("reasoning_ledger.server.workflow_runs.ORGANIZATION_WORKFLOW_LIMIT", 8)
     env = installation
     first = env.start([approval_node()])
     assert env.runs.start(env.user, env.org, first["workflow_id"], 1, first["client_id"])["id"] == first["id"]

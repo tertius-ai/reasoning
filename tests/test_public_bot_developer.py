@@ -37,7 +37,7 @@ def test_diagnostics_follow_authorized_topic_and_run_with_live_grants(fixture):
                                   ["messages:read", "messages:write", "knowledge:read", "knowledge:write"])
     value = developer.diagnostics(*args, topic_id=target)
     assert value["topic_id"] == target and value["scope"] == "authorized_topic"
-    assert value["records"]["workflows"] == [] and value["workflow_capacity"]["limit"] == 8
+    assert value["records"]["workflows"] == [] and value["workflow_capacity"]["limit"] == 64
     value = developer.diagnostics(*args, target_run_id=args[1])
     assert value["records"]["bots"][0]["id"] == args[1]
     assert bot["token"] not in json.dumps(value)

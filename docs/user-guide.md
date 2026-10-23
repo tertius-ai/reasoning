@@ -156,10 +156,15 @@ and failures; topic writers can **Retry text extraction**, including for existin
 uploads. Scans need OCR or a TeX/text source, and extracted text can omit diagrams.
 See [Pictures, PDFs and TeX](media.md).
 
-In gamma topics, **Workflow capacity** shows admission usage and
-accessible unfinished work. An administrator can inspect stopped uncertain work
-and **Release workflow slot**; its unknown outcome and held charges are retained.
-This does not retry or settle the operation. For a bot with an unknown retained
+In gamma topics, **Workflow activity** shows the organization's allowance of 64
+unfinished workflow runs, with named workflows, topics and requesters. Waiting
+for approval or confirmation also reserves a place; actual model calls and
+computations have separate execution limits. Released places appear in collapsed
+history and are excluded from the occupied count. Administrators can inspect
+retained operational records from deleted topics. After checking an inactive
+uncertain run, **Release workflow slot** makes its place available while keeping
+the unresolved result and any held charges. This does not retry or settle the
+operation. For a bot with an unknown retained
 outcome, stop its runner and follow the printed inspection/recovery commands;
 see [Bots](bots.md). Inspection does not change the paired state.
 
