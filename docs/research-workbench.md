@@ -82,7 +82,8 @@ manuscript through a saved-file revision when needed.
 
 **Working knowledge** searches authorized project knowledge and pins exact claim,
 reference, or published shared-entry revisions. At most 40 links per collection
-form the account's working set. Linked evidence stays pinned when the underlying
+form the account's working set. `account_read` supports exact-version field slices,
+including `field="links"` for evidence pins when a large account needs several reads. Linked evidence stays pinned when the underlying
 record changes; read its current version and explicitly repin it to update the
 account. Saving an account does not certify the argument or alter ledger status.
 A fork has its own account; it does not copy the source topic's account.
@@ -183,7 +184,7 @@ Context is layered, not a fixed last-N-message buffer:
 
 In `/tools`, **Default knowledge scope** selects the account's linked working
 set, the current topic, or authorized project knowledge. The default working set
-falls back to the topic until an account exists. Topic selection includes records
+falls back to the topic until an account exists. For typed ledger records, topic selection includes those
 created or edited there; project-shared records keep their original access policy.
 A working-set ledger view includes the transitive supporting premises and exact
 revision histories needed to derive honest status. Unavailable or stale premises

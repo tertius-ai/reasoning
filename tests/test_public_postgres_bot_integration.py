@@ -6,6 +6,7 @@ Copyright Benjamin Antieau and Deven Manam. SPDX-License-Identifier: Apache-2.0
 import pytest
 import test_public_bot_integration as integration
 import test_public_bots as bots
+import test_public_inference_blog as blog_tests
 from postgres_fixture import postgres_configuration as postgres_configuration
 
 from reasoning_ledger.server.store import Store
@@ -21,6 +22,7 @@ def fixture(postgres_configuration, tmp_path, monkeypatch):
     return value
 
 
+test_blog_scope = blog_tests.test_bot_published_edits_search_and_permission_revocation
 test_account = integration.test_bot_account_tools_preserve_candidates_and_recheck_live_write_scope
 test_followup = integration.test_tmp7_followup_receives_prior_question_and_gateway_tools
 test_effort = integration.test_effort_is_retained_and_unsupported_bot_override_is_refused

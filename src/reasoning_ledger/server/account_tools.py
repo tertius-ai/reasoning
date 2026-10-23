@@ -17,7 +17,7 @@ def schemas():
         "account_read": obj(
             {
                 "revision": {"type": "integer", "minimum": 1},
-                "field": {"enum": list(FIELDS)},
+                "field": {"enum": [*FIELDS, "links"]},
                 "offset": {"type": "integer", "minimum": 0},
                 "length": {"type": "integer", "minimum": 1, "maximum": 12000},
             }
@@ -35,7 +35,8 @@ def schemas():
 
 
 DESCRIPTIONS = {
-    "account_read": "Read this topic's pinned, versioned mathematical account. Read exact revisions and field slices for a large account.",
+    "account_read": "Read this topic's pinned, versioned mathematical account. "
+    "Read exact revisions and field slices for a large account; field=links returns its exact evidence pins.",
     "account_update": "Maintain the current question, hypotheses, coherent argument, sources, failed routes, gaps and next steps. "
     "Send only changed fields, preserving omitted fields. expected_revision=0 starts an account. Link reusable claim/reference/entry IDs; "
     "their exact revisions must be supplied in expected_links. Saving does not establish mathematics. "
@@ -53,7 +54,9 @@ def read_account(accounts, user, org, topic, revision=None, field=None, offset=0
     body = value.pop("body")
     value.pop("history", None)
     value.pop("linked_changes", None)
-    text = body[field]
+    from .research_context import encoded
+
+    text = encoded(body.get("pins", {})) if field == "links" else body[field]
     value.update(
         {
             "field": field,

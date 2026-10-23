@@ -136,6 +136,8 @@ def test_account_working_scope_preserves_premises_and_allows_explicit_expansion(
         "root-pin",
         expected_links={target["claim_id"]: target["revision_id"]},
     )
+    exact_links = tools.invoke("account_read", {"field": "links"})["result"]
+    assert json.loads(exact_links["text"])["claim_ids"] == saved["body"]["pins"]["claim_ids"]
     scoped = tools.invoke("ledger_status", {"statements": "all"})["result"]
     wide = tools.invoke("ledger_status", {"scope": "project", "statements": "all"})["result"]
     assert {item["claim_id"] for item in scoped["claims"]} == {target["claim_id"], premise["claim_id"]}
