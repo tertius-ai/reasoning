@@ -99,7 +99,8 @@ proof or citation evidence in fresh context, with read-only source tools. It
 does not receive the author's chat history and cannot rewrite the ledger. The
 server validates its structured obligations and records revision-pinned evidence
 only after a successful, settled run. A positive citation verdict also needs an
-actual completed source-read receipt. An unavailable citation does not refute a
+actual completed source-read receipt. An unreadable, failed or partial PDF
+extraction cannot attest full source access. An unavailable citation does not refute a
 claim; a flawed proof does not prove the claim false. **LLM-reviewed** is not
 machine certification. Imported verification records remain readable archives but
 do not count as fresh organization attestations, positive or negative.

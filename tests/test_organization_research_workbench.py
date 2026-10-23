@@ -307,6 +307,19 @@ def test_citation_cannot_pass_without_an_actual_source_read(installation):
     assert reviews[0]["result"]["verdict"]["verdict"] == "inconclusive", reviews
 
 
+@pytest.mark.parametrize("nested", [False, True])
+@pytest.mark.parametrize("status,text,expected", [("unavailable", "", False), ("failed", "", False),
+                                                 ("partial", "One readable page", False), ("ready", "", False),
+                                                 ("ready", "The exact source text", True)])
+def test_unreadable_or_partial_pdf_receipt_cannot_attest_full_source_access(nested, status, text, expected):
+    from reasoning_ledger.server.research_reviews import completed_source_evidence
+
+    result = {"text": text, "extraction": {"status": status}}
+    receipt = {"name": "tool_call" if nested else "web_fetch", "arguments_json": json.dumps({"name": "web_fetch"}),
+               "result_json": json.dumps({"result": result} if nested else result)}
+    assert completed_source_evidence(receipt) is expected
+
+
 def test_artifact_edits_have_compare_and_set_and_retained_revisions(installation):
     state, owner, topics, _, _ = source_run(installation)
     files = ResearchArtifacts(state.store)
