@@ -213,8 +213,9 @@ export function ResearchControls({ organizationId, topicId, userId, selectedMode
     }
   });
   return <div className="org-research-controls">
+    <button type="button" className="org-project-files" aria-pressed={pane === "files"}
+      onClick={() => setPane(current => current === "files" ? null : "files")}>Project files</button>
     {toolbarTarget && createPortal(<div className="org-research-toolbar" aria-label="Research actions">
-    <button type="button" aria-pressed={pane === "files"} onClick={() => setPane(current => current === "files" ? null : "files")}>Project files</button>
     {(goal?.status === "active" || activeTool) && <span role="status" className="org-goal-live"><i />{activeTool ? `Using ${activeTool.name.replaceAll("_", " ")}` : "Working toward your goal"}</span>}
   </div>, toolbarTarget)}
     {pane && <button type="button" aria-label="Close research panel" onClick={() => setPane(null)}>×</button>}

@@ -1,4 +1,5 @@
 .org-research-controls { flex: none; padding: 0 max(16px, calc((100% - 900px) / 2)); }
+.org-project-files { margin: 0 0 3px; border: 0; background: transparent; color: var(--muted); font-size: 11px; min-height: 26px; }
 .org-system-message { background: var(--surface); border-radius: var(--radius-card); }
 .org-system-message summary { font-size: 12px; cursor: pointer; color: var(--muted); }
 .org-system-message small { display: block; color: var(--muted); font: 10px var(--font-mono); margin: 6px 0; }
