@@ -3,6 +3,7 @@
 import base64
 import binascii
 import hashlib
+import json
 import re
 import time
 
@@ -17,18 +18,16 @@ BEGINS_PER_MINUTE = 30
 MEDIA_READ_TOOLS = {"media_list", "media_read", "media_download_chunk"}
 MIMES = {"image/png", "image/jpeg", "image/webp", "application/pdf"}
 REFERENCE = re.compile(r"/api/organizations/([a-f0-9]{32})/topics/([a-f0-9]{32})/media/([a-f0-9]{32})/([a-f0-9]{64})/content")
-# Models never receive PDF bytes: the server does not parse PDFs, and only the
-# uploader's extracted text is readable, whatever the model's file capabilities.
+# Native models read extracted PDF text; CLI bots can also download exact bytes.
 PDF_TEXT_NOTICE = (
-    "Text was extracted in the uploader's browser with [Page n] markers and is bounded to 64,000 bytes; later "
-    "pages, formulas, figures and layout can be missing. For an arXiv paper, arxiv_read or arxiv_source_read "
-    "gives the complete source."
+    "Extracted text has [Page n] markers. Check extraction coverage and truncation; "
+    "formulas, figures and layout may be missing. Use exact media text ranges or authorized original-byte download. "
+    "For an arXiv paper, arxiv_read or arxiv_source_read provides a source alternative."
 )
 PDF_NO_TEXT_NOTICE = (
-    "No text was extracted from this PDF when it was uploaded (for example, a scanned or image-only PDF, or "
-    "extraction failed in the uploader's browser). The server does not parse PDFs and no model receives PDF bytes. "
-    "Ask a member to paste the passage you need or attach its TeX or text source; for an arXiv paper, use "
-    "arxiv_read or arxiv_source_read."
+    "No readable PDF text is available. Inspect the extraction status and retry extraction where supported. "
+    "A scanned or image-only document needs OCR or a TeX/text source. The original private PDF remains downloadable; "
+    "native models have not inspected its pages. For an arXiv paper, use arxiv_read or arxiv_source_read."
 )
 
 
@@ -40,6 +39,13 @@ def view(row):
     value = {key: row[key] for key in ("id", "name", "mime", "sha256", "size_bytes", "topic_id", "created_at")}
     value["url"] = content_path(row)
     value["markdown"] = f"![{row['name']}]({value['url']})"
+    if row["mime"] == "application/pdf":
+        metadata = json.loads(dict(row).get("extraction_json", "{}"))
+        value["extraction"] = {key: metadata[key] for key in (
+            "status", "method", "error", "truncated", "pages_read", "total_pages"
+        ) if key in metadata}
+        if not value["extraction"]:
+            value["extraction"] = {"status": "partial" if row["preview_text"] else "unavailable", "method": "browser"}
     return value
 
 
@@ -221,26 +227,72 @@ class ResearchMedia:
             vision and (not bounded_image(vision, "image/jpeg") or max(image_dimensions(vision, "image/jpeg")) > 512)
         ):
             raise StoreError(400, "vision preview must be a JPEG of at most 32 KiB and 512 pixels per side")
-        with self.store.transaction(write=True) as db:
+        input_hash = hashlib.sha256(preview_text.encode()).hexdigest()
+
+        def completed(row):
+            metadata = json.loads(row["extraction_json"])
+            expected = metadata.get("input_text_sha256", hashlib.sha256(row["preview_text"].encode()).hexdigest())
+            if expected != input_hash or row["vision_base64"] != vision_base64:
+                raise StoreError(409, "a completed attachment preview cannot be replaced")
+            return view(row)
+
+        # Parsing must not hold SQLite's write lock or a PostgreSQL transaction.
+        with self.store.transaction() as db:
             row = self._row(db, user, org, topic, identity, write=True, complete=False)
-            if self.store._postgres:
-                self.store._postgres.lock(db.native, "research-media:" + identity)
-                row = self._row(db, user, org, topic, identity, write=True, complete=False)
             if row["complete"]:
-                if row["preview_text"] != preview_text or row["vision_base64"] != vision_base64:
-                    raise StoreError(409, "a completed attachment preview cannot be replaced")
-                return view(row)
+                return completed(row)
             body = self._bytes(db, row)
             valid = bounded_image(body, row["mime"]) if row["mime"].startswith("image/") else valid_signature(body, row["mime"])
             if not valid:
                 raise StoreError(400, "attachment content does not match its declared image/PDF format")
             if vision and not row["mime"].startswith("image/"):
                 raise StoreError(400, "only image attachments can supply an image preview")
+        metadata = {"input_text_sha256": input_hash}
+        text = preview_text
+        if row["mime"] == "application/pdf":
+            text, extraction = self._extract(body, preview_text)
+            metadata.update(extraction)
+        with self.store.transaction(write=True) as db:
+            if self.store._postgres:
+                self.store._postgres.lock(db.native, "research-media:" + identity)
+            row = self._row(db, user, org, topic, identity, write=True, complete=False)
+            if row["complete"]:
+                return completed(row)
             db.execute(
-                "UPDATE research_media SET complete=1,preview_text=?,vision_base64=? WHERE id=?", (preview_text, vision_base64, identity)
+                "UPDATE research_media SET complete=1,preview_text=?,vision_base64=?,extraction_json=? WHERE id=?",
+                (text, vision_base64, json.dumps(metadata), identity)
             )
             self.store._audit(db, org, user, "research.media", identity)
-            return view(row)
+            return view(self._row(db, user, org, topic, identity))
+
+    @staticmethod
+    def _extract(body, fallback="", fallback_method="browser"):
+        from .pdf_extract import extract_pdf
+
+        result = extract_pdf(body)
+        text = result.pop("text")
+        result["method"] = "server"
+        if not text and fallback:
+            text = fallback
+            result.update(status="partial", method=fallback_method, truncated=True)
+        return text, result
+
+    def extract_again(self, user, org, topic, identity, sha256):
+        with self.store.transaction() as db:
+            row = self._row(db, user, org, topic, identity, write=True)
+            if row["sha256"] != sha256 or row["mime"] != "application/pdf":
+                raise StoreError(404, "exact PDF attachment unavailable")
+            body, fallback = self._bytes(db, row), row["preview_text"]
+            method = json.loads(row["extraction_json"]).get("method", "browser")
+        text, metadata = self._extract(body, fallback, method)
+        with self.store.transaction(write=True) as db:
+            row = self._row(db, user, org, topic, identity, write=True)
+            original = json.loads(row["extraction_json"])
+            metadata["input_text_sha256"] = original.get("input_text_sha256", hashlib.sha256(fallback.encode()).hexdigest())
+            db.execute("UPDATE research_media SET preview_text=?,extraction_json=? WHERE id=?",
+                       (text, json.dumps(metadata), identity))
+            self.store._audit(db, org, user, "research.media.extract", identity)
+            return view(self._row(db, user, org, topic, identity))
 
     def read(self, user, org, topic, identity, sha256, *, offset=0, length=12000, binary=False, source_topic_id=None):
         with self.store.transaction() as db:
@@ -264,13 +316,14 @@ class ResearchMedia:
                 "offset": offset,
                 "total_characters": len(text),
                 "next_offset": min(len(text), offset + length),
-                "source": "uploader-extracted reference text; not a server-verified transcription",
+                "source": "extracted reference text; mathematical content and transcription remain unverified",
                 "inspection": "image pixels require a vision-capable model"
                 if row["mime"].startswith("image/")
                 else "PDF text preview only; layout, diagrams and unextracted pages require direct inspection",
             }
             if row["mime"] == "application/pdf":
-                result["text_status"] = "uploader_extracted" if text else "unavailable"
+                method = json.loads(row["extraction_json"]).get("method", "browser")
+                result["text_status"] = ("server_extracted" if method == "server" else "uploader_extracted") if text else "unavailable"
                 result["notice"] = PDF_TEXT_NOTICE if text else PDF_NO_TEXT_NOTICE
             return result
 

@@ -54,8 +54,9 @@ createRoot(document.getElementById('root')).render(React.createElement(Fixture))
           file.bytes = Buffer.concat(file.chunks); Object.assign(file, request.postDataJSON());
           assert.equal(createHash("sha256").update(file.bytes).digest("hex"), file.sha256);
           const url = `/api/organizations/${org}/topics/${topic}/media/${match[1]}/${file.sha256}/content`;
+          file.extraction = file.mime === "application/pdf" ? { status: "ready", method: "server", pages_read: 1, total_pages: 1 } : undefined;
           data = { ...file, chunks: undefined, bytes: undefined, id: match[1], url, markdown: `![${file.name}](${url})` };
-        } else if (action.endsWith("/read")) data = { mime: file.mime };
+        } else if (action.endsWith("/read")) data = { mime: file.mime, extraction: file.extraction };
         else if (action.endsWith("/content")) {
           await route.fulfill({ status: 200, contentType: file.mime, body: file.bytes }); return;
         }
@@ -76,7 +77,8 @@ createRoot(document.getElementById('root')).render(React.createElement(Fixture))
     assert.ok(picture.vision_base64 && Buffer.from(picture.vision_base64, "base64").length <= 32768);
     await input.setInputFiles({ name: "proof.pdf", mimeType: "application/pdf", buffer: pdf() });
     await page.getByText("proof.pdf", { exact: true }).waitFor();
-    const document = [...uploads.values()][1]; assert.match(document.preview_text, /A proof of one plus one equals two/);
+    const document = [...uploads.values()][1]; assert.equal(document.preview_text, "");
+    await page.getByText(/Text available for research/).waitFor();
     assert.equal(await page.locator("canvas").count(), 0, "closed PDFs must not render pages");
     await page.getByText("proof.pdf", { exact: true }).click();
     await page.getByRole("img", { name: "proof.pdf, page 1" }).waitFor();

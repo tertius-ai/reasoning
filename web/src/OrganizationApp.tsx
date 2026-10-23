@@ -1129,7 +1129,7 @@ function Conversation({ organizationId, topic, members, user, canWrite, canManag
           }} onAuthLost={onAuthLost} />
       </article>)}</div></> }));
   }, [messages, reactions, workflowRunKey, topic.kind, topic.id, mentionPeople, members, user.id, organizationId, canWrite, canReplyAgain, onAuthLost, focus, highlighted]);
-  return <MediaScope.Provider value={{ organizationId, topicId: topic.id }}><section className="org-conversation" aria-label="Topic conversation">
+  return <MediaScope.Provider value={{ organizationId, topicId: topic.id, canWrite }}><section className="org-conversation" aria-label="Topic conversation">
     {texOpen && <TexRequestDialog bots={botModels} names={botNames} onClose={() => setTexOpen(false)} onPrepare={(source, bot) => {
       const label = `@${botNames[bot.bot_id] ?? bot.name}`;
       updateDraft({ text: label + " " + texRequest(source), clientId: crypto.randomUUID(), attempted: false,

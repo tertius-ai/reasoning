@@ -2,6 +2,7 @@
 
 import base64
 import hashlib
+import io
 import json
 import struct
 import zlib
@@ -38,6 +39,95 @@ def upload(media, owner, topic, body=PNG, mime="image/png", name="picture.png", 
     for offset in range(0, len(body), CHUNK_BYTES):
         media.chunk(user, org, topic, start["id"], offset // CHUNK_BYTES, base64.b64encode(body[offset : offset + CHUNK_BYTES]).decode())
     return media.finish(user, org, topic, start["id"], **previews)
+
+
+def text_pdf(text="An exact paper with a readable proof.", *, pages=1, password=None):
+    from pypdf import PdfWriter
+    from pypdf.generic import DecodedStreamObject, DictionaryObject, NameObject
+
+    writer = PdfWriter()
+    font = writer._add_object(DictionaryObject({NameObject("/Type"): NameObject("/Font"),
+                                               NameObject("/Subtype"): NameObject("/Type1"),
+                                               NameObject("/BaseFont"): NameObject("/Helvetica")}))
+    for _ in range(pages):
+        page = writer.add_blank_page(612, 792)
+        if text:
+            page[NameObject("/Resources")] = DictionaryObject({NameObject("/Font"): DictionaryObject({NameObject("/F1"): font})})
+            stream = DecodedStreamObject()
+            stream.set_data(b"BT /F1 12 Tf 20 700 Td (" + text.encode("ascii") + b") Tj ET")
+            page[NameObject("/Contents")] = writer._add_object(stream)
+    if password:
+        writer.encrypt(password)
+    target = io.BytesIO()
+    writer.write(target)
+    return target.getvalue()
+
+
+def test_server_pdf_extraction_reads_original_bytes_beyond_the_browser_preview_without_a_write_lock(installation, monkeypatch):
+    import sqlite3
+
+    from reasoning_ledger.server.pdf_extract import extract_pdf
+
+    _, store, client, owner = installation
+    org, user = owner["organization_id"], owner["user_id"]
+    topic = structure(client, org)[2][1]["id"]
+    body = text_pdf("A complete paragraph. " * 250, pages=3)
+
+    def unlocked(original):
+        assert original == body
+        with sqlite3.connect(store.database, timeout=0.05) as db:
+            db.execute("BEGIN IMMEDIATE")
+            db.rollback()
+        return extract_pdf(original)
+
+    monkeypatch.setattr("reasoning_ledger.server.pdf_extract.extract_pdf", unlocked)
+    saved = upload(ResearchMedia(store), owner, topic, body, "application/pdf", "paper.pdf")
+    assert saved["extraction"]["status"] == "ready" and saved["extraction"]["pages_read"] == 3
+    media = ResearchMedia(store)
+    value = media.read(user, org, topic, saved["id"], saved["sha256"], offset=16000)
+    assert value["total_characters"] > 16000 and value["text"]
+    assert value["text_status"] == "server_extracted"
+    assert client.get(saved["url"]).content == body
+    assert media.finish(user, org, topic, saved["id"]) == saved
+
+
+@pytest.mark.parametrize("body,error", [(text_pdf(""), "no_text"), (text_pdf(password="private-password"), "password_required"),
+                                        (PDF, "extraction_failed")])
+def test_unreadable_pdf_upload_retains_original_and_explains_the_reading_failure(installation, body, error):
+    _, store, client, owner = installation
+    topic = structure(client, owner["organization_id"])[2][1]["id"]
+    saved = upload(ResearchMedia(store), owner, topic, body, "application/pdf", "unreadable.pdf")
+    assert saved["extraction"]["status"] in {"unavailable", "failed"}
+    assert saved["extraction"]["error"] == error
+    assert client.get(saved["url"]).content == body
+    retried = client.post(saved["url"].replace("/content", "/extract"), json={})
+    assert retried.status_code == 200 and retried.json()["extraction"]["error"] == error
+
+
+def test_pdf_text_limit_reports_partial_coverage_and_keeps_readable_text(monkeypatch):
+    from reasoning_ledger.server import pdf_extract_worker
+
+    monkeypatch.setattr(pdf_extract_worker, "MAX_TEXT_BYTES", 100)
+    value = pdf_extract_worker.extract(text_pdf("A retained proof paragraph. " * 100, pages=2))
+    assert value["status"] == "partial" and value["truncated"] is True
+    assert 0 < len(value["text"].encode()) <= 100 and value["total_pages"] == 2
+
+
+def test_pdf_extractor_timeout_is_bounded_and_contains_no_input_or_exception_body(monkeypatch):
+    import subprocess
+
+    from reasoning_ledger.server import pdf_extract
+
+    secret = "private proof and parser details"
+
+    def timeout(*args, **kwargs):
+        assert kwargs["timeout"] == 12
+        raise subprocess.TimeoutExpired(secret, 12, output=secret)
+
+    monkeypatch.setattr(pdf_extract.subprocess, "run", timeout)
+    value = pdf_extract.extract_pdf(secret.encode())
+    assert value == {"status": "failed", "error": "extraction_timeout", "text": ""}
+    assert secret not in json.dumps(value)
 
 
 def test_upload_and_embedding_routes_all_topic_kinds_with_exact_hashes(installation):
@@ -121,7 +211,7 @@ def test_pdf_previews_are_bounded_explicitly_untrusted_and_never_execute_tex(ins
     result = upload(media, owner, topic, PDF, "application/pdf", "proof.pdf", preview_text="Extracted page 1\nA proof.")
     read = media.read(owner["user_id"], owner["organization_id"], topic, result["id"], result["sha256"], offset=0, length=10)
     assert read["text"] == "Extracted " and read["next_offset"] == 10
-    assert "not a server-verified" in read["source"] and "preview only" in read["inspection"]
+    assert "unverified" in read["source"] and "preview only" in read["inspection"]
     with store.transaction() as db:
         messages, refs, _ = attachment_context(
             store, db, owner["user_id"], owner["organization_id"], [{"content": result["markdown"]}], QUOTES, 90000

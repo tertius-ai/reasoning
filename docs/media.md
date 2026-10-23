@@ -12,23 +12,31 @@ files, including editable `.tex` sources.
 Every attachment reference contains its organization, source topic, immutable
 file ID and SHA-256. Upload, list, preview, download and tool reads check current
 topic permissions. A reference copied to another conversation does not grant
-access to its source topic. Completed bytes and previews cannot be replaced.
+access to its source topic. Completed original bytes cannot be replaced. Writers
+may explicitly retry PDF text extraction without changing that original identity.
 Attachments are included in database backups; there is no external public bucket.
 
 ## Agent context
 
 Only same-project attachments explicitly referenced by selected source messages are considered
-for context. Up to eight references fit the existing context allowance. A PDF
-upload extracts page-marked text from successive pages, up to 60,000 UTF-8 bytes,
-in a browser worker with a 15-second extraction deadline; pages read before the
-deadline or a damaged page are kept. NUL characters and unpaired surrogates are
-replaced. Scanned PDFs need OCR elsewhere. Extracted text is untrusted
-uploader-supplied reference data, not a server-verified transcription; the
-original PDF hash remains its identity. The server does not parse PDFs, and no
-model receives PDF bytes, whatever file input it advertises. For a PDF,
-`media_read` reports `text_status` (`uploader_extracted` or `unavailable`) and a
-notice naming what may be missing and the alternatives, such as arXiv source
-tools or a member pasting the passage. `media_read` retrieves bounded text
+for context. Up to eight references fit the existing context allowance. PDF
+uploads extract page-marked text in a separate Python process using pypdf,
+outside database transactions. At most two extractions run per API process.
+Each has a 12-second wall deadline, up to 200 pages and 2 MiB of UTF-8 text;
+POSIX workers additionally enforce 512 MiB address-space and eight CPU-second
+limits. NUL characters and invalid Unicode are replaced. Coverage, truncation,
+password requirements, empty text, and parser/resource failures are reported
+explicitly. Successful upload does not promise readable text. Writers can retry
+extraction from the original attachment through its PDF controls. Scanned pages
+need OCR or a TeX/text source. Compatible uploader text is retained as an explicitly
+partial fallback when server extraction fails.
+
+Extracted text and its mathematical content remain unverified. Native models
+receive text rather than original PDF bytes; authorized CLI bots can download
+the original bytes through their existing confined media tools. For a PDF,
+`media_read` reports `text_status` (`server_extracted`, `uploader_extracted`, or
+`unavailable`) and extraction coverage, plus a notice naming the limitations and
+source alternatives. `media_read` retrieves bounded text
 slices and exact metadata, with optional `source_topic_id` for an explicitly
 referenced same-project topic. Bots must additionally be granted that source
 topic, and both requester and owner must still have access. It does not pretend
@@ -55,6 +63,24 @@ in their explicit prompt and dependency inputs, not surrounding topic history.
 The same vision and current-access checks apply without enabling research tools
 or a persistent agent thread for a comparison. An idempotent retry keeps its
 original captured attachment context.
+
+## Project text files
+
+**Project files** in the research toolbar opens saved project text and the current
+topic's attachments. TeX and code display as source. Previews contain up to 16,000
+characters; **Open source**, **Copy complete source**, and **Download complete file**
+retrieve the full SHA-256-verified revision, including chunked files. The content
+URL names both the path and revision and rechecks current topic/project access;
+editing the file does not change an earlier link. Downloads preserve UTF-8 bytes
+and the original filename, with private no-store responses.
+
+`artifact_write`, `artifact_list`, and `research_file_read` return exact revision
+links. Model replies presenting a saved file should include that link. Local CLI
+workspace files remain private until explicitly published; `workspace_publish_text`
+publishes up to 30 KiB of UTF-8 source through the bot's live `artifact_write` grant.
+Overwrites require the current SHA-256. Publication does not compile TeX or verify
+the mathematics. File output in chat can therefore link the saved source and a
+separately generated PDF without asking the user to recover text from a session.
 
 ## Bot PDF generation
 
@@ -128,6 +154,7 @@ Under `/api/organizations/{org}/topics/{topic}/media`:
 - `GET` lists completed files in this topic only.
 - `GET /{id}/{sha256}/content` serves authenticated bytes, with no public caching.
 - `GET /{id}/{sha256}/read?offset=0&length=12000` returns a bounded text preview and metadata.
+- `POST /{id}/{sha256}/extract` retries bounded extraction from the immutable PDF for a current topic writer.
 
 Chunk transport uses the standard 64 KiB JSON request limit. Exact chunk and finish
 retries are idempotent; a changed retry is refused. Browsers retain the original

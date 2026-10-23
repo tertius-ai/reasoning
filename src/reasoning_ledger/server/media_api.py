@@ -51,6 +51,10 @@ def install_routes(app, store, authenticated):
     def read(organization_id: str, topic_id: str, identity: str, sha256: str, user: User, offset: int = 0, length: int = 12000):
         return media.read(user, organization_id, topic_id, identity, sha256, offset=offset, length=length)
 
+    @app.post(root + "/{identity}/{sha256}/extract")
+    def extract(organization_id: str, topic_id: str, identity: str, sha256: str, user: User):
+        return media.extract_again(user, organization_id, topic_id, identity, sha256)
+
     @app.get(root + "/{identity}/{sha256}/content")
     def content(organization_id: str, topic_id: str, identity: str, sha256: str, user: User):
         metadata = media.read(user, organization_id, topic_id, identity, sha256, length=1)

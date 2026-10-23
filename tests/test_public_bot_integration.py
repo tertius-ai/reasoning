@@ -30,6 +30,33 @@ def fixture(tmp_path):
     return bot_fixture.__wrapped__(tmp_path)
 
 
+def test_bot_publishes_workspace_tex_to_shared_revision_links_and_rechecks_write_grants(fixture, tmp_path):
+    from types import SimpleNamespace
+
+    from reasoning_ledger.agents.tools import ToolDefinition, ToolRegistry
+    from reasoning_ledger.server.bot_media import register_bot_media
+    from reasoning_ledger.server.research_artifacts import ResearchArtifacts
+
+    store, owner, topics, _, _, _ = fixture
+    runtime, bot, _, run, _ = setup(fixture)
+    lease = runtime.claim(bot["token"])["lease"]
+    service, registry = BotTools(runtime), ToolRegistry()
+    registry.register(ToolDefinition("artifact_write", "Save project text", {"type": "object"},
+                                    lambda **body: service.invoke(bot["token"], run["id"], lease, "artifact_write", body, "publish-text")))
+    workspace = tmp_path / "workspace"
+    workspace.mkdir(mode=0o700)
+    source = "\\documentclass{article}\nA precise UTF-8 argument: α.\n"
+    (workspace / "argument.tex").write_text(source)
+    register_bot_media(SimpleNamespace(workspace=workspace), registry)
+    saved = registry.invoke("workspace_publish_text", {"path": "argument.tex"})
+    assert saved["revision"] == 1 and saved["url"] in saved["markdown"]
+    assert ResearchArtifacts(store).content(owner["user_id"], owner["organization_id"], topics[1], "argument.tex", 1)[0] == source.encode()
+    runtime.bots.update(owner["user_id"], owner["organization_id"], bot["id"], "Codex", topics[1:],
+                        ["messages:read", "messages:write", "knowledge:read"], personal=True)
+    with pytest.raises(StoreError):
+        registry.invoke("workspace_publish_text", {"path": "argument.tex"})
+
+
 def test_tmp7_followup_receives_prior_question_and_gateway_tools(fixture):
     store, owner, topics, _, _, _ = fixture
     runtime, bot, model, first, _ = setup(fixture)

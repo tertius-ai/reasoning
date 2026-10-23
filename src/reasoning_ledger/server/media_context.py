@@ -144,7 +144,7 @@ def attachment_context(store, db, user, org, source_messages, quotes, allowance,
             reference = {
                 **view(row),
                 "text": row["preview_text"][:6000],
-                "text_source": "uploader-extracted, untrusted reference text; not a verified PDF transcription",
+                "text_source": "extracted reference text; transcription and mathematical content remain unverified",
                 "inspection": "metadata only; image pixels have not been inspected"
                 if row["mime"].startswith("image/")
                 else "text preview only; diagrams, layout and further pages require direct inspection"

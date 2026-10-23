@@ -1,11 +1,11 @@
 // Copyright Benjamin Antieau and Deven Manam. SPDX-License-Identifier: Apache-2.0
 import React, { createContext, lazy, Suspense, useContext, useRef, useState } from "react";
 import { request, topicPath } from "./organization-api";
-import { collectPdfText } from "./pdfText";
 import "./topic-media.css";
 
-export const MediaScope = createContext<{ organizationId: string; topicId?: string } | null>(null);
-export type MediaFile = { id: string; name: string; mime: string; sha256: string; size_bytes: number; url: string; markdown: string };
+export const MediaScope = createContext<{ organizationId: string; topicId?: string; canWrite?: boolean } | null>(null);
+export type Extraction = { status: string; method?: string; error?: string | null; truncated?: boolean; pages_read?: number; total_pages?: number };
+export type MediaFile = { id: string; name: string; mime: string; sha256: string; size_bytes: number; url: string; markdown: string; extraction?: Extraction };
 const PdfViewer = lazy(() => import("./PdfViewer").then(module => ({ default: module.PdfViewer })));
 const IMAGE_TYPES = new Set(["image/png", "image/jpeg", "image/webp"]);
 const REF = /^\/api\/organizations\/([a-f0-9]{32})\/topics\/([a-f0-9]{32})\/media\/([a-f0-9]{32})\/([a-f0-9]{64})\/content$/;
@@ -15,20 +15,28 @@ export function mediaReference(url: string | undefined, organizationId?: string)
 }
 
 function EmbeddedMedia({ src, alt }: { src: string; alt: string }) {
+  const scope = useContext(MediaScope);
   const [mime, setMime] = useState("");
+  const [extraction, setExtraction] = useState<Extraction | null>(null), [busy, setBusy] = useState(false);
   const [failed, setFailed] = useState(false);
   const [expanded, setExpanded] = useState(false);
   React.useEffect(() => {
     const controller = new AbortController();
-    void request<{ mime: string }>(src.replace(/^\/api/, "").replace(/\/content$/, "/read"), { signal: controller.signal })
-      .then(value => setMime(value.mime)).catch(cause => { if (cause?.name !== "AbortError") setFailed(true); });
+    void request<{ mime: string; extraction?: Extraction }>(src.replace(/^\/api/, "").replace(/\/content$/, "/read"), { signal: controller.signal })
+      .then(value => { setMime(value.mime); setExtraction(value.extraction ?? null); }).catch(cause => { if (cause?.name !== "AbortError") setFailed(true); });
     return () => controller.abort();
   }, [src]);
   if (failed) return <span className="org-help">Attachment unavailable</span>;
   if (IMAGE_TYPES.has(mime)) return <img className="topic-image" src={src} alt={alt} loading="lazy" referrerPolicy="no-referrer" />;
-  if (mime === "application/pdf") return <details className="topic-pdf" onToggle={event => setExpanded(event.currentTarget.open)}><summary>{alt || "PDF"}</summary>
+  if (mime === "application/pdf") return <div className="topic-pdf"><p role="status">{extractionLabel(extraction)}
+    {scope?.canWrite && extraction?.status !== "ready" && <button type="button" disabled={busy} onClick={() => {
+      setBusy(true); void request<MediaFile>(src.replace(/^\/api/, "").replace(/\/content$/, "/extract"), { method: "POST", body: {} })
+        .then(value => setExtraction(value.extraction ?? null)).catch(() => setExtraction({ status: "failed", error: "retry_unavailable" }))
+        .finally(() => setBusy(false));
+    }}>{busy ? "Extracting text…" : "Retry text extraction"}</button>}</p>
+    <details onToggle={event => setExpanded(event.currentTarget.open)}><summary>{alt || "PDF"}</summary>
     {expanded && <><Suspense fallback={<span role="status">Loading PDF…</span>}><PdfViewer url={src} name={alt || "PDF"} /></Suspense>
-    <a href={src} download>Download PDF</a></>}</details>;
+    <a href={src} download>Download PDF</a></>}</details></div>;
   return <span role="status">Loading attachment…</span>;
 }
 
@@ -60,15 +68,14 @@ async function imagePreview(file: File): Promise<string> {
   } finally { bitmap.close(); }
 }
 
-async function pdfText(bytes: Uint8Array): Promise<string> {
-  const { getDocument, GlobalWorkerOptions } = await import("pdfjs-dist");
-  const worker = await import("pdfjs-dist/build/pdf.worker.min.mjs?url");
-  GlobalWorkerOptions.workerSrc = worker.default;
-  const task = getDocument({ data: bytes.slice(), useSystemFonts: true, disableFontFace: true });
-  const timer = setTimeout(() => void task.destroy(), 15000);
-  try {
-    return await collectPdfText(await task.promise);
-  } finally { clearTimeout(timer); await task.destroy(); }
+export function extractionLabel(value?: Extraction | null): string {
+  if (value?.status === "ready") return `Text available for research${value.total_pages ? ` · ${value.pages_read}/${value.total_pages} pages` : ""}. Formulas and figures may need direct inspection.`;
+  if (value?.status === "partial") return "Only part of this PDF is readable as text. Check coverage or provide its TeX/text source.";
+  if (value?.error === "password_required") return "This PDF needs a password. Upload an unlocked copy or its TeX/text source.";
+  if (value?.error === "extractor_busy") return "PDF uploaded. Text extraction is busy; retry in a moment.";
+  if (value?.error === "no_text") return "No text was found in this PDF. Scanned pages need OCR or a TeX/text source.";
+  if (["extraction_timeout", "resource_limit"].includes(value?.error ?? "")) return "PDF uploaded. Text extraction reached its resource limit; retry or provide a smaller document or text source.";
+  return "PDF uploaded, but readable text is unavailable. Retry extraction or provide OCR, TeX, or text source.";
 }
 
 export async function uploadMedia(file: File, organizationId: string, topicId: string): Promise<MediaFile> {
@@ -85,7 +92,7 @@ export async function uploadMedia(file: File, organizationId: string, topicId: s
   for (let offset = 0, index = 0; offset < bytes.length; offset += upload.chunk_bytes, index++) {
     await request(root + `/${upload.id}/chunks/${index}`, { method: "PUT", body: { data_base64: base64(bytes.slice(offset, offset + upload.chunk_bytes)) } });
   }
-  const preview_text = mime === "application/pdf" ? await pdfText(bytes).catch(() => "") : "";
+  const preview_text = ""; // The server extracts bounded text from the exact private PDF bytes.
   const vision_base64 = IMAGE_TYPES.has(mime) ? await imagePreview(file).catch(() => "") : "";
   return request<MediaFile>(root + `/${upload.id}/finish`, { method: "POST", body: { preview_text, vision_base64 } });
 }
@@ -98,7 +105,10 @@ export function AttachmentButton({ organizationId, topicId, onInsert, onError, d
     title="Attach picture or PDF" onClick={() => input.current?.click()}><span aria-hidden="true">{busy ? "…" : "▶"}</span></button>
     <input hidden ref={input} type="file" accept="image/png,image/jpeg,image/webp,application/pdf" onChange={event => {
       const file = event.target.files?.[0]; event.target.value = ""; if (!file) return;
-      setBusy(true); setError(""); void uploadMedia(file, organizationId, topicId).then(value => onInsert(value.markdown))
+      setBusy(true); setError(""); void uploadMedia(file, organizationId, topicId).then(value => {
+        onInsert(value.markdown);
+        if (value.mime === "application/pdf" && value.extraction?.status !== "ready") setError(extractionLabel(value.extraction));
+      })
         .catch(cause => { setError(cause instanceof Error ? cause.message : "Attachment upload failed"); onError?.(cause); }).finally(() => setBusy(false));
     }} />{error && <span role="alert" className="org-error">{error}</span>}</span>;
 }

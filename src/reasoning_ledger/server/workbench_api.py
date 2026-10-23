@@ -1,8 +1,9 @@
 """Authenticated mathematical ledger and versioned research artifacts."""
 
 from typing import Annotated
+from urllib.parse import quote
 
-from fastapi import Depends
+from fastapi import Depends, Response
 from pydantic import Field
 
 from ..service import RevisionObservations
@@ -122,7 +123,17 @@ def install_routes(app, store, authenticated):
 
     @app.get(artifact_prefix + "/read")
     def file(organization_id: str, topic_id: str, user: User, path: str, revision: int | None = None):
-        return artifacts.read(user, organization_id, topic_id, path, revision, length=64000)
+        return artifacts.read(user, organization_id, topic_id, path, revision, length=16000)
+
+    @app.get(artifact_prefix + "/content")
+    def file_content(organization_id: str, topic_id: str, user: User, path: str, revision: int, download: bool = False):
+        body, checksum = artifacts.content(user, organization_id, topic_id, path, revision)
+        disposition = "attachment" if download else "inline"
+        return Response(body, media_type="text/plain; charset=utf-8", headers={
+            "Content-Disposition": disposition + "; filename*=UTF-8''" + quote(path.rsplit("/", 1)[-1], safe=""),
+            "ETag": '"' + checksum + '"', "Cache-Control": "no-store", "X-Content-Type-Options": "nosniff",
+            "Content-Security-Policy": "default-src 'none'; sandbox; frame-ancestors 'none'",
+        })
 
     @app.post(artifact_prefix)
     def write_file(organization_id: str, topic_id: str, body: ArtifactWrite, user: User):

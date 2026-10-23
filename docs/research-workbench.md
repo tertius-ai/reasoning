@@ -33,8 +33,10 @@ to the newest loaded message after scrolling away.
 3. Use `/tools` to select a research strategy or add topic
    instructions. Fresh-context review is automatic by default; optionally
    override its model or disable it.
-4. `/ledger` opens the scoped mathematical browser; `/files` opens shared
-   project text artifacts. `/reviews` opens independent reviews.
+4. `/ledger` opens the scoped mathematical browser; **Project files** or `/files`
+   opens shared project text artifacts with source, copy, and complete-revision
+   download actions. Saved-file tool results include clickable revision links.
+   `/reviews` opens independent reviews.
    Expand a review for its report or cancel unfinished work.
 5. Use `/goal` or `/goal OBJECTIVE` only when the agent should continue across
    turns. Specify acceptance criteria and USD, time, turn, and tool-call limits.
@@ -186,9 +188,10 @@ their submitted inputs. A private audience is not a promise of offline execution
 LMFDB supports
 typed field filters and page offsets, not Python-literal queries or unrestricted
 database access. No claim of access to unpublished/private LMFDB collections is
-made. PDF extraction is not performed on the organization host; `web_fetch`
-refuses PDFs and other binary media and names the arXiv and attachment readers
-instead. Transient failures of `web_fetch` and the mathematical adapters
+made. `web_fetch` extracts PDF text in the same bounded, isolated worker used by
+attachments and reports coverage or failure explicitly. Other binary media are
+refused. Scans require OCR or a text source; arXiv has dedicated HTML and source
+readers. Transient failures of `web_fetch` and the mathematical adapters
 (connection failures or HTTP 429/502/503/504) receive one bounded retry. The
 research arXiv, Crossref and OEIS tools share one gateway per installation: arXiv
 requests are at least three seconds apart across concurrent runs; connection,

@@ -3,6 +3,7 @@
 import hashlib
 import re
 import time
+from urllib.parse import urlencode
 
 from .store import StoreError, _id, _row
 
@@ -11,6 +12,13 @@ PATH = re.compile(r"[A-Za-z0-9_.-][A-Za-z0-9._/-]{0,199}\Z")
 
 def safe_path(path):
     return isinstance(path, str) and PATH.fullmatch(path) and all(part not in {"", ".", ".."} for part in path.split("/"))
+
+
+def file_links(org, topic, path, revision):
+    query = urlencode({"path": path, "revision": revision})
+    url = f"/api/organizations/{org}/topics/{topic}/research-files/content?{query}"
+    return {"url": url, "download_url": url + "&download=true",
+            "markdown": f"[{path} (revision {revision})]({url})"}
 
 
 class ResearchArtifacts:
@@ -28,7 +36,7 @@ class ResearchArtifacts:
         with self.store.transaction() as db:
             project = self._topic(db, user, org, topic)
             return [
-                dict(row)
+                {**dict(row), **file_links(org, topic, row["path"], row["head_revision"])}
                 for row in db.execute(
                     "SELECT a.*,v.sha256,COALESCE(o.total_characters,LENGTH(v.text)) AS total_characters,v.created_at "
                     "FROM research_artifacts a "
@@ -42,6 +50,8 @@ class ResearchArtifacts:
             ]
 
     def read(self, user, org, topic, path, revision=None, offset=0, length=12000):
+        if revision is not None and (type(revision) is not int or not 1 <= revision <= 2**63 - 1):
+            raise StoreError(400, "select an exact saved file revision")
         with self.store.transaction() as db:
             project = self._topic(db, user, org, topic)
             row = _row(
@@ -55,9 +65,23 @@ class ResearchArtifacts:
             row.pop("text")
             from .artifact_chunks import read
 
-            return {**row, **read(db, row["id"], row["revision"], offset, length)}
+            return {**row, **read(db, row["id"], row["revision"], offset, length),
+                    **file_links(org, topic, path, row["revision"])}
 
-    def write(self, user, org, topic, path, text, expected_sha256=None, run_id=None):
+    def content(self, user, org, topic, path, revision):
+        from .artifact_chunks import full
+
+        if type(revision) is not int or not 1 <= revision <= 2**63 - 1:
+            raise StoreError(400, "select an exact saved file revision")
+        with self.store.transaction() as db:
+            project = self._topic(db, user, org, topic)
+            row = _row(db.execute("SELECT a.id,v.sha256 FROM research_artifacts a JOIN research_artifact_versions v "
+                                  "ON v.artifact_id=a.id AND v.revision=? "
+                                  "WHERE a.organization_id=? AND a.project_id=? AND a.path=?",
+                                  (revision, org, project, path)).fetchone())
+            return full(db, row["id"], revision).encode("utf8"), row["sha256"]
+
+    def write(self, user, org, topic, path, text, expected_sha256=None, run_id=None, *, actor_id=None):
         try:
             valid = isinstance(text, str) and len(text.encode("utf8")) <= 256 * 1024 and "\0" not in text
         except UnicodeError:
@@ -66,7 +90,8 @@ class ResearchArtifacts:
             raise StoreError(400, "artifact requires a safe relative name and at most 256 KiB of UTF-8 text")
         with self.store.transaction(write=True) as db:
             project = self._topic(db, user, org, topic, write=True)
-            return self._write(db, user, org, project, path, text, expected_sha256, topic=topic, run_id=run_id)
+            saved = self._write(db, actor_id or user, org, project, path, text, expected_sha256, topic=topic, run_id=run_id)
+            return {**saved, **file_links(org, topic, path, saved["revision"])}
 
     def _write(self, db, user, org, project, path, text, expected_sha256=None, *, topic=None, run_id=None, strict=False):
         from .artifact_chunks import MAX_BYTES, put
@@ -124,7 +149,8 @@ def register_artifacts(research):
     )(lambda: artifacts.list(research.user, research.org, research.topic))
     research.registry.tool(
         name="artifact_write",
-        description="Save a project text file automatically. Overwrites require the current SHA-256; all revisions are retained.",
+        description="Save a persistent project text file. Return its clickable revision link to the user. "
+                    "Overwrites require the current SHA-256; all revisions are retained.",
         risk="write",
         input_schema=schema(
             {"path": string(200), "text": {"type": "string", "maxLength": 64000}, "expected_sha256": string(64)}, ["path", "text"]

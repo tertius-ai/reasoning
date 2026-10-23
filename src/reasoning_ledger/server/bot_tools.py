@@ -103,6 +103,12 @@ class BotTools:
                                              "offset": {"type": "integer", "minimum": 0},
                                              "length": {"type": "integer", "minimum": 1, "maximum": 12000}}, ["path"])},
                 ])
+            if "knowledge:write" in scopes:
+                tools.append({"name": "artifact_write", "description": "Save a persistent project text file and return its "
+                              "clickable revision link. Overwrites require the current SHA-256.",
+                              "input_schema": schema({"path": {"type": "string", "maxLength": 200},
+                                  "text": {"type": "string", "maxLength": 64000},
+                                  "expected_sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"}}, ["path", "text"])})
             tools.append({"name": "topic_history", "description": "Read a small page of this topic's earlier conversation on demand.",
                 "input_schema": {"type": "object", "properties": {"before": {"type": "integer", "minimum": 1},
                     "limit": {"type": "integer", "minimum": 1, "maximum": 20}}, "additionalProperties": False}})
@@ -288,11 +294,19 @@ class BotTools:
                 db.execute("INSERT INTO bot_tool_receipts(run_id,name,result_json,created_at) VALUES(?,?,?,?)",
                            (run_id, name, json.dumps(result), int(time.time())))
                 return result
-        if name in {"artifact_list", "research_file_read"}:
+        if name in {"artifact_list", "research_file_read", "artifact_write"}:
             from .research_artifacts import ResearchArtifacts
 
-            artifacts = ResearchArtifacts(self.store, authorize=lambda db: self.runtime.leased(db, credential, run_id, lease))
-            method = artifacts.list if name == "artifact_list" else artifacts.read
+            def authorize_file(db):
+                bot, _ = self.runtime.leased(db, credential, run_id, lease)
+                needed = "knowledge:write" if name == "artifact_write" else "knowledge:read"
+                if needed not in json.loads(bot["scopes_json"]):
+                    raise StoreError(403, "this bot no longer grants the required file access")
+
+            artifacts = ResearchArtifacts(self.store, authorize=authorize_file)
+            method = {"artifact_list": artifacts.list, "research_file_read": artifacts.read, "artifact_write": artifacts.write}[name]
+            if name == "artifact_write":
+                arguments = {**arguments, "actor_id": context["bot_id"]}
             return method(context["owner_id"], scope["organization_id"], scope["topic_id"], **arguments)
         if name.startswith("media_"):
             from .research_media import MEDIA_READ_TOOLS, ResearchMedia, media_tools

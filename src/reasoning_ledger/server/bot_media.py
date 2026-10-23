@@ -175,6 +175,29 @@ def register_bot_media(gateway, registry, execute=None):
     from .bot_gateway import workspace_open
 
     available = {tool.name for tool in registry.list()}
+    if "artifact_write" in available:
+        @registry.tool(
+            name="workspace_publish_text", risk="write",
+            description="Publish a private workspace .tex or text file as a persistent project research file, "
+                        "up to 30 KiB. Return its exact revision link to the user; overwrites need the current SHA-256.",
+            input_schema={"type": "object", "properties": {
+                "path": {"type": "string", "minLength": 1, "maxLength": 200},
+                "expected_sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+            }, "required": ["path"], "additionalProperties": False},
+        )
+        def publish_text(path, expected_sha256=None):
+            with workspace_open(gateway.workspace, path) as descriptor, os.fdopen(descriptor, "rb", closefd=False) as stream:
+                body = stream.read(30 * 1024 + 1)
+            if len(body) > 30 * 1024:
+                raise BotClientError("publish a text source of at most 30 KiB or use the shared versioned workspace tools")
+            try:
+                text = body.decode("utf8")
+            except UnicodeError:
+                raise BotClientError("publish_text requires UTF-8 text; use workspace_publish_media for a PDF") from None
+            arguments = {"path": path, "text": text}
+            if expected_sha256 is not None:
+                arguments["expected_sha256"] = expected_sha256
+            return registry.invoke("artifact_write", arguments)
     if "media_download_chunk" in available:
         register_fetch(gateway, registry)
     if not {"media_begin", "media_chunk", "media_finish"} <= available:

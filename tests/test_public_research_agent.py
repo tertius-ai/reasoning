@@ -16,6 +16,67 @@ from reasoning_ledger.server.research_goals import ResearchGoals
 from reasoning_ledger.server.usage_store import UsageStore
 
 
+def test_web_fetch_reads_pdf_text_and_reports_unreadable_originals(installation, monkeypatch):
+    from test_organization_research_workbench import source_run
+    from test_public_media import text_pdf
+
+    _, _, _, _, tools = source_run(installation)
+    body = text_pdf("An exact public source.")
+
+    async def fetch(url):
+        return body, {"content-type": "application/pdf"}
+
+    monkeypatch.setattr("reasoning_ledger.server.research_tools.public_get", fetch)
+    result = tools.invoke("web_fetch", {"url": "https://example.org/paper.pdf"})["result"]
+    assert "An exact public source." in result["text"] and result["extraction"]["status"] == "ready"
+    body = text_pdf(password="private")
+    result = tools.invoke("web_fetch", {"url": "https://example.org/locked.pdf"})["result"]
+    assert result["text"] == "" and result["extraction"]["error"] == "password_required"
+
+
+def test_saved_tex_has_a_working_bounded_preview_and_complete_pinned_download(installation):
+    import hashlib
+
+    _, state, client, owner, topics = prepare(installation)
+    root = f"/api/organizations/{owner['organization_id']}/topics/{topics[1]['id']}/research-files"
+    text = "\\documentclass{article}\n" + "Unicode α and a precise hypothesis.\n" * 1000
+    saved = client.post(root, json={"path": "roadmap.tex", "text": text}).json()
+    assert saved["revision"] == 1 and saved["url"] in saved["markdown"]
+    preview = client.get(root + "/read", params={"path": "roadmap.tex"})
+    assert preview.status_code == 200 and preview.json()["truncated"] is True
+    assert len(preview.json()["text"]) == 16000
+    download = client.get(saved["download_url"])
+    assert download.status_code == 200 and download.content == text.encode("utf8")
+    assert download.headers["ETag"] == '"' + hashlib.sha256(download.content).hexdigest() + '"'
+    assert "attachment" in download.headers["Content-Disposition"] and "roadmap.tex" in download.headers["Content-Disposition"]
+    second = client.post(root, json={"path": "roadmap.tex", "text": "A newer version.\n", "expected_sha256": saved["sha256"]})
+    assert second.status_code == 200 and second.json()["revision"] == 2
+    assert client.get(saved["url"]).content == text.encode("utf8")
+    with state.store.transaction(write=True) as db:
+        db.execute("DELETE FROM memberships WHERE organization_id=? AND user_id=?", (owner["organization_id"], owner["user_id"]))
+    denied = client.get(saved["download_url"])
+    assert denied.status_code in {403, 404} and text not in denied.text
+
+
+def test_chunked_project_file_download_is_complete_and_checks_its_retained_digest(installation):
+    from reasoning_ledger.server.research_artifacts import ResearchArtifacts
+
+    _, state, client, owner, topics = prepare(installation)
+    user, org, topic = owner["user_id"], owner["organization_id"], topics[1]["id"]
+    files = ResearchArtifacts(state.store)
+    text = "An exact UTF-8 source line: αβγ\n" * 14000
+    with state.store.transaction(write=True) as db:
+        project = state.store._topic_access(db, user, org, topic)[1]["id"]
+        files._write(db, user, org, project, "long.tex", text, topic=topic)
+    saved = files.read(user, org, topic, "long.tex")
+    assert saved["truncated"] is True and client.get(saved["download_url"]).content == text.encode()
+    with state.store.transaction(write=True) as db:
+        # Inject storage corruption past the normal immutability guard.
+        db.execute("DROP TRIGGER research_chunk_immutable")
+        db.execute("UPDATE research_blob_chunks SET text='corrupt' WHERE organization_id=? AND ordinal=0", (org,))
+    assert client.get(saved["download_url"]).status_code == 409
+
+
 class ResearchFixture:
     def __init__(self, mode="tools"):
         self.mode, self.requests, self.turn = mode, [], 0
