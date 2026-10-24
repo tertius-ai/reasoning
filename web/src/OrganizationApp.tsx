@@ -51,6 +51,7 @@ import {
 const loadKnowledgeWorkspace = () => import("./KnowledgeWorkspace");
 const KnowledgeWorkspace = lazy(() => loadKnowledgeWorkspace().then(module => ({ default: module.KnowledgeWorkspace })));
 const KnowledgeBrowser = lazy(() => import("./KnowledgeBrowser").then(module => ({ default: module.KnowledgeBrowser })));
+import { FeedbackAdministration, FeedbackButton } from "./Feedback";
 const BotAdministration = lazy(() => import("./BotAdministration").then(module => ({ default: module.BotAdministration })));
 const ComputeAdministration = lazy(() => import("./ComputeAdministration").then(module => ({ default: module.ComputeAdministration })));
 const OrganizationModelBrowser = lazy(() => import("./OrganizationUsage").then(module => ({ default: module.OrganizationModelBrowser })));
@@ -1270,7 +1271,7 @@ function Conversation({ organizationId, topic, members, user, canWrite, canManag
 }
 
 function Administration({ organization, onClose, onRefresh, onAuthLost }: { organization: Organization; onClose: () => void; onRefresh: () => void; onAuthLost: () => void }) {
-  const [tab, setTab] = useState<"members" | "invitations" | "ai" | "bots" | "compute">("members");
+  const [tab, setTab] = useState<"members" | "invitations" | "ai" | "bots" | "compute" | "feedback">("members");
   const [members, setMembers] = useState<Member[]>([]);
   const [invitations, setInvitations] = useState<Invitation[]>([]);
   const [mail, setMail] = useState<InvitationMail>({ enabled: false, daily_limit: null, worker_running: false });
@@ -1318,10 +1319,11 @@ function Administration({ organization, onClose, onRefresh, onAuthLost }: { orga
     finally { setBusy(false); }
   };
   return <Dialog title={organization.name + " administration"} onClose={onClose}>
-    <nav className="org-admin-tabs" aria-label="Administration">{(["members", "invitations", "ai", "bots", "compute"] as const).map((value) =>
+    <nav className="org-admin-tabs" aria-label="Administration">{(["members", "invitations", "ai", "bots", "compute", "feedback"] as const).map((value) =>
       <button key={value} aria-pressed={tab === value} onClick={() => { setTab(value); setError(""); }}>{value === "ai" ? "Inference" : value[0].toUpperCase() + value.slice(1)}</button>)}</nav>
     {error && <p role="alert" className="org-error">{error}</p>}
     {tab === "bots" && <LazyView label="Bot administration"><BotAdministration key={organization.id} organizationId={organization.id} /></LazyView>}
+    {tab === "feedback" && <FeedbackAdministration key={organization.id} organizationId={organization.id} onAuthLost={onAuthLost} />}
     {tab === "compute" && <LazyView label="Compute administration"><ComputeAdministration key={organization.id} organizationId={organization.id} onAuthLost={onAuthLost} /></LazyView>}
     {tab === "members" && <ul className="org-admin-list">{members.map((member) => <li key={member.id}><div><strong>{member.name}</strong><small>{member.email}</small></div>
       {organization.role === "owner" || !["owner", "admin"].includes(member.role) ? <>
@@ -1496,6 +1498,14 @@ export function OrganizationApp({ user, onAccount, onAuthenticated, onSignedOut,
   const draftKey = user && organization && topic ? user.id + "/" + organization.id + "/" + topic.id : "";
   const draft = drafts[draftKey] ?? { text: "", clientId: "", attempted: false };
   const preferenceRefresh = useCallback(() => setRefresh((value) => value + 1), []);
+  // Where a bug report was written, by identifiers only; a direct conversation is never named.
+  const describeView = () => [
+    knowledgeView ? "knowledge " + knowledgeView : direct ? "direct message" : topic ? `topic ${KIND_SYMBOL[topic.kind]} ${topic.id}` : "no topic open",
+    ...(organization ? ["organization " + organization.id] : []),
+    ...[admin && "Administration", tool && { knowledge: "Knowledge", prices: "Model capabilities", usage: "Usage and energy", bots: "My bots" }[tool],
+      information && "Information", helpOpen && "Help", shortcutsOpen && "Keyboard shortcuts", entitySettings && entitySettings.kind + " settings",
+    ].filter(Boolean).map(name => "open: " + name),
+  ].join(" · ");
   const beginCreation = (kind: Creation, parentId?: string) => { setCreationParent(parentId); setCreation(kind); };
   // Signing out unmounts this workspace, which discards drafts, retained attempts, and shared reads.
   const authLost = onSignedOut;
@@ -1752,12 +1762,13 @@ export function OrganizationApp({ user, onAccount, onAuthenticated, onSignedOut,
           onProjectSettings={(id) => setEntitySettings({ kind: "project", id })} onChannelSettings={(id) => setEntitySettings({ kind: "channel", id })}
           onTopicSettings={(id) => setEntitySettings({ kind: "topic", id })} />
         {!hierarchy.projects.length && organization && <p className="org-tree-empty">{organization.role === "viewer" ? "Projects will appear here." : "Create a project to begin."}</p>}
-        <footer><AccountMenu user={user} organization={organization} organizations={organizations} canCreateOrganization={canCreateOrganization}
+        <footer><div className="org-account-row"><AccountMenu user={user} organization={organization} organizations={organizations} canCreateOrganization={canCreateOrganization}
           onSwitch={switchOrganization} onAccount={() => setInformation("user")} onOrganization={() => setInformation("organization")}
           onAdmin={() => setAdmin(true)} onCreate={() => beginCreation("organization")} onKnowledge={() => setTool("knowledge")} onBots={() => setTool("bots")}
           onModels={() => setTool("prices")} onUsage={() => setTool("usage")}
           onShortcuts={() => setShortcutsOpen(true)}
-          onSignOut={() => void request("/auth/logout", { method: "POST", body: {} }).then(authLost).catch((cause) => setError(errorMessage(cause)))} /></footer>
+          onSignOut={() => void request("/auth/logout", { method: "POST", body: {} }).then(authLost).catch((cause) => setError(errorMessage(cause)))} />
+          {organization && <FeedbackButton organization={organization} onAuthLost={authLost} describeView={describeView} />}</div></footer>
       </aside>
       <main className="org-main">
         {helpOpen ? <LazyView label="Help"><HelpPage onClose={() => setHelpOpen(false)} /></LazyView> : knowledgeView && organization ? <MediaScope.Provider value={{ organizationId: organization.id }}><LazyView label="Research workspace"><KnowledgeWorkspace key={organization.id + knowledgeView} organization={organization} hierarchy={hierarchy} view={knowledgeView}

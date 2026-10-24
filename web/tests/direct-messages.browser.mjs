@@ -67,6 +67,35 @@ test("a member messages a colleague from People, who finds, reads and replies, t
     await member.getByRole("button", { name: "Accept invitation", exact: true }).click();
     await visible(member.getByRole("button", { name: "Account menu", exact: true }));
 
+    // Anyone can report a bug from the bug button at the right of their name; owners and administrators read it in Administration.
+    const bug = member.getByRole("button", { name: "Report a bug or send feedback", exact: true });
+    const [nameBox, bugBox] = await Promise.all([member.getByRole("button", { name: "Account menu", exact: true }).boundingBox(), bug.boundingBox()]);
+    assert.ok(bugBox.x > nameBox.x + 120, "the bug button sits at the right edge of the footer");
+    await bug.click();
+    const feedback = member.getByRole("dialog", { name: "Send feedback" });
+    await feedback.getByLabel("What happened").fill("The reply pointer stays highlighted.");
+    // Preview shows exactly what will be sent, including the diagnostics, and can send from there.
+    await feedback.getByRole("button", { name: "Preview", exact: true }).click();
+    const preview = member.getByRole("dialog", { name: "Report preview" });
+    await visible(preview.getByText("The reply pointer stays highlighted."));
+    await visible(preview.getByRole("heading", { name: /Failed requests/ }));
+    assert.match(await preview.innerText(), /organization [a-f0-9]{32}/);
+    await preview.getByRole("button", { name: "Close", exact: true }).click();
+    await preview.waitFor({ state: "detached" });
+    await feedback.getByRole("button", { name: "Preview", exact: true }).click();
+    await preview.getByRole("button", { name: "Send", exact: true }).click();
+    await visible(feedback.getByRole("status").filter({ hasText: "Your report went to the administrators of Mathematics" }));
+    await owner.getByRole("button", { name: "Account menu", exact: true }).click();
+    await owner.getByRole("button", { name: "Administration" }).click();
+    const administration = owner.getByRole("dialog");
+    await administration.getByRole("button", { name: "Feedback", exact: true }).click();
+    const report = administration.getByRole("listitem").filter({ hasText: "The reply pointer stays highlighted." });
+    await visible(report);
+    assert.match(await report.innerText(), /Researcher/);
+    await report.getByRole("button", { name: "Resolve", exact: true }).click();
+    await visible(report.getByRole("button", { name: "Reopen", exact: true }));
+    await administration.getByRole("button", { name: "Close dialog" }).click();
+
     // The owner clicks the member's name in People and sends a private message.
     const people = owner.getByRole("complementary", { name: "Online people and bots" });
     await people.getByRole("button", { name: "Researcher", exact: true }).click();

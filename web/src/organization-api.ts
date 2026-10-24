@@ -1,3 +1,4 @@
+import { recordFailedRequest } from "./diagnostics";
 import { observeRelease } from "./release";
 export type Account = { id: string; name: string; email: string; email_verified_at?: number | null };
 export type Role = "owner" | "admin" | "member" | "viewer";
@@ -254,14 +255,24 @@ async function send<T>(path: string, options: { method?: string; body?: unknown;
     const csrf = csrfCookie(document.cookie);
     if (csrf) headers["X-CSRF-Token"] = csrf;
   }
-  const response = await fetch("/api" + path, {
-    method: options.method ?? "GET", headers, credentials: "same-origin", cache: "no-store", signal: options.signal,
-    body: options.body === undefined ? undefined : JSON.stringify(options.body),
-  });
+  const method = options.method ?? "GET";
+  let response: Response;
+  try {
+    response = await fetch("/api" + path, {
+      method, headers, credentials: "same-origin", cache: "no-store", signal: options.signal,
+      body: options.body === undefined ? undefined : JSON.stringify(options.body),
+    });
+  } catch (cause) {
+    // A cancelled request is not a failure; anything else never reached the server.
+    if (!options.signal?.aborted) recordFailedRequest(method, path, 0, "network error: the request did not reach the server");
+    throw cause;
+  }
   observeRelease(response);
   if (!response.ok) {
     const body = await response.json().catch(() => null);
-    throw new ApiError(response.status, typeof body?.detail === "string" ? body.detail : UNDESCRIBED_ERROR);
+    const detail = typeof body?.detail === "string" ? body.detail : UNDESCRIBED_ERROR;
+    recordFailedRequest(method, path, response.status, detail);
+    throw new ApiError(response.status, detail);
   }
   return response.status === 204 ? undefined as T : response.json();
 }
