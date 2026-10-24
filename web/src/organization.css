@@ -30,7 +30,9 @@
 .org-wordmark img { width: 28px; height: 28px; }
 .org-appbar { height: 44px; flex: none; display: flex; align-items: center; gap: 8px; padding: 6px 12px; border-bottom: 1px solid var(--border); }
 .org-brand { display: inline-flex; flex: none; align-items: baseline; gap: 6px; color: var(--foreground); font: 500 14px var(--font-mono); letter-spacing: -.01em; white-space: nowrap; }
-.org-brand-mark { color: var(--teal); font-size: 16px; }
+/* The drawn mark takes the place of a 16px ∴: the same ink size and side bearings (its 0.6em advance). A baseline-aligned
+   flex item sits on the baseline by its bottom edge, so a relative offset lifts the dots to the glyph's height above it. */
+.org-brand-mark { position: relative; top: -.072em; flex: none; width: .54em; height: .4866em; margin: 0 .032em 0 .028em; color: var(--teal); font-size: 16px; }
 .org-auth-card .org-brand { font-size: 16px; }
 .org-app .org-icon-button { display: inline-flex; align-items: center; justify-content: center; width: 28px; min-height: 28px; padding: 4px; flex: none; border-color: transparent; }
 .org-app a.org-icon-button { color:var(--foreground); text-decoration:none; border-bottom:0; }

@@ -310,8 +310,8 @@ test("three users create an organization, exchange alpha messages, and use durab
 
     await member.getByRole("button", { name: "Account menu", exact: true }).click();
     await member.getByRole("button", { name: "Sign out" }).click();
-    await visible(member.getByRole("heading", { name: "Sign in to Reasoning" }));
-    await member.reload(); await visible(member.getByRole("heading", { name: "Sign in to Reasoning" }));
+    await visible(member.getByRole("heading", { name: "Sign in to reasoning" }));
+    await member.reload(); await visible(member.getByRole("heading", { name: "Sign in to reasoning" }));
     assert.deepEqual(pageErrors, []);
     context.diagnostic("Verified owner setup, invitations, chat, typed topics, mathematics, reconnect, responsive layout, static-blog-to-editor navigation, shared blog styling, publication snapshots, and logout.");
   } catch (error) {
