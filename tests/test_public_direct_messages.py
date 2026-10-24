@@ -324,3 +324,110 @@ def test_direct_event_stream_is_participant_only_and_announces_messages(people):
             assert app.state.topic_events.watchers == 1
         finally:
             stream.close()
+
+
+def reply(people, conversation_id, content, client_id, reply_to, sender="first"):
+    return people[sender].post(people["root"] + f"/direct-conversations/{conversation_id}/messages",
+                               json={"content": content, "client_id": client_id, "reply_to": reply_to})
+
+
+def test_direct_replies_stay_in_their_conversation_and_form_threads(people):
+    direct = conversation(people)
+    other = conversation(people, recipient="admin_id")
+    root = people["root"] + f"/direct-conversations/{direct['id']}"
+    question = post(people, direct["id"], "Can you check Lemma 3.2?", "question").json()
+    aside = post(people, direct["id"], "Unrelated: seminar moved.", "aside", sender="second").json()
+    answer = reply(people, direct["id"], "The constant should be 2.", "answer", question["id"], sender="second")
+    assert answer.status_code == 201, answer.text
+    assert answer.json()["reply_to"] == question["id"]
+    # An exact retry returns the same message; the same client_id with another target is a conflict.
+    retried = reply(people, direct["id"], "The constant should be 2.", "answer", question["id"], sender="second")
+    assert retried.json()["id"] == answer.json()["id"]
+    assert post(people, direct["id"], "The constant should be 2.", "answer", sender="second").status_code == 409
+    elsewhere = post(people, other["id"], "Private to the admin.", "elsewhere").json()
+    for target in (elsewhere["id"], "0" * 32):
+        refused = reply(people, direct["id"], "Crossing conversations.", "cross-" + target[:4], target)
+        assert refused.status_code == 400, refused.text
+    nested = reply(people, direct["id"], "Thanks, agreed.", "nested", answer.json()["id"]).json()
+    expected = [question["id"], answer.json()["id"], nested["id"]]
+    for start in expected:
+        thread = people["first"].get(root + f"/messages/{start}/thread")
+        assert thread.status_code == 200, thread.text
+        assert thread.json()["root_id"] == question["id"] and thread.json()["truncated"] is False
+        assert [message["id"] for message in thread.json()["messages"]] == expected
+    assert [message["id"] for message in people["first"].get(root + f"/messages/{aside['id']}/thread").json()["messages"]] == [aside["id"]]
+    # Only the two participants can read a thread; administrators and the owner get the same refusal as for the conversation.
+    for outsider in ("admin", "owner"):
+        refused = people[outsider].get(root + f"/messages/{question['id']}/thread")
+        assert refused.status_code == people[outsider].get(root + "/messages").status_code and refused.status_code >= 400
+        assert "Lemma" not in refused.text
+    assert people["first"].get(root + f"/messages/{elsewhere['id']}/thread").status_code == 404
+
+
+PNG = b"\x89PNG\r\n\x1a\n" + b"\x00\x00\x00\rIHDR" + (2).to_bytes(4, "big") * 2 + b"\x08\x02\x00\x00\x00" + b"\x00" * 4 + b"\x00" * 40000
+PDF = b"%PDF-1.4\n1 0 obj << >> endobj\ntrailer << >>\n%%EOF\n"
+
+
+def upload(people, conversation_id, body, name, mime, sender="first", finish=True):
+    import base64
+    import hashlib
+
+    client, media = people[sender], people["root"] + f"/direct-conversations/{conversation_id}/media"
+    started = client.post(media, json={"name": name, "mime": mime, "size_bytes": len(body), "sha256": hashlib.sha256(body).hexdigest()})
+    if started.status_code != 200:
+        return started
+    identity, size = started.json()["id"], started.json()["chunk_bytes"]
+    for index in range(0, len(body), size):
+        chunk = base64.b64encode(body[index:index + size]).decode()
+        sent = client.put(media + f"/{identity}/chunks/{index // size}", json={"data_base64": chunk})
+        assert sent.status_code == 200, sent.text
+    return client.post(media + f"/{identity}/finish", json={}) if finish else started
+
+
+def test_direct_files_are_readable_only_by_the_two_participants(people):
+    direct = conversation(people)
+    picture = upload(people, direct["id"], PNG, "board.png", "image/png")
+    assert picture.status_code == 200, picture.text
+    file = picture.json()
+    assert file["url"].startswith(people["root"] + f"/direct-conversations/{direct['id']}/media/{file['id']}/")
+    assert file["markdown"] == f"![board.png]({file['url']})"
+    document = upload(people, direct["id"], PDF, "notes.pdf", "application/pdf").json()
+    sent = post(people, direct["id"], file["markdown"] + "\n" + document["markdown"] + "\n\nThe board after the seminar.", "files")
+    assert sent.status_code == 201, sent.text
+    second = people["second"]
+    assert second.get(file["url"].removesuffix("/content")).json()["size_bytes"] == len(PNG)
+    content = second.get(file["url"])
+    assert content.status_code == 200 and content.content == PNG and content.headers["content-type"] == "image/png"
+    assert "sandbox" in content.headers["content-security-policy"]
+    download = second.get(document["url"], params={"download": "true"})
+    assert download.content == PDF and download.headers["content-disposition"].startswith("attachment;")
+    # Organization owners and administrators are not participants, and the bytes are not topic media.
+    for outsider in (people["owner"], people["admin"]):
+        assert outsider.get(file["url"]).status_code == 404
+        assert outsider.get(file["url"].removesuffix("/content")).status_code == 404
+        assert upload({**people, "outsider": outsider}, direct["id"], PDF, "x.pdf", "application/pdf", sender="outsider").status_code == 404
+    with people["store"].transaction() as db:
+        assert db.execute("SELECT COUNT(*) FROM research_media").fetchone()[0] == 0
+    # A file is addressed through its own conversation only.
+    other = conversation(people, recipient="admin_id")
+    assert people["first"].get(file["url"].replace(direct["id"], other["id"])).status_code == 404
+    # The exact revision is required.
+    assert second.get(file["url"].replace(file["sha256"], "0" * 64)).status_code == 404
+
+
+def test_direct_uploads_are_checked_and_unfinished_ones_stay_with_their_uploader(people):
+    direct = conversation(people)
+    pending = upload(people, direct["id"], PDF, "draft.pdf", "application/pdf", finish=False).json()
+    media = people["root"] + f"/direct-conversations/{direct['id']}/media/{pending['id']}"
+    assert people["second"].post(media + "/finish", json={}).status_code == 404
+    assert people["first"].post(media + "/finish", json={}).status_code == 200
+    assert people["first"].post(media + "/finish", json={}).status_code == 200
+    assert upload(people, direct["id"], PDF, "fake.png", "image/png").status_code == 400
+    assert upload(people, direct["id"], PDF, "page.html", "text/html").status_code == 400
+    assert upload(people, direct["id"], PDF, "bad/name.pdf", "application/pdf").status_code == 400
+    # A block refuses new files in both directions, with the same messages as for text.
+    assert people["second"].put(people["root"] + "/direct-blocks/" + people["first_id"], json={}).status_code == 204
+    refused = upload(people, direct["id"], PDF, "late.pdf", "application/pdf")
+    assert refused.status_code == 403 and refused.json()["detail"] == UNAVAILABLE
+    refused = upload(people, direct["id"], PDF, "late.pdf", "application/pdf", sender="second")
+    assert refused.status_code == 403 and refused.json()["detail"] == SENDER_BLOCKED

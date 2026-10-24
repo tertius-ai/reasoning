@@ -198,7 +198,7 @@ class DirectMessages:
             result = self._reactions(db, user_id, [self._message(row) for row in rows])
             return list(reversed(result)) if before is not None else result
 
-    def post(self, user_id, organization_id, conversation_id, content: str, client_id: str) -> dict[str, Any]:
+    def post(self, user_id, organization_id, conversation_id, content: str, client_id: str, reply_to: str | None = None) -> dict[str, Any]:
         with self.store.transaction(write=True) as db:
             _, conversation = self.access(db, user_id, organization_id, conversation_id, write=True)
             existing = db.execute(
@@ -209,15 +209,22 @@ class DirectMessages:
                 original = db.execute(
                     "SELECT content FROM direct_message_revisions WHERE message_id=? AND revision=0", (existing["id"],)
                 ).fetchone()
-                if existing["conversation_id"] != conversation_id or (original[0] if original else existing["content"]) != content:
+                if (existing["conversation_id"] != conversation_id or (original[0] if original else existing["content"]) != content
+                        or existing["reply_to"] != reply_to):
                     raise StoreError(409, "client_id was already used for a different message")
                 return self._reactions(db, user_id, [self._message(existing)])[0]
             self._deliverable(db, organization_id, user_id, conversation["other_user_id"])
+            # A reply names a message of this conversation only, so it never links or reveals another conversation.
+            if reply_to is not None and not db.execute(
+                "SELECT 1 FROM direct_messages WHERE organization_id=? AND conversation_id=? AND id=?",
+                (organization_id, conversation_id, reply_to),
+            ).fetchone():
+                raise StoreError(400, "a reply must answer a message in the same conversation")
             message_id = _id()
             db.execute(
-                "INSERT INTO direct_messages(id,organization_id,conversation_id,author_id,content,client_id,created_at) "
-                "VALUES(?,?,?,?,?,?,?)",
-                (message_id, organization_id, conversation_id, user_id, content, client_id, int(time.time())),
+                "INSERT INTO direct_messages(id,organization_id,conversation_id,author_id,content,client_id,created_at,reply_to) "
+                "VALUES(?,?,?,?,?,?,?,?)",
+                (message_id, organization_id, conversation_id, user_id, content, client_id, int(time.time()), reply_to),
             )
             message = self._message(db.execute("SELECT * FROM direct_messages WHERE id=?", (message_id,)).fetchone())
             # The author has read everything up to their own message.
@@ -274,6 +281,41 @@ class DirectMessages:
                 "WHERE organization_id=? AND message_id=? ORDER BY revision",
                 (organization_id, message_id),
             )]
+
+    def thread(self, user_id, organization_id, conversation_id, message_id) -> dict[str, Any]:
+        """The thread containing `message_id`: its root and every reply below it, oldest first, at most THREAD_LIMIT."""
+        from .message_replies import THREAD_LIMIT
+
+        with self.store.transaction() as db:
+            self.access(db, user_id, organization_id, conversation_id)
+            target = "SELECT id,reply_to FROM direct_messages WHERE organization_id=? AND conversation_id=? AND id=?"
+            root = db.execute(target, (organization_id, conversation_id, message_id)).fetchone()
+            if root is None:
+                raise StoreError(404, "message not found")
+            seen = {root["id"]}
+            while root["reply_to"] and len(seen) < THREAD_LIMIT:
+                parent = db.execute(target, (organization_id, conversation_id, root["reply_to"])).fetchone()
+                if parent is None or parent["id"] in seen:
+                    break
+                seen.add(parent["id"])
+                root = parent
+            ids, frontier, truncated = [root["id"]], [root["id"]], False
+            while frontier:
+                placeholders = ",".join("?" * len(frontier))
+                children = [row["id"] for row in db.execute(
+                    f"SELECT id FROM direct_messages WHERE organization_id=? AND conversation_id=? AND reply_to IN ({placeholders}) "
+                    "ORDER BY sequence", (organization_id, conversation_id, *frontier))]
+                children = [child for child in children if child not in ids]
+                if len(ids) + len(children) > THREAD_LIMIT:
+                    children, truncated = children[: THREAD_LIMIT - len(ids)], True
+                ids.extend(children)
+                frontier = children
+            placeholders = ",".join("?" * len(ids))
+            rows = db.execute(
+                f"SELECT * FROM direct_messages WHERE organization_id=? AND conversation_id=? AND id IN ({placeholders}) ORDER BY sequence",
+                (organization_id, conversation_id, *ids)).fetchall()
+            messages = self._reactions(db, user_id, [self._message(row) for row in rows])
+            return {"root_id": root["id"], "message_id": message_id, "messages": messages, "truncated": truncated}
 
     def updates(self, user_id, organization_id, conversation_id, after=0, limit=200, reaction_after=0) -> dict[str, Any]:
         with self.store.transaction() as db:
@@ -366,6 +408,7 @@ class Recipient(RequestInput):
 class DirectMessage(RequestInput):
     content: Annotated[str, Field(min_length=1, max_length=16000, pattern=r"\S")]
     client_id: Annotated[str, Field(min_length=1, max_length=128)]
+    reply_to: Annotated[str | None, Field(pattern=r"^[a-f0-9]{32}$")] = None
 
 
 class DirectMessageEdit(RequestInput):
@@ -420,7 +463,11 @@ def install_routes(app: FastAPI, store: Store, authenticated: Callable) -> None:
 
     @app.post(conversation + "/messages", status_code=201)
     def post_message(organization_id: str, conversation_id: str, body: DirectMessage, user: User):
-        return direct.post(user, organization_id, conversation_id, body.content, body.client_id)
+        return direct.post(user, organization_id, conversation_id, body.content, body.client_id, body.reply_to)
+
+    @app.get(conversation + "/messages/{message_id}/thread")
+    def message_thread(organization_id: str, conversation_id: str, message_id: str, user: User):
+        return direct.thread(user, organization_id, conversation_id, message_id)
 
     @app.get(conversation + "/message-updates")
     def message_updates(organization_id: str, conversation_id: str, user: User,

@@ -16,13 +16,17 @@ test("help shows the verified commit and server status, refreshes on request, an
     const page = await context.newPage(), errors = [];
     page.on("pageerror", error => errors.push(error.message));
     const revision = "0123456789abcdef0123456789abcdef01234567";
-    let checks = 0, failing = false;
+    let checks = 0, failing = false, degraded = false;
     await page.route("**/api/**", async route => {
       const path = new URL(route.request().url()).pathname;
       let data = [];
       if (path === "/api/health") {
         checks += 1;
         if (failing) return route.fulfill({ status: 502, contentType: "text/html", body: "<h1>Bad gateway</h1>" });
+        // A stopped required worker: the server answers 503 with its own health report.
+        if (degraded) return route.fulfill({ status: 503, contentType: "application/json", body: JSON.stringify({
+          status: "degraded", initialized: true, inference_enabled: true, inference_worker_running: true, workflow_worker_running: true,
+          webhook_worker_running: false, release_id: "e".repeat(64), source_revision: revision, source_modified: false, schema_version: 42 }) });
         data = { status: "ok", initialized: true, mail_worker_running: true, release_id: "e".repeat(64), source_revision: revision,
           source_modified: false, schema_version: 42, uptime_seconds: 7260 };
       } else if (path === "/api/auth/me") data = { id: "alice", email: "alice@example.org", name: "alice" };
@@ -59,19 +63,24 @@ test("help shows the verified commit and server status, refreshes on request, an
     assert.equal(await summary.getByRole("link").count(), 0, "a failed check does not keep a stale commit link");
     assert.equal(checks, opened + 1, "refresh checks once");
 
-    failing = false;
+    failing = false; degraded = true;
+    await summary.getByRole("button", { name: "Refresh" }).click();
+    await summary.getByText("Degraded · initialized · webhook worker stopped · schema 42").waitFor();
+    await summary.getByRole("link", { name: revision.slice(0, 12) }).waitFor();
+    assert.equal(checks, opened + 2, "a degraded report is shown, not treated as a failure");
+    degraded = false;
     await context.setOffline(true);
     await summary.getByRole("button", { name: "Refresh" }).click();
     await summary.getByText("Unavailable: this device is offline").waitFor();
-    assert.equal(checks, opened + 1, "an offline device does not attempt a request");
+    assert.equal(checks, opened + 2, "an offline device does not attempt a request");
     await context.setOffline(false);
     await summary.getByRole("link", { name: revision.slice(0, 12) }).waitFor();
-    assert.equal(checks, opened + 2, "reconnecting checks once");
+    assert.equal(checks, opened + 3, "reconnecting checks once");
 
     await page.getByRole("button", { name: "Back to chat" }).click();
     await page.getByLabel("Help", { exact: true }).click();
     await summary.getByRole("link", { name: revision.slice(0, 12) }).waitFor();
-    assert.ok(checks > opened + 2, "reopening help checks again");
+    assert.ok(checks > opened + 3, "reopening help checks again");
     assert.deepEqual(errors, []);
   } finally { await browser.close(); await server.close(); }
 });

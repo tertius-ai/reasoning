@@ -24,12 +24,17 @@ export function mentionInitials(name: string): string {
   return (words.length > 1 ? [words[0], words.at(-1)!] : words).map(word => Array.from(word)[0]).join("").toLocaleUpperCase();
 }
 
-const TONES = 6;
-/** A stable avatar color per member, so the same person always looks the same in the picker. */
+const TONES = 8;
+/** A stable color per person or bot, the same in every chat and in the mention picker. */
 export function mentionTone(id: string): number {
   let hash = 0;
   for (const character of id) hash = (hash * 31 + character.charCodeAt(0)) >>> 0;
   return hash % TONES;
+}
+
+/** The class giving a speaker's messages their color; a model's replies are colored by the model, not the requester. */
+export function speakerTone(message: { author_id: string; author_kind?: string; assistant_model?: string | null }): string {
+  return "org-person-tone-" + mentionTone(message.author_kind === "assistant" ? "model:" + (message.assistant_model ?? "") : message.author_id);
 }
 
 /**

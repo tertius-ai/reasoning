@@ -14,6 +14,9 @@
 /* Reply sits left of the menu; the reaction launcher and the header's reserved space move one slot further. */
 .org-app .chat-reply-launcher { right:3.75rem; border:0; padding:0; background:transparent; box-shadow:none; font-size:15px; }
 .chat-has-reply.chat-has-fork.chat-has-copy .chat-reaction-launcher { right:5.5rem; }
+/* Without a menu (a direct message with nothing to edit), reply and reaction move one slot to the right. */
+.org-app .chat-has-copy:not(.chat-has-fork) .chat-reply-launcher { right:2rem; }
+.chat-has-reply.chat-has-copy:not(.chat-has-fork) .chat-reaction-launcher { right:3.75rem; }
 .org-message.org-message-continuation > header > time { right:.5rem; top:.25rem; white-space:nowrap; }
 .chat-reaction-launcher,.org-app .chat-reaction-launcher,.org-app .chat-reaction-launcher:hover,.org-app .chat-reaction-launcher:focus-visible {
   padding:0; border:0; background:transparent; box-shadow:none; font:14px var(--font-mono); white-space:nowrap; overflow-wrap:normal;

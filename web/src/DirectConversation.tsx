@@ -6,26 +6,32 @@ import { MessageMarkdown, alphaMessageGroups, resizeComposer } from "./Organizat
 import { ApiError, Account, Member, Message, aborted, errorMessage, mentionMarkdown, mergeMessages, organizationPath, request } from "./organization-api";
 import { startPolling } from "./polling";
 import { LIVE_SAFETY_POLL_MS, subscribeEvents } from "./topicEvents";
-import { ReactionControl } from "./ChatFeedback";
+import { ActionMenu, CopyOutputButton, MessageMenuIcon, ReactionControl } from "./ChatFeedback";
+import { speakerTone } from "./mentions";
+import { ReplyBar, ReplyPointer, ThreadDialog } from "./MessageReplies";
+import { AttachFilesButton, DirectAttachments, MAX_DIRECT_ATTACHMENTS, PendingFile, PendingFiles, joinAttachments, pendingFile, splitAttachments, uploadDirectFile } from "./DirectMedia";
 
-type Draft = { text: string; clientId: string; attempted: boolean };
-const newDraft = (): Draft => ({ text: "", clientId: crypto.randomUUID(), attempted: false });
+type Draft = { text: string; clientId: string; attempted: boolean; replyTo?: string; files: PendingFile[] };
+const newDraft = (): Draft => ({ text: "", clientId: crypto.randomUUID(), attempted: false, files: [] });
 // Unsent text survives switching between conversations for the life of the page.
 const drafts = new Map<string, Draft>();
 
 function DirectMessageEdit({ path, message, onSaved, onCancel, onAuthLost }: {
   path: string; message: Message; onSaved: (message: Message) => void; onCancel: () => void; onAuthLost: () => void;
 }) {
-  const [text, setText] = useState(message.content), [busy, setBusy] = useState(false), [error, setError] = useState("");
+  // Only the caption is edited; the message keeps its files.
+  const parts = splitAttachments(message.content, path);
+  const [text, setText] = useState(parts.caption), [busy, setBusy] = useState(false), [error, setError] = useState("");
+  const content = parts.files.length ? joinAttachments(parts.files.map(file => `![${file.name}](${file.url})`), text) : text;
   return <form className="chat-edit" onSubmit={event => {
     event.preventDefault(); setBusy(true); setError("");
-    void request<Message>(path + "/messages/" + encodeURIComponent(message.id), { method: "PATCH", body: { content: text, revision: message.revision ?? 0 } })
+    void request<Message>(path + "/messages/" + encodeURIComponent(message.id), { method: "PATCH", body: { content, revision: message.revision ?? 0 } })
       .then(onSaved).catch(cause => { if (cause instanceof ApiError && cause.status === 401) onAuthLost(); else setError(errorMessage(cause)); })
       .finally(() => setBusy(false));
   }}>
-    <label>Edit message<textarea aria-label="Edit message text" autoFocus rows={3} maxLength={16000} disabled={busy}
+    <label>{parts.files.length ? "Edit caption" : "Edit message"}<textarea aria-label="Edit message text" autoFocus rows={3} maxLength={16000} disabled={busy}
       value={text} onChange={event => setText(event.target.value)} /></label>
-    <button disabled={busy || !text.trim()}>Save edit</button>
+    <button disabled={busy || !content.trim()}>Save edit</button>
     <button type="button" disabled={busy} onClick={onCancel}>Cancel</button>
     {error && <small role="alert" className="org-error">{error}</small>}
   </form>;
@@ -43,14 +49,60 @@ export function DirectConversationView({ organizationId, conversation, user, mem
   const [draft, setDraftState] = useState<Draft>(() => drafts.get(root) ?? newDraft());
   const [editing, setEditing] = useState<string | null>(null), [history, setHistory] = useState<{ id: string; versions: { revision: number; content: string; created_at: number }[] } | null>(null);
   const [confirmBlock, setConfirmBlock] = useState(false), [busy, setBusy] = useState(false);
-  const [atBottom, setAtBottom] = useState(true);
+  const [atBottom, setAtBottom] = useState(true), [threadFor, setThreadFor] = useState<string | null>(null);
   const viewport = useRef<HTMLDivElement>(null), textarea = useRef<HTMLTextAreaElement>(null);
   const cursor = useRef(0), editCursor = useRef(0), acknowledged = useRef(0), bottom = useRef(true), alive = useRef(true);
   const currentDraft = useRef(draft);
   currentDraft.current = draft;
-  const setDraft = (value: Draft) => { drafts.set(root, value); setDraftState(value); };
+  const setDraft = (value: Draft) => { drafts.set(root, value); currentDraft.current = value; setDraftState(value); };
   const fail = (cause: unknown) => { if (cause instanceof ApiError && cause.status === 401) onAuthLost(); else setError(errorMessage(cause)); };
   const writable = canWrite && conversation.other_member && !conversation.blocked;
+  // Choosing or cancelling a reply target starts a fresh attempt, so a retry never changes what a sent message answers.
+  const startReply = useRef((_id: string) => {});
+  startReply.current = (id: string) => {
+    setDraft({ ...currentDraft.current, replyTo: id, clientId: crypto.randomUUID(), attempted: false });
+    requestAnimationFrame(() => textarea.current?.focus());
+  };
+  const cancelReply = () => setDraft({ ...currentDraft.current, replyTo: undefined, clientId: crypto.randomUUID(), attempted: false });
+  // An upload can finish after its conversation was closed, so it updates the stored draft of the conversation it began in.
+  const changeFiles = (target: string, change: (files: PendingFile[]) => PendingFile[]) => {
+    const prior = drafts.get(target) ?? (target === root ? currentDraft.current : newDraft());
+    const next = { ...prior, files: change(prior.files), ...(prior.attempted ? { clientId: crypto.randomUUID(), attempted: false } : {}) };
+    drafts.set(target, next);
+    if (alive.current && target === root) { currentDraft.current = next; setDraftState(next); }
+  };
+  const attach = (chosen: File[]) => {
+    const room = MAX_DIRECT_ATTACHMENTS - currentDraft.current.files.length;
+    setError(chosen.length > room ? `A message can carry at most ${MAX_DIRECT_ATTACHMENTS} files.` : "");
+    const pending = chosen.slice(0, Math.max(0, room)).map(file => ({ file, item: pendingFile(file) }));
+    changeFiles(root, files => [...files, ...pending.map(({ item }) => item)]);
+    const settle = (key: string, value: Partial<PendingFile>) => changeFiles(root, files => files.map(file => file.key === key ? { ...file, ...value } : file));
+    for (const { file, item } of pending) {
+      void uploadDirectFile(file, root).then(value => settle(item.key, { markdown: value.markdown }), cause => {
+        if (cause instanceof ApiError && cause.status === 401) onAuthLost();
+        settle(item.key, { error: errorMessage(cause) });
+      });
+    }
+  };
+  const removeFile = (key: string) => changeFiles(root, files => files.filter(file => {
+    if (file.key === key && file.preview) URL.revokeObjectURL(file.preview);
+    return file.key !== key;
+  }));
+  const outgoing = (value: Draft) => value.files.length
+    ? joinAttachments(value.files.flatMap(file => file.markdown ? [file.markdown] : []), value.text) : value.text;
+  const uploading = draft.files.some(file => !file.markdown);
+  const canSend = writable && !sending && online && !uploading && Boolean(outgoing(draft).trim());
+  const messageBody = (message: Message) => {
+    const { files, caption } = splitAttachments(message.content, root);
+    return <>{files.length > 0 && <DirectAttachments files={files} />}
+      {caption && <MessageMarkdown markdown={normalizeMathDelimiters(mentionMarkdown(caption, members))} />}</>;
+  };
+  const copyText = (message: Message) => {
+    const { files, caption } = splitAttachments(message.content, root);
+    return caption || files.map(file => file.name).join(", ");
+  };
+  const authorName = (message: Message) => message.author_id === user.id ? "You" : name;
+  const replyOriginal = draft.replyTo ? messages.find(message => message.id === draft.replyTo) : undefined;
   useEffect(() => { alive.current = true; return () => { alive.current = false; }; }, []);
   useEffect(() => { if (textarea.current) resizeComposer(textarea.current); }, [draft.text]);
 
@@ -117,14 +169,18 @@ export function DirectConversationView({ organizationId, conversation, user, mem
 
   const send = async (event?: React.FormEvent) => {
     event?.preventDefault();
-    if (!writable || sending || !online || !draft.text.trim()) return;
+    if (!canSend) return;
     const attempt = { ...draft, clientId: draft.clientId || crypto.randomUUID(), attempted: true };
     setDraft(attempt); setSending(true); setError("");
     try {
-      const message = await request<Message>(root + "/messages", { method: "POST", body: { content: attempt.text, client_id: attempt.clientId } });
+      const message = await request<Message>(root + "/messages", { method: "POST", body: {
+        content: outgoing(attempt), client_id: attempt.clientId, ...(attempt.replyTo ? { reply_to: attempt.replyTo } : {}) } });
       if (!alive.current) return;
       setMessages(existing => mergeMessages(existing, [message]));
-      if (currentDraft.current.clientId === attempt.clientId) setDraft(newDraft());
+      if (currentDraft.current.clientId === attempt.clientId) {
+        attempt.files.forEach(file => file.preview && URL.revokeObjectURL(file.preview));
+        setDraft(newDraft());
+      }
       bottom.current = true; setAtBottom(true); onChanged();
     } catch (cause) { if (alive.current) fail(cause); }
     finally { if (alive.current) setSending(false); }
@@ -148,30 +204,43 @@ export function DirectConversationView({ organizationId, conversation, user, mem
   };
   const blockPath = organizationPath(organizationId) + "/direct-blocks/" + encodeURIComponent(conversation.other_user.id);
 
+  // The same layout as topic chats: speaker groups in each person's color, a floating toolbar, a reaction pill,
+  // and reply pointers that open the whole thread. Your own groups are mirrored to the right.
   const transcript = useMemo(() => {
     const groups = alphaMessageGroups(messages);
+    const byId = new Map(messages.map(message => [message.id, message]));
     return groups.map((group, groupIndex) => <div key={group[0].id}>
       {(groupIndex === 0 || new Date(groups[groupIndex - 1][0].created_at * 1000).toDateString() !== new Date(group[0].created_at * 1000).toDateString())
         && <div className="org-message-day"><time dateTime={new Date(group[0].created_at * 1000).toISOString().slice(0, 10)}>
           {new Date(group[0].created_at * 1000).toLocaleDateString(undefined, { weekday: "long", month: "short", day: "numeric", year: "numeric" })}</time></div>}
-      <div className="org-message-group org-speaker-human">{group.map((message, index) => {
-        const own = message.author_id === user.id;
-        return <article key={message.id} id={"direct-message-" + message.sequence} data-sequence={message.sequence}
+      <div className={"org-message-group org-speaker-human " + speakerTone(group[0]) + (group[0].author_id === user.id ? " org-message-group-mine" : "")}>{group.map((message, index) => {
+        const own = message.author_id === user.id, original = message.reply_to ? byId.get(message.reply_to) : undefined;
+        const hasMenu = (own && writable) || Boolean(message.revision);
+        return <article key={message.id} id={"direct-message-" + message.sequence} data-sequence={message.sequence} data-message-id={message.id}
           className={"org-message " + (index ? "org-message-continuation " : "") + (own ? "org-message-own" : "")}>
-          <header>{!index && <strong>{own ? user.name : name}</strong>}
+          {message.reply_to && <ReplyPointer original={original} label={original && authorName(original)} onOpen={() => setThreadFor(message.id)} />}
+          <header>{!index && <strong>{own ? "You" : name}</strong>}
             <time dateTime={new Date(message.created_at * 1000).toISOString()} title={new Date(message.created_at * 1000).toLocaleString()}>
               {new Date(message.created_at * 1000).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" })}</time></header>
           {editing === message.id ? <DirectMessageEdit path={root} message={message} onAuthLost={onAuthLost} onCancel={() => setEditing(null)}
             onSaved={updated => { setMessages(existing => mergeMessages(existing, [updated])); setEditing(null); }} />
-            : <MessageMarkdown markdown={normalizeMathDelimiters(mentionMarkdown(message.content, members))} />}
-          <div className="org-direct-actions">
+            : messageBody(message)}
+          <div className={"chat-message-actions chat-has-copy" + (hasMenu ? " chat-has-fork" : "") + (writable ? " chat-has-reply chat-has-react" : "")}>
             <ReactionControl path={root + "/messages/" + encodeURIComponent(message.id) + "/reactions"}
               canWrite={writable} onAuthLost={onAuthLost} batched preloaded={message.reactions} />
-            {Boolean(message.revision) && <button type="button" className="chat-edited" title={message.edited_at ? new Date(message.edited_at * 1000).toLocaleString() : undefined}
-              onClick={() => void request<{ revision: number; content: string; created_at: number }[]>(root + "/messages/" + encodeURIComponent(message.id) + "/history")
-                .then(versions => setHistory({ id: message.id, versions })).catch(fail)}>edited</button>}
-            {own && writable && editing !== message.id && <button type="button" aria-label="Edit message" title="Edit message"
-              onClick={() => setEditing(message.id)}>Edit</button>}
+            {writable && <button type="button" className="chat-action-launcher chat-reply-launcher" aria-label="Reply" title="Reply"
+              onClick={event => { event.preventDefault(); startReply.current(message.id); }}>↩</button>}
+            {hasMenu && <ActionMenu label="Message actions" className="chat-fork-launcher" icon={<MessageMenuIcon />}>
+              {close => <>{own && writable && editing !== message.id && <button type="button" role="menuitem"
+                onClick={() => { close(); setEditing(message.id); }}>Edit message</button>}
+                {Boolean(message.revision) && <button type="button" role="menuitem" onClick={() => {
+                  close();
+                  void request<{ revision: number; content: string; created_at: number }[]>(root + "/messages/" + encodeURIComponent(message.id) + "/history")
+                    .then(versions => setHistory({ id: message.id, versions })).catch(fail);
+                }}>Version history</button>}</>}
+            </ActionMenu>}
+            <CopyOutputButton text={copyText(message)} />
+            {Boolean(message.revision) && <small className="chat-edited" title={message.edited_at ? new Date(message.edited_at * 1000).toLocaleString() : undefined}>edited</small>}
           </div>
           {history?.id === message.id && <div className="chat-edit-history" aria-label="Message version history">
             <button type="button" onClick={() => setHistory(null)}>Close history</button>
@@ -179,7 +248,7 @@ export function DirectConversationView({ organizationId, conversation, user, mem
           </div>}
         </article>;
       })}</div></div>);
-  }, [messages, editing, history, members, user.id, user.name, name, root, writable, onAuthLost]);
+  }, [messages, editing, history, members, user.id, name, root, writable, onAuthLost]);
 
   const status = !conversation.other_member ? `${name} is no longer a member of this organization.`
     : conversation.blocked ? `You blocked ${name}. Neither of you can send messages here until you unblock them.`
@@ -211,18 +280,28 @@ export function DirectConversationView({ organizationId, conversation, user, mem
     {!online && <p role="status" className="org-reconnecting">Reconnecting…</p>}
     {error && <p role="alert" className="org-error org-conversation-error">{error}</p>}
     {status && <p role="status" className="org-help org-direct-status">{status}</p>}
+    {threadFor && <ThreadDialog key={threadFor} messagesPath={root + "/messages"} messageId={threadFor} canWrite={writable}
+      onClose={() => setThreadFor(null)} onAuthLost={onAuthLost} onPosted={message => setMessages(existing => mergeMessages(existing, [message]))}
+      renderMessage={message => <div className={"org-message-group org-speaker-human " + speakerTone(message)}><article className="org-message">
+        <header><strong>{authorName(message)}</strong>
+          <time dateTime={new Date(message.created_at * 1000).toISOString()}>{new Date(message.created_at * 1000).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" })}</time></header>
+        {messageBody(message)}</article></div>} />}
     <form className="org-composer" onSubmit={event => void send(event)}>
+      {draft.replyTo && <ReplyBar original={replyOriginal} label={replyOriginal && authorName(replyOriginal)} onCancel={cancelReply} />}
+      <PendingFiles files={draft.files} onRemove={removeFile} />
       <label className="org-visually-hidden" htmlFor="org-direct-message">Message</label>
       <textarea id="org-direct-message" ref={textarea} rows={1} maxLength={16000} value={draft.text} disabled={!writable || sending}
-        placeholder={writable ? `Message ${name}…` : "Sending is unavailable"} onChange={event => setDraft({ text: event.target.value,
+        placeholder={writable ? `Message ${name}…` : "Sending is unavailable"} onChange={event => setDraft({ ...draft, text: event.target.value,
           clientId: draft.attempted || !draft.clientId ? crypto.randomUUID() : draft.clientId, attempted: false })}
         onKeyDown={event => {
           if (event.nativeEvent.isComposing) return;
+          if (event.key === "Escape" && draft.replyTo) { cancelReply(); return; }
           if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); void send(); }
         }} />
       <div className="org-composer-controls"><div className="org-composer-actions">
-        <button className="org-primary org-send-play" aria-label={sending ? "Sending…" : draft.attempted ? "Retry send" : "Send"}
-          title={draft.attempted ? "Retry send" : "Send message"} disabled={!writable || sending || !online || !draft.text.trim()}>
+        <AttachFilesButton disabled={!writable || sending || draft.files.length >= MAX_DIRECT_ATTACHMENTS} onFiles={attach} />
+        <button className="org-primary org-send-play" aria-label={sending ? "Sending…" : uploading ? "Waiting for uploads" : draft.attempted ? "Retry send" : "Send"}
+          title={uploading ? "Wait for the uploads to finish, or remove the failed ones" : draft.attempted ? "Retry send" : "Send message"} disabled={!canSend}>
           <span aria-hidden="true">{sending ? "…" : "▶"}</span></button></div></div>
     </form>
   </section>;
