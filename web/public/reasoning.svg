@@ -1,4 +1,8 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 40 40">
-  <rect width="40" height="40" rx="9" fill="#101112"/>
-  <path d="M12 29V11h9a6 6 0 0 1 0 12h-9m9 0 7 6" fill="none" stroke="#70c5ad" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">
+  <!-- The app's "therefore" mark; web/src/Brand.tsx draws the same circles. -->
+  <g fill="#70c5ad">
+    <circle cx="16" cy="7.03" r="3.63"/>
+    <circle cx="5.63" cy="25" r="3.63"/>
+    <circle cx="26.37" cy="25" r="3.63"/>
+  </g>
 </svg>
