@@ -73,6 +73,34 @@ test("server status reports failures without stale values and never polls", asyn
   assert.ok(project.includes(`Repository = "${status.REPOSITORY_URL}"`), "the commit link uses the project's repository URL");
 });
 
+test("a degraded server names its stopped workers, and disabled inference is not a stopped worker", () => {
+  const degraded = statusHtml({ health: { status: "degraded", initialized: true, inference_enabled: true, inference_worker_running: true,
+    workflow_worker_running: false, webhook_worker_running: true, mail_worker_running: true, schema_version: 62 } });
+  assert.ok(degraded.includes('<span class="org-server-status-warning">Degraded</span> · initialized · workflow worker stopped · mail worker running · schema 62'),
+    degraded);
+  assert.ok(!degraded.includes("inference worker stopped") && !degraded.includes("webhook worker stopped"));
+  const disabled = statusHtml({ health: { status: "ok", initialized: true, inference_enabled: false, inference_worker_running: false,
+    workflow_worker_running: true, webhook_worker_running: true } });
+  assert.ok(disabled.includes("OK · initialized · inference disabled") && !disabled.includes("worker stopped"), disabled);
+  const healthy = statusHtml({ health: { status: "ok", initialized: true, inference_enabled: true, inference_worker_running: true,
+    workflow_worker_running: true, webhook_worker_running: true } });
+  assert.ok(healthy.includes("OK · initialized") && !healthy.includes("worker") && !healthy.includes("org-server-status-warning"));
+});
+
+test("the health check accepts the server's own degraded 503 report but not a proxy's error page", async () => {
+  const original = globalThis.fetch;
+  const report = { status: "degraded", initialized: true, webhook_worker_running: false };
+  try {
+    globalThis.fetch = async () => new Response(JSON.stringify(report), { status: 503, headers: { "Content-Type": "application/json" } });
+    assert.deepEqual(await status.readHealth(), report);
+    for (const [code, body, type] of [[503, "<h1>Service unavailable</h1>", "text/html"], [502, "<h1>Bad gateway</h1>", "text/html"],
+      [503, JSON.stringify({ detail: "maintenance" }), "application/json"]]) {
+      globalThis.fetch = async () => new Response(body, { status: code, headers: { "Content-Type": type } });
+      await assert.rejects(status.readHealth(), error => error.status === code, `${code} ${body}`);
+    }
+  } finally { globalThis.fetch = original; }
+});
+
 test("composer actions and model metadata use separate compact flex groups", async () => {
   const app = await readFile(new URL("../src/OrganizationApp.tsx", import.meta.url), "utf8");
   const css = await readFile(new URL("../src/organization.css", import.meta.url), "utf8");
