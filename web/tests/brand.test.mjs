@@ -28,7 +28,8 @@ test("both pages' tab icons draw exactly the dots of the logo's mark", async () 
 test("both pages' tabs are titled reasoning and use the drawn icon", async () => {
   const organization = await readFile(new URL("../organization.html", import.meta.url), "utf8");
   assert.match(organization, /<title>reasoning<\/title>/);
-  assert.match(organization, /<link rel="icon" type="image\/svg\+xml" href="\/reasoning\.svg\?v=\d+" \/>/);
+  // Exactly /reasoning.svg: the release installer accepts no other non-asset reference (deployment/release.py).
+  assert.match(organization, /<link rel="icon" type="image\/svg\+xml" href="\/reasoning\.svg" \/>/);
   const workbench = await readFile(new URL("../index.html", import.meta.url), "utf8");
   assert.match(workbench, /<title>reasoning<\/title>/);
   assert.match(workbench, /<link rel="icon" type="image\/svg\+xml" href="\/favicon\.svg\?v=\d+" \/>/);
