@@ -15,18 +15,25 @@ after(async () => { await server?.close(); });
 
 const circles = (svg) => [...svg.matchAll(/<circle cx="([\d.]+)" cy="([\d.]+)" r="([\d.]+)"/g)].map(match => match.slice(1).map(Number));
 
-test("the tab icon draws exactly the dots of the logo's mark", async () => {
-  const icon = await readFile(new URL("../public/reasoning.svg", import.meta.url), "utf8");
+test("both pages' tab icons draw exactly the dots of the logo's mark", async () => {
   const logo = renderToStaticMarkup(React.createElement(brand.Brand));
   const expected = brand.MARK_DOTS.map(([cx, cy]) => [cx, cy, brand.MARK_RADIUS]);
-  assert.deepEqual(circles(icon), expected);
+  for (const icon of ["reasoning.svg", "favicon.svg"])
+    assert.deepEqual(circles(await readFile(new URL("../public/" + icon, import.meta.url), "utf8")), expected, icon);
   assert.deepEqual(circles(logo), expected);
   assert.match(logo, /aria-label="reasoning"/);
   assert.doesNotMatch(logo, /∴/, "the mark is drawn, never typed");
 });
 
-test("the organization page's tab is titled reasoning and uses the drawn icon", async () => {
-  const page = await readFile(new URL("../organization.html", import.meta.url), "utf8");
-  assert.match(page, /<title>reasoning<\/title>/);
-  assert.match(page, /<link rel="icon" type="image\/svg\+xml" href="\/reasoning\.svg\?v=\d+" \/>/);
+test("both pages' tabs are titled reasoning and use the drawn icon", async () => {
+  const organization = await readFile(new URL("../organization.html", import.meta.url), "utf8");
+  assert.match(organization, /<title>reasoning<\/title>/);
+  assert.match(organization, /<link rel="icon" type="image\/svg\+xml" href="\/reasoning\.svg\?v=\d+" \/>/);
+  const workbench = await readFile(new URL("../index.html", import.meta.url), "utf8");
+  assert.match(workbench, /<title>reasoning<\/title>/);
+  assert.match(workbench, /<link rel="icon" type="image\/svg\+xml" href="\/favicon\.svg\?v=\d+" \/>/);
+  // The .ico fallback holds PNG renderings of the same drawing at 16, 32 and 48 pixels.
+  const ico = await readFile(new URL("../public/favicon.ico", import.meta.url));
+  assert.deepEqual([...ico.subarray(0, 6)], [0, 0, 1, 0, 3, 0]);
+  assert.deepEqual([0, 1, 2].map(index => ico[6 + 16 * index]), [16, 32, 48]);
 });

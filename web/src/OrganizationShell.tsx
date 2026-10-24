@@ -8,7 +8,7 @@ import { Account, ApiError, Session, aborted, clearSharedReads, errorMessage, re
 const loadApplication = () => import("./OrganizationApp");
 const OrganizationApp = lazy(() => loadApplication().then(module => ({ default: module.OrganizationApp })));
 
-const opening = <main className="org-auth"><p role="status">Opening Reasoning…</p></main>;
+const opening = <main className="org-auth"><p role="status">Opening reasoning…</p></main>;
 
 export function AuthForm({ mode, invitation, onMode, onAuthenticated }: {
   mode: "login" | "join" | "setup"; invitation: string; onMode: (mode: "login" | "join") => void;
@@ -21,7 +21,7 @@ export function AuthForm({ mode, invitation, onMode, onAuthenticated }: {
   const [organization, setOrganization] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
-  const title = mode === "setup" ? "Create your organization" : mode === "join" ? "Join an organization" : "Sign in to Reasoning";
+  const title = mode === "setup" ? "Create your organization" : mode === "join" ? "Join an organization" : "Sign in to reasoning";
   const submit = async (event: React.FormEvent) => {
     event.preventDefault(); setBusy(true); setError("");
     // Submitting is deliberate intent: fetch the application while the credentials are checked.
@@ -98,7 +98,7 @@ export function OrganizationShell() {
   if (loading) return opening;
   if (!user) return <><AuthForm key={initialized ? mode : "setup"} mode={!initialized ? "setup" : mode} invitation={invitation} onMode={setMode} onAuthenticated={authenticated} />
     {startupError}</>;
-  return <LazyView label="Reasoning" fallback={opening}><OrganizationApp user={user} onAccount={setUser} onAuthenticated={authenticated} onSignedOut={signedOut}
+  return <LazyView label="reasoning" fallback={opening}><OrganizationApp user={user} onAccount={setUser} onAuthenticated={authenticated} onSignedOut={signedOut}
     invitation={invitation} onInvitation={setInvitation} verificationToken={verificationToken} onVerificationToken={setVerificationToken}
     sessionOrganization={sessionOrganization} />{startupError}</LazyView>;
 }

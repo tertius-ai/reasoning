@@ -321,7 +321,7 @@ test(
         reopened
           .windows()
           .find((page) => page.url().startsWith(origin))
-          .getByRole("heading", { name: "Sign in to Reasoning" }),
+          .getByRole("heading", { name: "Sign in to reasoning" }),
       );
       context.diagnostic(
         "Verified two desktop account sessions, alpha exchange, absent native bridge, origin restrictions, restart persistence, server picker, and session forgetting.",
