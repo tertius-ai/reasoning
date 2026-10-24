@@ -22,8 +22,8 @@ from .bot_store import BotStore
 from .compute_api import install_routes as install_compute_routes
 from .compute_catalog import load_catalog
 from .compute_store import ComputeStore
-from .direct_messages import DirectMessages
 from .direct_media import install_routes as install_direct_media_routes
+from .direct_messages import DirectMessages
 from .direct_messages import install_routes as install_direct_message_routes
 from .feedback_api import install_feedback_routes
 from .inference_store import InferenceStore

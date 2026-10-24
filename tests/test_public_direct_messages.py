@@ -378,7 +378,8 @@ def upload(people, conversation_id, body, name, mime, sender="first", finish=Tru
         return started
     identity, size = started.json()["id"], started.json()["chunk_bytes"]
     for index in range(0, len(body), size):
-        sent = client.put(media + f"/{identity}/chunks/{index // size}", json={"data_base64": base64.b64encode(body[index:index + size]).decode()})
+        chunk = base64.b64encode(body[index:index + size]).decode()
+        sent = client.put(media + f"/{identity}/chunks/{index // size}", json={"data_base64": chunk})
         assert sent.status_code == 200, sent.text
     return client.post(media + f"/{identity}/finish", json={}) if finish else started
 
