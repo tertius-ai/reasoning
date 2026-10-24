@@ -650,3 +650,11 @@ MIGRATIONS += (DIRECT_REACTIONS_SCHEMA,)
 from .research_account_schema import SCHEMA as RESEARCH_ACCOUNT_SCHEMA  # noqa: E402
 
 MIGRATIONS += (RESEARCH_ACCOUNT_SCHEMA,)
+
+from .direct_replies_schema import SCHEMA as DIRECT_REPLIES_SCHEMA  # noqa: E402
+
+MIGRATIONS += (DIRECT_REPLIES_SCHEMA,)
+
+from .direct_media_schema import SCHEMA as DIRECT_MEDIA_SCHEMA  # noqa: E402
+
+MIGRATIONS += (DIRECT_MEDIA_SCHEMA,)

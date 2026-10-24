@@ -22,6 +22,7 @@ from .bot_store import BotStore
 from .compute_api import install_routes as install_compute_routes
 from .compute_catalog import load_catalog
 from .compute_store import ComputeStore
+from .direct_media import install_routes as install_direct_media_routes
 from .direct_messages import DirectMessages
 from .direct_messages import install_routes as install_direct_message_routes
 from .feedback_api import install_feedback_routes
@@ -599,6 +600,7 @@ def create_app(config: Config, *, provider: OpenRouter | None = None, mail_provi
     install_reference_routes(app, store, authenticated)
     install_reply_routes(app, store, authenticated)
     install_direct_message_routes(app, store, authenticated)
+    install_direct_media_routes(app, store, authenticated)
     install_topic_event_routes(app, topic_events, credentials)
 
     def session_response(result: dict, response: Response, transport: Transport) -> dict:

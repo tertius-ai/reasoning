@@ -422,8 +422,13 @@ a.org-reference:hover, a.org-reference:focus-visible { text-decoration: underlin
 /* Signal-style avatars in the picker: initials on a stable per-member color. */
 .org-mention-avatar { display: grid; place-items: center; width: 22px; height: 22px; flex: none; border-radius: 50%; font-size: 10px; font-weight: 600;
   background: color-mix(in srgb, var(--mention-tone) 26%, transparent); color: color-mix(in srgb, var(--mention-tone) 80%, var(--foreground)); }
-.org-mention-tone-0 { --mention-tone: var(--blue); } .org-mention-tone-1 { --mention-tone: var(--teal); } .org-mention-tone-2 { --mention-tone: var(--amber); }
-.org-mention-tone-3 { --mention-tone: var(--red); } .org-mention-tone-4 { --mention-tone: #9b7ee8; } .org-mention-tone-5 { --mention-tone: #e57ea5; }
+/* One color per person or bot (mentionTone), used for their dot, guide line and name in every chat and their picker avatar. */
+.org-person-tone-0 { --person-tone: var(--blue); } .org-person-tone-1 { --person-tone: var(--teal); } .org-person-tone-2 { --person-tone: var(--amber); }
+.org-person-tone-3 { --person-tone: var(--red); } .org-person-tone-4 { --person-tone: #9b7ee8; } .org-person-tone-5 { --person-tone: #e57ea5; }
+.org-person-tone-6 { --person-tone: #f09a5b; } .org-person-tone-7 { --person-tone: #a8d26b; }
+.org-mention-avatar { --mention-tone: var(--person-tone, var(--blue)); }
+.org-message-group[class*="org-person-tone-"] { --speaker-tone: var(--person-tone); }
+.org-message-group > .org-message:first-child > header strong { color: color-mix(in srgb, var(--speaker-tone) 80%, var(--foreground)); }
 .org-mention-menu button[aria-selected="true"] { background: var(--accent-dim); }
 .org-mention-menu small { color: var(--muted); }
 .org-empty { margin: auto; padding: 30px; text-align: center; color: var(--muted); }

@@ -34,7 +34,7 @@ test("the picker shows initials on a stable color per member", () => {
   assert.equal(mentions.mentionInitials("  Grace  "), "G");
   assert.equal(mentions.mentionInitials("Fixture Codex Bot"), "FB");
   assert.equal(mentions.mentionTone(ada), mentions.mentionTone(ada));
-  assert.ok(mentions.mentionTone(grace) >= 0 && mentions.mentionTone(grace) < 6);
+  assert.ok(mentions.mentionTone(grace) >= 0 && mentions.mentionTone(grace) < 8);
 });
 
 test("the composer mirror tints exactly the bound mention ranges, not references", () => {
