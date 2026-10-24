@@ -94,6 +94,45 @@ def bounded_image(body, mime):
     return valid_signature(body, mime) and 1 <= width <= 8192 and 1 <= height <= 8192 and width * height <= 32_000_000
 
 
+def check_upload(name, mime, size_bytes, sha256):
+    try:
+        if isinstance(name, str):
+            name.encode("utf8")
+    except UnicodeError:
+        raise StoreError(400, "attachment filename requires valid UTF-8") from None
+    if (
+        mime not in MIMES
+        or not isinstance(name, str)
+        or not 1 <= len(name) <= 200
+        or any(char in name for char in "/\\[]\r\n\0")
+        or any(ord(char) < 32 for char in name)
+        or not isinstance(size_bytes, int)
+        or isinstance(size_bytes, bool)
+        or not 1 <= size_bytes <= MAX_BYTES
+        or not isinstance(sha256, str)
+        or not re.fullmatch(r"[a-f0-9]{64}", sha256)
+    ):
+        raise StoreError(400, "attach a named PNG, JPEG, WebP or PDF of at most 8 MiB with an exact SHA-256")
+
+
+def check_chunk(index, data_base64):
+    if (
+        not isinstance(index, int)
+        or isinstance(index, bool)
+        or not 0 <= index < MAX_BYTES // CHUNK_BYTES
+        or not isinstance(data_base64, str)
+        or len(data_base64) > 4 * ((CHUNK_BYTES + 2) // 3)
+    ):
+        raise StoreError(400, "upload a bounded numbered attachment chunk")
+    try:
+        body = base64.b64decode(data_base64, validate=True)
+    except (ValueError, binascii.Error):
+        raise StoreError(400, "attachment chunk requires base64") from None
+    if not 1 <= len(body) <= CHUNK_BYTES:
+        raise StoreError(400, "attachment chunk is empty or exceeds 32 KiB")
+    return body
+
+
 class ResearchMedia:
     def __init__(self, store, *, authorize=None):
         self.store = store
@@ -116,24 +155,7 @@ class ResearchMedia:
         return row
 
     def begin(self, user, org, topic, name, mime, size_bytes, sha256):
-        try:
-            if isinstance(name, str):
-                name.encode("utf8")
-        except UnicodeError:
-            raise StoreError(400, "attachment filename requires valid UTF-8") from None
-        if (
-            mime not in MIMES
-            or not isinstance(name, str)
-            or not 1 <= len(name) <= 200
-            or any(char in name for char in "/\\[]\r\n\0")
-            or any(ord(char) < 32 for char in name)
-            or not isinstance(size_bytes, int)
-            or isinstance(size_bytes, bool)
-            or not 1 <= size_bytes <= MAX_BYTES
-            or not isinstance(sha256, str)
-            or not re.fullmatch(r"[a-f0-9]{64}", sha256)
-        ):
-            raise StoreError(400, "attach a named PNG, JPEG, WebP or PDF of at most 8 MiB with an exact SHA-256")
+        check_upload(name, mime, size_bytes, sha256)
         with self.store.transaction(write=True) as db:
             self._check(db)
             project = self.store._topic_access(db, user, org, topic, write=True)[1]["id"]
@@ -167,20 +189,7 @@ class ResearchMedia:
             return {"id": identity, "chunk_bytes": CHUNK_BYTES}
 
     def chunk(self, user, org, topic, identity, index, data_base64):
-        if (
-            not isinstance(index, int)
-            or isinstance(index, bool)
-            or not 0 <= index < MAX_BYTES // CHUNK_BYTES
-            or not isinstance(data_base64, str)
-            or len(data_base64) > 4 * ((CHUNK_BYTES + 2) // 3)
-        ):
-            raise StoreError(400, "upload a bounded numbered attachment chunk")
-        try:
-            body = base64.b64decode(data_base64, validate=True)
-        except (ValueError, binascii.Error):
-            raise StoreError(400, "attachment chunk requires base64") from None
-        if not 1 <= len(body) <= CHUNK_BYTES:
-            raise StoreError(400, "attachment chunk is empty or exceeds 32 KiB")
+        body = check_chunk(index, data_base64)
         with self.store.transaction(write=True) as db:
             row = self._row(db, user, org, topic, identity, write=True, complete=False)
             if self.store._postgres:

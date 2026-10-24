@@ -106,6 +106,59 @@ test("a member messages a colleague from People, who finds, reads and replies, t
     await received.getByRole("button", { name: "Heart: Researcher", exact: true }).click();
     await original.getByRole("button", { name: "Heart: Researcher", exact: true }).waitFor({ state: "detached" });
 
+    // Replies work as in topics: Reply sets the target, the reply points back, and the pointer opens the whole thread.
+    await received.hover(); await received.getByRole("button", { name: "Reply", exact: true }).click();
+    await visible(reply.locator(".org-reply-bar").filter({ hasText: "Replying to Owner" }));
+    await member.getByLabel("Message", { exact: true }).fill("Section 3 looks right to me.");
+    await member.keyboard.press("Enter");
+    const answered = conversation.locator(".org-message").filter({ hasText: "Section 3 looks right" });
+    await visible(answered.locator(".org-reply-pointer").filter({ hasText: "Could you read section 3" }));
+    await answered.locator(".org-reply-pointer").click();
+    const thread = owner.getByRole("dialog", { name: "Thread", exact: true });
+    await visible(thread.getByText("2 messages", { exact: true }));
+    await owner.keyboard.press("Escape");
+    await thread.waitFor({ state: "detached" });
+
+    // Your own groups are mirrored: dot and line on the right, toolbar on the left; each person keeps one color in both browsers.
+    // The reply quotes "section 3" in its pointer, so match only the messages without one.
+    const ownOriginal = conversation.locator(".org-message").filter({ hasText: "Could you read section 3", hasNot: owner.locator(".org-reply-pointer") });
+    const theirCopy = reply.locator(".org-message").filter({ hasText: "Could you read section 3", hasNot: member.locator(".org-reply-pointer") });
+    const mine = ownOriginal.locator("xpath=..");
+    assert.match(await mine.getAttribute("class"), /org-message-group-mine/);
+    assert.doesNotMatch(await answered.locator("xpath=..").getAttribute("class"), /org-message-group-mine/);
+    await ownOriginal.hover();
+    const [box, launcher] = await Promise.all([ownOriginal.boundingBox(), ownOriginal.getByRole("button", { name: "Add reaction", exact: true }).boundingBox()]);
+    assert.ok(launcher.x + launcher.width / 2 < box.x + box.width / 2, "the toolbar of your own message is on the left");
+    const tone = async (locator) => /org-person-tone-\d/.exec(await locator.locator("xpath=..").getAttribute("class"))?.[0];
+    assert.ok(await tone(ownOriginal));
+    assert.equal(await tone(ownOriginal), await tone(theirCopy), "Owner has the same color in both browsers");
+    assert.equal(await tone(answered), await tone(reply.locator(".org-message").filter({ hasText: "Section 3 looks right" })));
+
+    // Files arrive as media bubbles: pictures in a grid that opens full size, PDFs as rows with Open and Download.
+    const pixel = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==", "base64");
+    await conversation.locator("input[type=file]").setInputFiles([
+      { name: "board.png", mimeType: "image/png", buffer: pixel },
+      { name: "notes.pdf", mimeType: "application/pdf", buffer: Buffer.from("%PDF-1.4\ntrailer << >>\n%%EOF\n") },
+    ]);
+    const tray = conversation.getByRole("list", { name: "Attachments to send" });
+    await visible(tray.getByRole("button", { name: "Remove board.png", exact: true }));
+    await conversation.getByLabel("Message", { exact: true }).fill("The board after the seminar");
+    const sendFiles = conversation.getByRole("button", { name: "Send", exact: true });
+    await sendFiles.waitFor({ state: "visible" });
+    for (const stop = Date.now() + 15000; await sendFiles.isDisabled() && Date.now() < stop;) await new Promise((resolve) => setTimeout(resolve, 100));
+    await sendFiles.click();
+    await tray.waitFor({ state: "detached" });
+    const delivered = reply.locator(".org-message").filter({ hasText: "The board after the seminar" });
+    await visible(delivered.locator(".direct-media-tile img"));
+    await visible(delivered.locator(".direct-file").filter({ hasText: "notes.pdf" }).getByRole("link", { name: "Download", exact: true }));
+    assert.equal(await delivered.locator(".direct-media-tile").count(), 1, "the PDF is a file row, not a picture tile");
+    assert.doesNotMatch(await delivered.innerText(), /\/api\/organizations/, "references never show as text");
+    await delivered.getByRole("button", { name: "Open board.png", exact: true }).click();
+    const lightbox = member.getByRole("dialog", { name: "board.png" });
+    await visible(lightbox.locator("img"));
+    await member.keyboard.press("Escape");
+    await lightbox.waitFor({ state: "detached" });
+
     // Muting hides the unread count; blocking stops the other person's messages with a neutral refusal.
     await reply.getByRole("button", { name: "Mute", exact: true }).click();
     await visible(ownerRow.getByLabel("Muted"));
@@ -120,7 +173,7 @@ test("a member messages a colleague from People, who finds, reads and replies, t
     await reply.getByRole("button", { name: "Unblock", exact: true }).click();
     await visible(reply.getByRole("button", { name: "Block", exact: true }));
     assert.deepEqual(pageErrors, []);
-    context.diagnostic("Verified People-initiated direct messages, unread navigation, reading, replying, muting and blocking.");
+    context.diagnostic("Verified People-initiated direct messages, unread navigation, reading, replying, files, muting and blocking.");
   } finally {
     await browser?.close();
     server.kill("SIGTERM");

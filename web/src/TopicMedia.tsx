@@ -78,23 +78,30 @@ export function extractionLabel(value?: Extraction | null): string {
   return "PDF uploaded, but readable text is unavailable. Retry extraction or provide OCR, TeX, or text source.";
 }
 
-export async function uploadMedia(file: File, organizationId: string, topicId: string): Promise<MediaFile> {
-  const mime = file.type || (file.name.toLowerCase().endsWith(".pdf") ? "application/pdf" : "");
+export const attachmentMime = (file: File) => file.type || (file.name.toLowerCase().endsWith(".pdf") ? "application/pdf" : "");
+
+/** Chunked upload to a media collection (`root` ends in `/media`); `finish` supplies the body that completes it. */
+export async function uploadAttachment<T>(file: File, root: string, finish: (mime: string) => Promise<object> = async () => ({})): Promise<T> {
+  const mime = attachmentMime(file);
   if ((!IMAGE_TYPES.has(mime) && mime !== "application/pdf") || file.size < 1 || file.size > 8 * 1024 * 1024) {
     throw new Error("Choose a PNG, JPEG, WebP or PDF of at most 8 MiB.");
   }
   const bytes = new Uint8Array(await file.arrayBuffer());
   const sha256 = Array.from(new Uint8Array(await crypto.subtle.digest("SHA-256", bytes)), byte => byte.toString(16).padStart(2, "0")).join("");
-  const root = topicPath(organizationId, topicId) + "/media";
   const upload = await request<{ id: string; chunk_bytes: number }>(root, { method: "POST", body: {
     name: file.name, mime, size_bytes: bytes.length, sha256,
   } });
   for (let offset = 0, index = 0; offset < bytes.length; offset += upload.chunk_bytes, index++) {
     await request(root + `/${upload.id}/chunks/${index}`, { method: "PUT", body: { data_base64: base64(bytes.slice(offset, offset + upload.chunk_bytes)) } });
   }
-  const preview_text = ""; // The server extracts bounded text from the exact private PDF bytes.
-  const vision_base64 = IMAGE_TYPES.has(mime) ? await imagePreview(file).catch(() => "") : "";
-  return request<MediaFile>(root + `/${upload.id}/finish`, { method: "POST", body: { preview_text, vision_base64 } });
+  return request<T>(root + `/${upload.id}/finish`, { method: "POST", body: await finish(mime) });
+}
+
+export function uploadMedia(file: File, organizationId: string, topicId: string): Promise<MediaFile> {
+  return uploadAttachment<MediaFile>(file, topicPath(organizationId, topicId) + "/media", async mime => ({
+    preview_text: "", // The server extracts bounded text from the exact private PDF bytes.
+    vision_base64: IMAGE_TYPES.has(mime) ? await imagePreview(file).catch(() => "") : "",
+  }));
 }
 
 export function AttachmentButton({ organizationId, topicId, onInsert, onError, disabled = false }: {

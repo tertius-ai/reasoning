@@ -27,6 +27,8 @@ def remove_collaboration_schema(db):
     for table in (
         "bot_invokers",
         "bot_sharing",
+        "direct_media_chunks",
+        "direct_media",
         "direct_reaction_changes",
         "direct_message_reactions",
         "direct_message_revisions",

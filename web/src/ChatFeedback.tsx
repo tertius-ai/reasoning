@@ -45,7 +45,10 @@ export function OutputActions({ text, ...props }: Parameters<typeof ReactionBar>
     <ReactionBar {...props} /><CopyOutputButton text={text} /></div>;
 }
 
-function ActionMenu({ label, className, icon, menuClassName = "", onClosed, children }: {
+/** The "Message actions" mark shared by topic and direct-message toolbars. */
+export const MessageMenuIcon = () => <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" aria-hidden="true"><circle cx="7" cy="5" r="2"/><circle cx="17" cy="5" r="2"/><circle cx="7" cy="19" r="2"/><path d="M7 7v10m10-10v3a4 4 0 0 1-4 4H7"/></svg>;
+
+export function ActionMenu({ label, className, icon, menuClassName = "", onClosed, children }: {
   label: string; className: string; icon: ReactNode; menuClassName?: string; onClosed?: () => void; children: (close: () => void) => ReactNode;
 }) {
   const [position, setPosition] = useState<{ left: number; top: number } | null>(null);
@@ -213,7 +216,7 @@ export function MessageActions({ organizationId, topicId, messageId, kind, canWr
       batched={batchedReactions} preloaded={reactions} />
     {onReply && <button type="button" className="chat-action-launcher chat-reply-launcher" aria-label="Reply" title="Reply"
       onClick={event => { event.preventDefault(); onReply(); }}>↩</button>}
-    {hasMenu && <ActionMenu label="Message actions" className="chat-fork-launcher" icon={<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" aria-hidden="true"><circle cx="7" cy="5" r="2"/><circle cx="17" cy="5" r="2"/><circle cx="7" cy="19" r="2"/><path d="M7 7v10m10-10v3a4 4 0 0 1-4 4H7"/></svg>}>
+    {hasMenu && <ActionMenu label="Message actions" className="chat-fork-launcher" icon={<MessageMenuIcon />}>
       {close => <>{message && <button type="button" role="menuitem" onClick={() => {
         close(); setLinkStatus("");
         void navigator.clipboard.writeText(messageLink(window.location.origin, organizationId, topicId, messageId))

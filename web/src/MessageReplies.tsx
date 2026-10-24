@@ -1,12 +1,13 @@
 // Copyright Benjamin Antieau and Deven Manam. SPDX-License-Identifier: Apache-2.0
 import React, { useEffect, useRef, useState } from "react";
-import { ApiError, Message, errorMessage, request, topicPath } from "./organization-api";
+import { ApiError, Message, errorMessage, request } from "./organization-api";
 
 export type MessageThread = { root_id: string; message_id: string; messages: Message[]; truncated: boolean };
 
 /** One line of a message's text for a reply pointer: mentions and references keep their visible names, markup is dropped. */
 export function replyExcerpt(content: string, limit = 90): string {
   const text = content
+    .replace(/!\[([^\]\n]*)\]\([^)\s]*\)/g, (_, name: string) => "📎 " + (name || "attachment"))
     .replace(/@\[[a-f0-9]{32}(?::([^\]]+))?\]/g, (_, name?: string) => "@" + (name ?? "member"))
     .replace(/#\[(topic|project):[a-f0-9]{32}\]/g, (_, kind: string) => "#" + kind)
     .replace(/[*_`>#~[\]()$\\]/g, "").replace(/\s+/g, " ").trim();
@@ -40,8 +41,9 @@ export function ReplyBar({ original, label, onCancel }: { original?: Message; la
  * The whole thread over a dimmed conversation: the root, then every reply in order, with a box to reply in the thread.
  * A reply written here answers the thread's root. Escape or a click outside closes it.
  */
-export function ThreadDialog({ organizationId, topicId, messageId, canWrite, renderMessage, onPosted, onClose, onAuthLost }: {
-  organizationId: string; topicId: string; messageId: string; canWrite: boolean;
+export function ThreadDialog({ messagesPath, messageId, canWrite, renderMessage, onPosted, onClose, onAuthLost }: {
+  /** The conversation's messages endpoint: a topic's or a direct conversation's. */
+  messagesPath: string; messageId: string; canWrite: boolean;
   renderMessage: (message: Message, first: boolean) => React.ReactNode;
   onPosted: (message: Message) => void; onClose: () => void; onAuthLost: () => void;
 }) {
@@ -49,18 +51,18 @@ export function ThreadDialog({ organizationId, topicId, messageId, canWrite, ren
   const [thread, setThread] = useState<MessageThread | null>(null);
   const [error, setError] = useState("");
   const [text, setText] = useState(""), [clientId, setClientId] = useState(""), [sending, setSending] = useState(false);
-  const path = topicPath(organizationId, topicId) + "/messages/";
+  const path = messagesPath + "/";
   const fail = (cause: unknown) => { if (cause instanceof ApiError && cause.status === 401) onAuthLost(); else setError(errorMessage(cause)); };
   const load = (id: string) => request<MessageThread>(path + encodeURIComponent(id) + "/thread").then(setThread);
   useEffect(() => { dialog.current?.showModal(); }, []);
-  useEffect(() => { setThread(null); setError(""); void load(messageId).catch(fail); }, [organizationId, topicId, messageId]);
+  useEffect(() => { setThread(null); setError(""); void load(messageId).catch(fail); }, [messagesPath, messageId]);
   const send = async (event: React.FormEvent) => {
     event.preventDefault();
     if (!thread || !text.trim() || sending) return;
     const attempt = clientId || crypto.randomUUID();
     setClientId(attempt); setSending(true); setError("");
     try {
-      const message = await request<Message>(topicPath(organizationId, topicId) + "/messages",
+      const message = await request<Message>(messagesPath,
         { method: "POST", body: { content: text, client_id: attempt, reply_to: thread.root_id } });
       onPosted(message); setText(""); setClientId("");
       await load(message.id);

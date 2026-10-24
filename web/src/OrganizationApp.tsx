@@ -17,7 +17,7 @@ import { ComputeConversation } from "./ComputeConversation";
 import { DirectConversation, DirectMessageMarks, DirectMessagePicker, NewDirectMessageButton, directPath, directUnread, directUnreadTotal, peopleInbox } from "./DirectMessages";
 import { KnowledgeLinks, KnowledgeView } from "./KnowledgeLinks";
 import { ReplyBar, ReplyPointer, ThreadDialog } from "./MessageReplies";
-import { MentionMirror, MentionSelf, MentionTag, mentionFromHref, mentionInitials, mentionTone } from "./mentions";
+import { MentionMirror, MentionSelf, MentionTag, mentionFromHref, mentionInitials, mentionTone, speakerTone } from "./mentions";
 import { LazyView } from "./LazyView";
 import { WorkflowConversation } from "./WorkflowConversation";
 import { TopicActivity, orderedActivity } from "./TopicActivity";
@@ -1099,7 +1099,7 @@ function Conversation({ organizationId, topic, members, user, canWrite, canManag
       id: "message:" + group[0].id, created_at: group[0].created_at, sequence: group[0].sequence, body: <>
       {topic.kind === "alpha" && (groupIndex === 0 || new Date(groups[groupIndex - 1][0].created_at * 1000).toDateString() !== new Date(group[0].created_at * 1000).toDateString())
         && <div className="org-message-day"><time dateTime={new Date(group[0].created_at * 1000).toISOString().slice(0, 10)}>{new Date(group[0].created_at * 1000).toLocaleDateString(undefined, { weekday: "long", month: "short", day: "numeric", year: "numeric" })}</time></div>}
-      <div className={"org-message-group org-speaker-" + (group[0].author_kind ?? "human")}>{group.map((message, index) => <article className={"org-message " + (index ? "org-message-continuation " : "") + (message.author_kind !== "assistant" && message.author_id === user.id ? "org-message-own" : "") + (message.id === highlighted ? " org-message-linked" : "")}
+      <div className={"org-message-group org-speaker-" + (group[0].author_kind ?? "human") + " " + speakerTone(group[0])}>{group.map((message, index) => <article className={"org-message " + (index ? "org-message-continuation " : "") + (message.author_kind !== "assistant" && message.author_id === user.id ? "org-message-own" : "") + (message.id === highlighted ? " org-message-linked" : "")}
         key={message.id} id={"message-" + message.sequence} data-sequence={message.sequence} data-message-id={message.id}
         tabIndex={message.id === focus ? -1 : undefined} aria-current={message.id === highlighted ? "location" : undefined}>
         {message.reply_to && <ReplyPointer original={byId.get(message.reply_to)} onOpen={() => setThreadFor(message.id)}
@@ -1136,9 +1136,9 @@ function Conversation({ organizationId, topic, members, user, canWrite, canManag
         mentions: [{ start: 0, end: label.length, id: bot.bot_id, label }] });
       setTexOpen(false); setMention(null); requestAnimationFrame(() => textarea.current?.focus());
     }} />}
-    {threadFor && <ThreadDialog key={threadFor} organizationId={organizationId} topicId={topic.id} messageId={threadFor} canWrite={canWrite}
+    {threadFor && <ThreadDialog key={threadFor} messagesPath={root + "/messages"} messageId={threadFor} canWrite={canWrite}
       onClose={() => setThreadFor(null)} onAuthLost={onAuthLost} onPosted={message => setMessages(existing => mergeMessages(existing, [message]))}
-      renderMessage={message => <div className={"org-message-group org-speaker-" + (message.author_kind ?? "human")}><article className="org-message">
+      renderMessage={message => <div className={"org-message-group org-speaker-" + (message.author_kind ?? "human") + " " + speakerTone(message)}><article className="org-message">
         <header><strong>{authorLabel(message, members)}</strong>
           <time dateTime={new Date(message.created_at * 1000).toISOString()}>{new Date(message.created_at * 1000).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" })}</time></header>
         <MessageMarkdown markdown={normalizeMathDelimiters(mentionMarkdown(message.content, mentionPeople))} /></article></div>} />}
@@ -1258,7 +1258,7 @@ function Conversation({ organizationId, topic, members, user, canWrite, canManag
         {mentionMembers.map((member, index) => <button type="button" role="option" tabIndex={-1} id={"org-mention-" + (member.optionId ?? member.id)}
           aria-selected={index === mentionIndex % mentionMembers.length} key={member.optionId ?? member.id}
           onMouseDown={(event) => event.preventDefault()} onClick={() => chooseMention(member)}>
-          <span className={"org-mention-avatar org-mention-tone-" + mentionTone(member.id)} aria-hidden="true">{mentionInitials(member.name)}</span>
+          <span className={"org-mention-avatar org-person-tone-" + mentionTone(member.id)} aria-hidden="true">{mentionInitials(member.name)}</span>
           <span className="org-mention-option-name">{member.name}{member.model ? "-" + member.model : ""}{member.effort ? "!" + member.effort : ""}</span>
           {member.owner && <small> · {member.owner}</small>}</button>)}</div>}
       {!mentionMembers.length && referenceMatches.length > 0 && <div id="org-reference-list" role="listbox" className="org-mention-menu" aria-label="Reference a topic or project">

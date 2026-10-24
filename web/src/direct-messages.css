@@ -18,12 +18,74 @@
 .org-direct-controls { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
 .org-direct-confirm { display: inline-flex; align-items: center; gap: 6px; flex-wrap: wrap; font-size: 12px; }
 .org-direct-conversation .org-message { position: relative; }
-.org-direct-actions { position: absolute; top: 5px; right: 8px; z-index: 2; display: flex; gap: 6px; }
-.org-direct-actions .chat-action-launcher { position: static; opacity: 1; pointer-events: auto; }
-.org-direct-actions button { min-height: 22px; padding: 1px 7px; border-color: transparent; background: transparent; color: var(--muted); font-size: 11px; }
-.org-direct-actions button[aria-label="Edit message"] { opacity: 0; }
-.org-message:hover .org-direct-actions button, .org-direct-actions button:focus-visible { opacity: 1; }
-@media (hover: none) { .org-direct-actions button[aria-label="Edit message"] { opacity: 1; } }
+/* Your own messages in a direct conversation, mirrored: dot and guide line on the right, text right-aligned,
+   and the toolbar, reaction pill and reply curve on the left. */
+.org-message-group-mine::before { left: auto; right: 6.5px; }
+.org-message-group.org-message-group-mine > .org-message { padding: 2px 20px 4px 10px; text-align: right; border-radius: var(--radius-card) 0 0 var(--radius-card); }
+.org-message-group.org-message-group-mine > .org-message:first-child > header { flex-direction: row-reverse; margin-left: 0; margin-right: -17px; }
+.org-message-group-mine .org-message pre, .org-message-group-mine .org-message .katex-display, .org-message-group-mine .org-message table,
+.org-message-group-mine .org-message ul, .org-message-group-mine .org-message ol { text-align: left; }
+.org-message-group-mine .org-message.org-message-continuation > header > time { right: auto; left: .5rem; }
+.org-message-group-mine > .org-message > .chat-message-actions::before { right: auto; left: 0; }
+/* The topic slot rules all set `right`; mirrored launchers use `left` instead. */
+.org-message-group-mine .chat-message-actions .chat-action-launcher { right: auto !important; }
+.org-message-group-mine .chat-message-actions .chat-copy-launcher { left: .25rem; }
+.org-message-group-mine .chat-has-fork .chat-fork-launcher { left: 2rem; }
+.org-message-group-mine .chat-has-fork .chat-reply-launcher { left: 3.75rem; }
+.org-message-group-mine .chat-has-reply:not(.chat-has-fork) .chat-reply-launcher { left: 2rem; }
+.org-message-group-mine .chat-has-react .chat-reaction-launcher { left: 2rem; }
+.org-message-group-mine .chat-has-react.chat-has-reply .chat-reaction-launcher { left: 3.75rem; }
+.org-message-group-mine .chat-has-react.chat-has-reply.chat-has-fork .chat-reaction-launcher { left: 5.5rem; }
+.org-message-group-mine .org-message .chat-reaction-pill { right: auto; left: 10px; }
+.org-app .org-message-group-mine .org-reply-pointer { margin-left: auto; }
+.org-message-group-mine .org-message:has(> .org-reply-pointer)::after { left: auto; right: 6.25px; border-width: 1.5px 1.5px 0 0; border-radius: 0 6px 0 0; }
 .org-direct-status { margin: 0 max(16px, calc((100% - 900px) / 2)) 6px; }
 .org-presence .org-presence-message { width: 100%; min-height: 0; text-align: left; border: 0; padding: 0; background: transparent; color: inherit; font: inherit; font-weight: inherit; cursor: pointer; overflow: hidden; text-overflow: ellipsis; }
 .org-presence .org-presence-message:hover, .org-presence .org-presence-message:focus-visible { text-decoration: underline; }
+
+/* Signal-style media: one grid of pictures (at most four tiles), then PDF rows; the caption follows. */
+.direct-attachments { display:flex; flex-direction:column; align-items:flex-start; gap:4px; margin:3px 0; }
+.org-message-group-mine .direct-attachments { align-items:flex-end; }
+.direct-media-grid { display:grid; grid-template-columns:repeat(2, minmax(0, 1fr)); gap:2px; width:min(100%, 18rem); border-radius:12px; overflow:hidden; }
+.direct-media-grid.direct-media-1 { grid-template-columns:1fr; }
+.org-app .direct-media-tile { position:relative; display:block; width:100%; aspect-ratio:1; min-height:0; padding:0; border:0; border-radius:0; overflow:hidden; background:var(--surface-2); cursor:zoom-in; }
+.direct-media-1 .direct-media-tile { aspect-ratio:auto; min-height:6rem; max-height:20rem; }
+.direct-media-3 .direct-media-tile:first-child { grid-column:1 / -1; aspect-ratio:2; }
+.direct-media-tile img { display:block; width:100%; height:100%; object-fit:cover; }
+.direct-media-1 .direct-media-tile img { height:auto; max-height:20rem; object-fit:contain; }
+.direct-media-more { position:absolute; inset:0; display:grid; place-items:center; background:rgba(0,0,0,.55); color:#fff; font-size:20px; font-weight:600; }
+.direct-media-missing { display:grid; place-items:center; color:var(--muted); font-size:12px; cursor:default; }
+.direct-file { display:flex; flex-direction:column; gap:6px; max-width:min(100%, 26rem); text-align:left; }
+.direct-file-row { display:flex; align-items:center; gap:10px; padding:7px 12px 7px 8px; border:1px solid var(--border); border-radius:12px; background:var(--surface); }
+.direct-file-icon { display:grid; place-items:center; flex:none; width:28px; height:34px; border-radius:4px; background:color-mix(in srgb, var(--red, #e5484d) 22%, var(--surface)); color:var(--red, #e5484d); font:600 9px/1 var(--font-mono); }
+.direct-file-text { display:flex; flex-direction:column; min-width:0; }
+.direct-file-text strong { font-weight:500; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.direct-file-text small { color:var(--muted); }
+.org-app .direct-file-link { display:inline; min-height:0; padding:0; border:0; background:none; color:var(--blue); font:inherit; cursor:pointer; text-decoration:none; }
+.direct-file-link:hover { text-decoration:underline; }
+.direct-file-viewer { width:min(100%, 40rem); }
+
+/* Files waiting in the composer. */
+.direct-pending { display:flex; flex-wrap:wrap; gap:6px; margin:0 0 6px; padding:0; list-style:none; }
+.direct-pending-file { display:flex; align-items:center; gap:6px; max-width:15rem; padding:3px 4px 3px 3px; border:1px solid var(--border); border-radius:8px; background:var(--surface); font-size:12px; }
+.direct-pending-file img, .direct-pending-file .direct-file-icon { width:28px; height:28px; border-radius:6px; object-fit:cover; }
+.direct-pending-name { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.direct-pending-file small { color:var(--muted); white-space:nowrap; }
+.direct-pending-uploading img { opacity:.55; }
+.direct-pending-failed { border-color:var(--red, #e5484d); }
+.direct-pending-failed small { color:var(--red, #e5484d); }
+.org-app .direct-pending-file button { min-width:20px; min-height:20px; padding:0 4px; border:0; background:none; color:var(--muted); }
+.org-app .direct-pending-file button:hover { color:var(--foreground); }
+
+/* Full-size pictures, one at a time. */
+.direct-lightbox { position:fixed; inset:0; z-index:60; display:grid; grid-template-rows:auto 1fr; background:rgba(8,9,10,.92); color:#eee; outline:none; }
+.direct-lightbox header { display:flex; justify-content:space-between; align-items:center; gap:12px; padding:10px 16px; }
+.direct-lightbox header > span { display:flex; align-items:center; gap:12px; min-width:0; }
+.direct-lightbox header small { color:#aaa; }
+.direct-lightbox a { color:#cfe3fb; }
+.direct-lightbox img { place-self:center; max-width:calc(100vw - 7rem); max-height:calc(100vh - 5rem); object-fit:contain; }
+.org-app .direct-lightbox button { min-height:32px; padding:0 10px; border:0; background:rgba(255,255,255,.08); color:#eee; border-radius:8px; font-size:18px; }
+.org-app .direct-lightbox button:hover { background:rgba(255,255,255,.16); }
+.org-app .direct-lightbox .direct-lightbox-previous, .org-app .direct-lightbox .direct-lightbox-next { position:absolute; top:50%; transform:translateY(-50%); width:40px; height:56px; font-size:28px; }
+.direct-lightbox-previous { left:12px; }
+.direct-lightbox-next { right:12px; }
