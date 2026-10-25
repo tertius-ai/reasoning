@@ -59,6 +59,13 @@ export function DirectConversationView({ organizationId, conversation, user, mem
   currentDraft.current = draft; currentMessages.current = messages;
   const setDraft = (value: Draft) => { drafts.set(root, value); currentDraft.current = value; setDraftState(value); };
   const fail = (cause: unknown) => { if (cause instanceof ApiError && cause.status === 401) onAuthLost(); else setError(errorMessage(cause)); };
+  // After "Mark unread from here" the open conversation stops marking itself read until you leave it; the divider shows where.
+  const holdRead = useRef(false), [unreadFrom, setUnreadFrom] = useState<number | null>(null);
+  const markUnread = (message: Message) => {
+    holdRead.current = true; setUnreadFrom(message.sequence);
+    void request(root + "/unread", { method: "PUT", body: { message_id: message.id } }).then(() => onChanged())
+      .catch(cause => { holdRead.current = false; setUnreadFrom(null); fail(cause); });
+  };
   const writable = canWrite && conversation.other_member && !conversation.blocked;
   // Choosing or cancelling a reply target starts a fresh attempt, so a retry never changes what a sent message answers.
   const startReply = useRef((_id: string) => {});
@@ -163,7 +170,7 @@ export function DirectConversationView({ organizationId, conversation, user, mem
     // Reading the newest message clears its unread count in navigation.
     const mark = () => {
       const sequence = messages.at(-1)?.sequence ?? 0;
-      if (!bottom.current || document.visibilityState !== "visible" || !document.hasFocus() || sequence <= acknowledged.current
+      if (holdRead.current || !bottom.current || document.visibilityState !== "visible" || !document.hasFocus() || sequence <= acknowledged.current
         || sequence <= conversation.last_read_sequence) return;
       void request(root + "/read", { method: "PUT", body: { sequence } }).then(() => {
         acknowledged.current = Math.max(acknowledged.current, sequence); onChanged();
@@ -240,8 +247,8 @@ export function DirectConversationView({ organizationId, conversation, user, mem
           {new Date(group[0].created_at * 1000).toLocaleDateString(undefined, { weekday: "long", month: "short", day: "numeric", year: "numeric" })}</time></div>}
       <div className={"org-message-group org-speaker-human " + speakerTone(group[0], tones) + (group[0].author_id === user.id ? " org-message-group-mine" : "")}>{group.map((message, index) => {
         const own = message.author_id === user.id, original = message.reply_to ? byId.get(message.reply_to) : undefined;
-        const hasMenu = (own && writable) || Boolean(message.revision);
-        return <article key={message.id} id={"direct-message-" + message.sequence} data-sequence={message.sequence} data-message-id={message.id}
+        return <React.Fragment key={message.id}>{message.sequence === unreadFrom && <div className="org-unread-divider" role="separator" aria-label="New messages"><span>New</span></div>}
+          <article id={"direct-message-" + message.sequence} data-sequence={message.sequence} data-message-id={message.id}
           className={"org-message " + (index ? "org-message-continuation " : "") + (own ? "org-message-own" : "") + (message.id === linked ? " org-message-linked" : "")}>
           {message.reply_to && <ReplyPointer original={original} label={original && authorName(original)} onOpen={() => setThreadFor(message.id)} />}
           <header>{!index && <strong>{own ? "You" : name}</strong>}
@@ -250,20 +257,21 @@ export function DirectConversationView({ organizationId, conversation, user, mem
           {editing === message.id ? <DirectMessageEdit path={root} message={message} onAuthLost={onAuthLost} onCancel={() => setEditing(null)}
             onSaved={updated => { setMessages(existing => mergeMessages(existing, [updated])); setEditing(null); }} />
             : messageBody(message)}
-          <div className={"chat-message-actions chat-has-copy" + (hasMenu ? " chat-has-fork" : "") + (writable ? " chat-has-reply chat-has-react" : "")}>
+          <div className={"chat-message-actions chat-has-copy chat-has-fork" + (writable ? " chat-has-reply chat-has-react" : "")}>
             <ReactionControl path={root + "/messages/" + encodeURIComponent(message.id) + "/reactions"}
               canWrite={writable} onAuthLost={onAuthLost} batched preloaded={message.reactions} />
             {writable && <button type="button" className="chat-action-launcher chat-reply-launcher" aria-label="Reply" title="Reply"
               onClick={event => { event.preventDefault(); startReply.current(message.id); }}>↩</button>}
-            {hasMenu && <ActionMenu label="Message actions" className="chat-fork-launcher" icon={<MessageMenuIcon />}>
-              {close => <>{own && writable && editing !== message.id && <button type="button" role="menuitem"
+            <ActionMenu label="Message actions" className="chat-fork-launcher" icon={<MessageMenuIcon />}>
+              {close => <><button type="button" role="menuitem" onClick={() => { close(); markUnread(message); }}>Mark unread from here</button>
+                {own && writable && editing !== message.id && <button type="button" role="menuitem"
                 onClick={() => { close(); setEditing(message.id); }}>Edit message</button>}
                 {Boolean(message.revision) && <button type="button" role="menuitem" onClick={() => {
                   close();
                   void request<{ revision: number; content: string; created_at: number }[]>(root + "/messages/" + encodeURIComponent(message.id) + "/history")
                     .then(versions => setHistory({ id: message.id, versions })).catch(fail);
                 }}>Version history</button>}</>}
-            </ActionMenu>}
+            </ActionMenu>
             <CopyOutputButton text={copyText(message)} />
             {Boolean(message.revision) && <small className="chat-edited" title={message.edited_at ? new Date(message.edited_at * 1000).toLocaleString() : undefined}>edited</small>}
           </div>
@@ -271,9 +279,9 @@ export function DirectConversationView({ organizationId, conversation, user, mem
             <button type="button" onClick={() => setHistory(null)}>Close history</button>
             {history.versions.map(version => <div key={version.revision}><small>{version.revision ? `Revision ${version.revision}` : "Original"} · {new Date(version.created_at * 1000).toLocaleString()}</small><pre>{version.content}</pre></div>)}
           </div>}
-        </article>;
+        </article></React.Fragment>;
       })}</div></div>);
-  }, [messages, editing, history, members, user.id, name, root, writable, tones, linked, onAuthLost]);
+  }, [messages, editing, history, members, user.id, name, root, writable, tones, linked, onAuthLost, unreadFrom]);
 
   const status = !conversation.other_member ? `${name} is no longer a member of this organization.`
     : conversation.blocked ? `You blocked ${name}. Neither of you can send messages here until you unblock them.`

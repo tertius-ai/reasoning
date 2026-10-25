@@ -357,6 +357,28 @@ class DirectMessages:
             (sequence, organization_id, conversation_id, user_id),
         )
 
+    def mark_unread(self, user_id, organization_id, conversation_id, message_id) -> dict[str, int]:
+        """Move this participant's read point back to just before `message_id`; it never moves forward here."""
+        with self.store.transaction(write=True) as db:
+            self.access(db, user_id, organization_id, conversation_id)
+            message = db.execute(
+                "SELECT sequence FROM direct_messages WHERE organization_id=? AND conversation_id=? AND id=?",
+                (organization_id, conversation_id, message_id),
+            ).fetchone()
+            if message is None:
+                raise StoreError(404, "message not found")
+            self._read(db, user_id, organization_id, conversation_id, 0)
+            db.execute(
+                "UPDATE direct_conversation_state SET last_read_sequence=MIN(last_read_sequence,?) "
+                "WHERE organization_id=? AND conversation_id=? AND user_id=?",
+                (message["sequence"] - 1, organization_id, conversation_id, user_id),
+            )
+            row = db.execute(
+                "SELECT last_read_sequence FROM direct_conversation_state WHERE organization_id=? AND conversation_id=? AND user_id=?",
+                (organization_id, conversation_id, user_id),
+            ).fetchone()
+            return {"last_read_sequence": row["last_read_sequence"]}
+
     def preference(self, user_id, organization_id, conversation_id, *, muted: bool | None = None, sequence: int | None = None) -> None:
         with self.store.transaction(write=True) as db:
             self.access(db, user_id, organization_id, conversation_id)
@@ -418,6 +440,10 @@ class DirectMessageEdit(RequestInput):
 
 class DirectReadCursor(RequestInput):
     sequence: Annotated[int, Field(ge=0, le=2**63 - 1)]
+
+
+class DirectUnreadFrom(RequestInput):
+    message_id: Annotated[str, Field(min_length=1, max_length=64)]
 
 
 class DirectMute(RequestInput):
@@ -494,6 +520,10 @@ def install_routes(app: FastAPI, store: Store, authenticated: Callable) -> None:
     @app.put(conversation + "/read", status_code=204)
     def read_cursor(organization_id: str, conversation_id: str, body: DirectReadCursor, user: User):
         direct.preference(user, organization_id, conversation_id, sequence=body.sequence)
+
+    @app.put(conversation + "/unread")
+    def unread_from(organization_id: str, conversation_id: str, body: DirectUnreadFrom, user: User):
+        return direct.mark_unread(user, organization_id, conversation_id, body.message_id)
 
     @app.put(conversation + "/mute", status_code=204)
     def mute(organization_id: str, conversation_id: str, body: DirectMute, user: User):

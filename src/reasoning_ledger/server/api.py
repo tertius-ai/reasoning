@@ -377,6 +377,10 @@ class ReadCursor(Input):
     sequence: Annotated[int, Field(ge=0, le=2**63 - 1)]
 
 
+class UnreadFrom(Input):
+    message_id: Annotated[str, Field(min_length=1, max_length=64)]
+
+
 class InferenceRequest(Input):
     models: Annotated[list[Annotated[str, Field(min_length=1, max_length=200)]], Field(min_length=1, max_length=4)]
     client_id: Annotated[str, Field(min_length=1, max_length=128)]
@@ -812,6 +816,10 @@ def create_app(config: Config, *, provider: OpenRouter | None = None, mail_provi
     @app.put("/api/organizations/{organization_id}/topics/{topic_id}/read", status_code=204)
     def read_topic(organization_id: str, topic_id: str, body: ReadCursor, user: User):
         store.topic_preference(user, organization_id, topic_id, sequence=body.sequence)
+
+    @app.put("/api/organizations/{organization_id}/topics/{topic_id}/unread")
+    def unread_topic(organization_id: str, topic_id: str, body: UnreadFrom, user: User):
+        return store.topic_mark_unread(user, organization_id, topic_id, body.message_id)
 
     def catalog_access(user: str, organization_id: str):
         with store.transaction() as db:

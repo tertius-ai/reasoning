@@ -188,7 +188,7 @@ export function ReactionControl({ path, canWrite = true, onAuthLost, batched = f
   </span>;
 }
 
-export function MessageActions({ organizationId, topicId, messageId, kind, canWrite, onForked, onAuthLost, message, canEdit, onEdited, onReplyAgain, onReply, people = [], reactions, batchedReactions = false }: {
+export function MessageActions({ organizationId, topicId, messageId, kind, canWrite, onForked, onAuthLost, message, canEdit, onEdited, onReplyAgain, onReply, onMarkUnread, people = [], reactions, batchedReactions = false }: {
   organizationId: string; topicId: string; messageId: string; kind: string; canWrite: boolean;
   reactions?: Feedback; batchedReactions?: boolean;
   onForked?: (topicId: string) => void; onAuthLost?: () => void;
@@ -196,6 +196,8 @@ export function MessageActions({ organizationId, topicId, messageId, kind, canWr
   onReplyAgain?: () => Promise<void>;
   /** Starts a reply to this message in the composer. */
   onReply?: () => void;
+  /** Moves your read point back to just before this message. */
+  onMarkUnread?: () => void;
   people?: { id: string; name: string }[];
 }) {
   const [open, setOpen] = useState(false), [name, setName] = useState(""), [busy, setBusy] = useState(false), [error, setError] = useState("");
@@ -229,6 +231,7 @@ export function MessageActions({ organizationId, topicId, messageId, kind, canWr
           .then(() => setLinkStatus("Link copied."))
           .catch(() => setLinkStatus("Could not copy the link."));
       }}>Copy link</button>}
+      {onMarkUnread && <button type="button" role="menuitem" onClick={() => { close(); onMarkUnread(); }}>Mark unread from here</button>}
       {kind === "beta" && canWrite && <button type="button" role="menuitem" onClick={() => {
         setOpen(true); if (!clientId) setClientId(crypto.randomUUID()); close();
       }}>Fork here</button>}

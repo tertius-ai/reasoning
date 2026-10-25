@@ -770,6 +770,8 @@ function Conversation({ organizationId, topic, members, user, canWrite, canManag
       : { messages, older, cursor: cursor.current, editCursor: editCursor.current });
   }, [snapshotKey]);
   const acknowledged = useRef(0);
+  // After "Mark unread from here" the open topic stops marking itself read until you leave it; the divider shows where.
+  const holdRead = useRef(false), [unreadFrom, setUnreadFrom] = useState<number | null>(null);
   const alive = useRef(true);
   const bottom = useRef(anchor === null && !focus);
   const currentDraft = useRef(draft);
@@ -1032,7 +1034,7 @@ function Conversation({ organizationId, topic, members, user, canWrite, canManag
   useEffect(() => {
     const mark = () => {
       const sequence = messages.at(-1)?.sequence ?? 0;
-      if (!bottom.current || document.visibilityState !== "visible" || !document.hasFocus() || sequence <= acknowledged.current) return;
+      if (holdRead.current || !bottom.current || document.visibilityState !== "visible" || !document.hasFocus() || sequence <= acknowledged.current) return;
       void request(root + "/read", { method: "PUT", body: { sequence } }).then(() => {
         acknowledged.current = Math.max(acknowledged.current, sequence); onPreference();
       }).catch((cause) => { if (cause instanceof ApiError && cause.status === 401) onAuthLost(); });
@@ -1119,11 +1121,19 @@ function Conversation({ organizationId, topic, members, user, canWrite, canManag
     || !workflowRuns.has("workflow:" + message.workflow_run_id));
   const groups = topic.kind === "alpha" ? alphaMessageGroups(visibleMessages) : visibleMessages.map(message => [message]);
   const byId = new Map(messages.map(message => [message.id, message]));
+  const markUnread = (message: Message) => {
+    holdRead.current = true; setUnreadFrom(message.sequence);
+    void request(root + "/unread", { method: "PUT", body: { message_id: message.id } }).then(() => onPreference()).catch(cause => {
+      holdRead.current = false; setUnreadFrom(null);
+      if (cause instanceof ApiError && cause.status === 401) onAuthLost(); else setError(errorMessage(cause));
+    });
+  };
   return groups.map((group, groupIndex) => ({
       id: "message:" + group[0].id, created_at: group[0].created_at, sequence: group[0].sequence, body: <>
       {topic.kind === "alpha" && (groupIndex === 0 || new Date(groups[groupIndex - 1][0].created_at * 1000).toDateString() !== new Date(group[0].created_at * 1000).toDateString())
         && <div className="org-message-day"><time dateTime={new Date(group[0].created_at * 1000).toISOString().slice(0, 10)}>{new Date(group[0].created_at * 1000).toLocaleDateString(undefined, { weekday: "long", month: "short", day: "numeric", year: "numeric" })}</time></div>}
-      <div className={"org-message-group org-speaker-" + (group[0].author_kind ?? "human") + " " + speakerTone(group[0], tones)}>{group.map((message, index) => <article className={"org-message " + (index ? "org-message-continuation " : "") + (message.author_kind !== "assistant" && message.author_id === user.id ? "org-message-own" : "") + (message.id === highlighted ? " org-message-linked" : "")}
+      <div className={"org-message-group org-speaker-" + (group[0].author_kind ?? "human") + " " + speakerTone(group[0], tones)}>{group.map((message, index) => <React.Fragment key={message.id}>
+        {message.sequence === unreadFrom && <div className="org-unread-divider" role="separator" aria-label="New messages"><span>New</span></div>}<article className={"org-message " + (index ? "org-message-continuation " : "") + (message.author_kind !== "assistant" && message.author_id === user.id ? "org-message-own" : "") + (message.id === highlighted ? " org-message-linked" : "")}
         key={message.id} id={"message-" + message.sequence} data-sequence={message.sequence} data-message-id={message.id}
         tabIndex={message.id === focus ? -1 : undefined} aria-current={message.id === highlighted ? "location" : undefined}>
         {message.reply_to && <ReplyPointer original={byId.get(message.reply_to)} onOpen={() => setThreadFor(message.id)}
@@ -1150,9 +1160,9 @@ function Conversation({ organizationId, topic, members, user, canWrite, canManag
             try { if (selectedModel) localStorage.setItem(`reasoning-model:${user.id}:${organizationId}:${id}`, selectedModel); }
             catch { /* Storage is optional. */ }
             onForked(id);
-          }} onAuthLost={onAuthLost} />
-      </article>)}</div></> }));
-  }, [messages, reactions, workflowRunKey, topic.kind, topic.id, mentionPeople, tones, members, user.id, organizationId, canWrite, canReplyAgain, onAuthLost, focus, highlighted]);
+          }} onAuthLost={onAuthLost} onMarkUnread={() => markUnread(message)} />
+      </article></React.Fragment>)}</div></> }));
+  }, [messages, reactions, workflowRunKey, topic.kind, topic.id, mentionPeople, tones, members, user.id, organizationId, canWrite, canReplyAgain, onAuthLost, focus, highlighted, unreadFrom]);
   // The plus sits under the box beside the model picker in AI chats, and inside the box on its left everywhere else.
   const attach = <span ref={attachmentControl} className="org-composer-attach"><AttachmentButton organizationId={organizationId} topicId={topic.id}
     disabled={!canWrite || sending || (topic.kind === "beta" && !!modelAttempt)} onError={cause => {

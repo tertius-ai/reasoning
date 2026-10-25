@@ -128,6 +128,13 @@ test("a member messages a colleague from People, who finds, reads and replies, t
 
     // The same picker works in a private conversation and changes reach the other browser.
     const received = reply.locator(".org-message").filter({ hasText: "section 3" });
+    // "Mark unread from here" brings the count back and shows where; the open conversation does not clear it again.
+    await received.hover(); await received.getByRole("button", { name: "Message actions", exact: true }).click();
+    await member.getByRole("menuitem", { name: "Mark unread from here", exact: true }).click();
+    await visible(reply.getByRole("separator", { name: "New messages" }));
+    await visible(ownerRow.getByLabel("1 unread direct messages"));
+    await member.waitForTimeout(1500);
+    assert.equal(await ownerRow.getByLabel("1 unread direct messages").count(), 1, "the open conversation keeps it unread");
     await received.hover(); await received.getByRole("button", { name: "Add reaction", exact: true }).click();
     await member.getByRole("menuitemcheckbox", { name: "Heart", exact: true }).click();
     const original = conversation.locator(".org-message").filter({ hasText: "section 3" });

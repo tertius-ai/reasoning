@@ -873,3 +873,7 @@ a.org-reference:hover, a.org-reference:focus-visible { text-decoration: underlin
     border-right: 1px solid var(--border); background: var(--surface); }
 }
 @media (min-width: 701px) and (max-width: 1000px) { .org-appbar-brand-open { width: 235px; } }
+
+/* "Mark unread from here": a red line with "New" above the first message you marked unread. */
+.org-unread-divider { display: flex; align-items: center; gap: 8px; margin: 6px 0; color: var(--red, #e5484d); font-size: 10.5px; letter-spacing: .06em; text-transform: uppercase; }
+.org-unread-divider::before, .org-unread-divider::after { content: ""; flex: 1; height: 1px; background: color-mix(in srgb, var(--red, #e5484d) 55%, transparent); }

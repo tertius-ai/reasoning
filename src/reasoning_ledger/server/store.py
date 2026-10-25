@@ -713,6 +713,30 @@ class Store:
                     (sequence, organization_id, user_id, topic_id),
                 )
 
+    def topic_mark_unread(self, user_id: str, organization_id: str, topic_id: str, message_id: str) -> dict[str, int]:
+        """Move this reader's read point back to just before `message_id`; it never moves forward here."""
+        with self.transaction(write=True) as db:
+            self._topic_access(db, user_id, organization_id, topic_id)
+            message = db.execute(
+                "SELECT sequence FROM messages WHERE organization_id=? AND topic_id=? AND id=?", (organization_id, topic_id, message_id)
+            ).fetchone()
+            if message is None:
+                raise StoreError(404, "message not found")
+            db.execute(
+                "INSERT OR IGNORE INTO topic_subscriptions(organization_id,user_id,topic_id) VALUES(?,?,?)",
+                (organization_id, user_id, topic_id),
+            )
+            db.execute(
+                "UPDATE topic_subscriptions SET last_read_sequence=MIN(last_read_sequence,?) "
+                "WHERE organization_id=? AND user_id=? AND topic_id=?",
+                (message["sequence"] - 1, organization_id, user_id, topic_id),
+            )
+            row = db.execute(
+                "SELECT last_read_sequence FROM topic_subscriptions WHERE organization_id=? AND user_id=? AND topic_id=?",
+                (organization_id, user_id, topic_id),
+            ).fetchone()
+            return {"last_read_sequence": row["last_read_sequence"]}
+
     def search(self, user_id: str, organization_id: str, query: str, limit: int = 50) -> list[dict[str, Any]]:
         if not query.strip() or not 1 <= limit <= 100:
             raise StoreError(400, "search requires text and a limit of 1–100")
