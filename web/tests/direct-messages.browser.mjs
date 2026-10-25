@@ -188,6 +188,19 @@ test("a member messages a colleague from People, who finds, reads and replies, t
     await member.keyboard.press("Escape");
     await lightbox.waitFor({ state: "detached" });
 
+    // Scrolled up, the reader gets the newest-message button of topic chats; it counts the other person's new messages.
+    await member.setViewportSize({ width: 1280, height: 480 });
+    await reply.getByLabel("Message history", { exact: true }).evaluate((view) => { view.scrollTop = 0; view.dispatchEvent(new Event("scroll")); });
+    const newest = reply.getByRole("button", { name: "Jump to newest message", exact: true });
+    await visible(newest);
+    await owner.getByLabel("Message", { exact: true }).fill("One more thought on section 3.");
+    await owner.keyboard.press("Enter");
+    await visible(reply.getByRole("button", { name: "Jump to newest message, 1 new", exact: true }));
+    await reply.getByRole("button", { name: "Jump to newest message, 1 new", exact: true }).click();
+    await visible(reply.locator(".org-message").filter({ hasText: "One more thought on section 3." }));
+    await reply.locator(".org-jump").waitFor({ state: "detached" });
+    await member.setViewportSize({ width: 1280, height: 860 });
+
     // Muting hides the unread count; blocking stops the other person's messages with a neutral refusal.
     await reply.getByRole("button", { name: "Mute", exact: true }).click();
     await visible(ownerRow.getByLabel("Muted"));

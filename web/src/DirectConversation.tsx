@@ -9,6 +9,7 @@ import { LIVE_SAFETY_POLL_MS, subscribeEvents } from "./topicEvents";
 import { ActionMenu, CopyOutputButton, MessageMenuIcon, ReactionControl } from "./ChatFeedback";
 import { speakerTone } from "./mentions";
 import { ReplyBar, ReplyPointer, ThreadDialog } from "./MessageReplies";
+import { NewestMessageButton, useUnseenMessages } from "./NewestMessage";
 import { AttachFilesButton, DirectAttachments, MAX_DIRECT_ATTACHMENTS, PendingFile, PendingFiles, joinAttachments, pendingFile, splitAttachments, uploadDirectFile } from "./DirectMedia";
 
 type Draft = { text: string; clientId: string; attempted: boolean; replyTo?: string; files: PendingFile[] };
@@ -102,6 +103,7 @@ export function DirectConversationView({ organizationId, conversation, user, mem
     return caption || files.map(file => file.name).join(", ");
   };
   const authorName = (message: Message) => message.author_id === user.id ? "You" : name;
+  const unseen = useUnseenMessages(messages, atBottom, user.id);
   const replyOriginal = draft.replyTo ? messages.find(message => message.id === draft.replyTo) : undefined;
   useEffect(() => { alive.current = true; return () => { alive.current = false; }; }, []);
   useEffect(() => { if (textarea.current) resizeComposer(textarea.current); }, [draft.text]);
@@ -276,6 +278,9 @@ export function DirectConversationView({ organizationId, conversation, user, mem
         {!loading && !messages.length && <div className="org-empty"><h2>Send {name} a message</h2><p>New messages show as unread in their Direct messages list.</p></div>}
         {transcript}
       </div>
+      {!atBottom && messages.length > 0 && <NewestMessageButton unseen={unseen} onJump={() => {
+        bottom.current = true; setAtBottom(true); if (viewport.current) viewport.current.scrollTop = viewport.current.scrollHeight;
+      }} />}
     </div>
     {!online && <p role="status" className="org-reconnecting">Reconnecting…</p>}
     {error && <p role="alert" className="org-error org-conversation-error">{error}</p>}

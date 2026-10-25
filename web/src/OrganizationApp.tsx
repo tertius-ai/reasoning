@@ -52,6 +52,7 @@ const loadKnowledgeWorkspace = () => import("./KnowledgeWorkspace");
 const KnowledgeWorkspace = lazy(() => loadKnowledgeWorkspace().then(module => ({ default: module.KnowledgeWorkspace })));
 const KnowledgeBrowser = lazy(() => import("./KnowledgeBrowser").then(module => ({ default: module.KnowledgeBrowser })));
 import { FeedbackAdministration, FeedbackButton } from "./Feedback";
+import { NewestMessageButton, useUnseenMessages } from "./NewestMessage";
 const BotAdministration = lazy(() => import("./BotAdministration").then(module => ({ default: module.BotAdministration })));
 const ComputeAdministration = lazy(() => import("./ComputeAdministration").then(module => ({ default: module.ComputeAdministration })));
 const OrganizationModelBrowser = lazy(() => import("./OrganizationUsage").then(module => ({ default: module.OrganizationModelBrowser })));
@@ -752,11 +753,7 @@ function Conversation({ organizationId, topic, members, user, canWrite, canManag
   currentDraft.current = draft;
   const root = topicPath(organizationId, topic.id);
   const [threadFor, setThreadFor] = useState<string | null>(null);
-  // Messages from others that arrived while the reader was scrolled up; the newest-message button counts them.
-  const [seenSequence, setSeenSequence] = useState(0);
-  const latestSequence = messages.at(-1)?.sequence ?? 0;
-  useEffect(() => { if (atBottom) setSeenSequence(latestSequence); }, [atBottom, latestSequence]);
-  const unseen = atBottom ? 0 : messages.filter(message => message.sequence > seenSequence && message.author_id !== user.id).length;
+  const unseen = useUnseenMessages(messages, atBottom, user.id);
   // Choosing or cancelling a reply target starts a fresh attempt, so a retry never changes what a sent message answers.
   const startReply = useRef((_id: string) => {});
   startReply.current = (id: string) => {
@@ -1166,10 +1163,9 @@ function Conversation({ organizationId, topic, members, user, canWrite, canManag
         canWrite={canWrite} canManage={canManage} onActivity={setBotActivity} onAuthLost={onAuthLost} wake={messages.at(-1)?.sequence} />
 
     </div>
-    {!atBottom && messages.length + workflowActivity.length + computeActivity.length + betaActivity.length > 0 && <button className="org-jump" aria-label={unseen ? `Jump to newest message, ${unseen} new` : "Jump to newest message"} title="Newest message" onClick={() => {
+    {!atBottom && messages.length + workflowActivity.length + computeActivity.length + betaActivity.length > 0 && <NewestMessageButton unseen={unseen} onJump={() => {
       bottom.current = true; setAtBottom(true); if (viewport.current) viewport.current.scrollTop = viewport.current.scrollHeight;
-    }}><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6" /></svg>
-      {unseen > 0 && <span className="org-jump-count" aria-hidden="true">{unseen > 99 ? "99+" : unseen}</span>}</button>}
+    }} />}
     </div>
     {!online && <p role="status" className="org-reconnecting">Reconnecting…</p>}
     {error && <p role="alert" className="org-error org-conversation-error">{error}</p>}
