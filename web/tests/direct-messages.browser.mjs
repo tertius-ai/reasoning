@@ -158,9 +158,10 @@ test("a member messages a colleague from People, who finds, reads and replies, t
     await ownOriginal.hover();
     const [box, launcher] = await Promise.all([ownOriginal.boundingBox(), ownOriginal.getByRole("button", { name: "Add reaction", exact: true }).boundingBox()]);
     assert.ok(launcher.x + launcher.width / 2 < box.x + box.width / 2, "the toolbar of your own message is on the left");
-    const tone = async (locator) => /org-person-tone-\d/.exec(await locator.locator("xpath=..").getAttribute("class"))?.[0];
+    const tone = async (locator) => /org-person-tone-\d+/.exec(await locator.locator("xpath=..").getAttribute("class"))?.[0];
     assert.ok(await tone(ownOriginal));
     assert.equal(await tone(ownOriginal), await tone(theirCopy), "Owner has the same color in both browsers");
+    assert.notEqual(await tone(ownOriginal), await tone(answered), "the two people in a conversation never share a color");
     assert.equal(await tone(answered), await tone(reply.locator(".org-message").filter({ hasText: "Section 3 looks right" })));
 
     // Files arrive as media bubbles: pictures in a grid that opens full size, PDFs as rows with Open and Download.

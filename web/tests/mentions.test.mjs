@@ -29,12 +29,26 @@ test("sent mentions render as tinted names, and mentions of the reader are marke
   assert.equal(mentions.mentionFromHref("https://example.org/#mention/" + ada), null);
 });
 
-test("the picker shows initials on a stable color per member", () => {
+test("the picker shows initials", () => {
   assert.equal(mentions.mentionInitials("Ada Lovelace"), "AL");
   assert.equal(mentions.mentionInitials("  Grace  "), "G");
   assert.equal(mentions.mentionInitials("Fixture Codex Bot"), "FB");
-  assert.equal(mentions.mentionTone(ada), mentions.mentionTone(ada));
-  assert.ok(mentions.mentionTone(grace) >= 0 && mentions.mentionTone(grace) < 8);
+});
+
+test("a chat's participants take the palette in id order, then those who spoke there, as in Signal's groups", () => {
+  const tones = mentions.chatTones([grace, ada], [ada, "model:gpt", "c".repeat(32)]);
+  assert.deepEqual([...tones], [[ada, 0], [grace, 1], ["c".repeat(32), 2], ["model:gpt", 3]]);
+  assert.equal(mentions.speakerTone({ author_id: grace }, tones), "org-person-tone-1");
+  assert.equal(mentions.speakerTone({ author_id: ada, author_kind: "assistant", assistant_model: "gpt" }, tones), "org-person-tone-3",
+    "a model's reply takes the model's color, not the requester's");
+  // Everyone differs until the palette's 36 colors are used up; then the order wraps.
+  const many = Array.from({ length: 40 }, (_, index) => index.toString(16).padStart(32, "0"));
+  const crowd = mentions.chatTones(many);
+  assert.equal(mentions.TONES, 36);
+  assert.equal(new Set(many.slice(0, 36).map(id => crowd.get(id))).size, 36);
+  assert.equal(crowd.get(many[36]), 0);
+  // Order of discovery does not matter: every browser sorts the same group the same way.
+  assert.deepEqual([...mentions.chatTones([ada, grace])], [...mentions.chatTones([grace, ada])]);
 });
 
 test("the composer mirror tints exactly the bound mention ranges, not references", () => {

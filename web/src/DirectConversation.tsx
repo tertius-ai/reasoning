@@ -7,7 +7,7 @@ import { ApiError, Account, Member, Message, aborted, errorMessage, mentionMarkd
 import { startPolling } from "./polling";
 import { LIVE_SAFETY_POLL_MS, subscribeEvents } from "./topicEvents";
 import { ActionMenu, CopyOutputButton, MessageMenuIcon, ReactionControl } from "./ChatFeedback";
-import { speakerTone } from "./mentions";
+import { chatTones, speakerTone } from "./mentions";
 import { ReplyBar, ReplyPointer, ThreadDialog } from "./MessageReplies";
 import { NewestMessageButton, useUnseenMessages } from "./NewestMessage";
 import { AttachFilesButton, DirectAttachments, MAX_DIRECT_ATTACHMENTS, PendingFile, PendingFiles, joinAttachments, pendingFile, splitAttachments, uploadDirectFile } from "./DirectMedia";
@@ -104,6 +104,8 @@ export function DirectConversationView({ organizationId, conversation, user, mem
   };
   const authorName = (message: Message) => message.author_id === user.id ? "You" : name;
   const unseen = useUnseenMessages(messages, atBottom, user.id);
+  // A direct conversation's group is its two participants, so they always differ.
+  const tones = useMemo(() => chatTones([user.id, conversation.other_user.id]), [user.id, conversation.other_user.id]);
   const replyOriginal = draft.replyTo ? messages.find(message => message.id === draft.replyTo) : undefined;
   useEffect(() => { alive.current = true; return () => { alive.current = false; }; }, []);
   useEffect(() => { if (textarea.current) resizeComposer(textarea.current); }, [draft.text]);
@@ -215,7 +217,7 @@ export function DirectConversationView({ organizationId, conversation, user, mem
       {(groupIndex === 0 || new Date(groups[groupIndex - 1][0].created_at * 1000).toDateString() !== new Date(group[0].created_at * 1000).toDateString())
         && <div className="org-message-day"><time dateTime={new Date(group[0].created_at * 1000).toISOString().slice(0, 10)}>
           {new Date(group[0].created_at * 1000).toLocaleDateString(undefined, { weekday: "long", month: "short", day: "numeric", year: "numeric" })}</time></div>}
-      <div className={"org-message-group org-speaker-human " + speakerTone(group[0]) + (group[0].author_id === user.id ? " org-message-group-mine" : "")}>{group.map((message, index) => {
+      <div className={"org-message-group org-speaker-human " + speakerTone(group[0], tones) + (group[0].author_id === user.id ? " org-message-group-mine" : "")}>{group.map((message, index) => {
         const own = message.author_id === user.id, original = message.reply_to ? byId.get(message.reply_to) : undefined;
         const hasMenu = (own && writable) || Boolean(message.revision);
         return <article key={message.id} id={"direct-message-" + message.sequence} data-sequence={message.sequence} data-message-id={message.id}
@@ -250,7 +252,7 @@ export function DirectConversationView({ organizationId, conversation, user, mem
           </div>}
         </article>;
       })}</div></div>);
-  }, [messages, editing, history, members, user.id, name, root, writable, onAuthLost]);
+  }, [messages, editing, history, members, user.id, name, root, writable, tones, onAuthLost]);
 
   const status = !conversation.other_member ? `${name} is no longer a member of this organization.`
     : conversation.blocked ? `You blocked ${name}. Neither of you can send messages here until you unblock them.`
@@ -287,7 +289,7 @@ export function DirectConversationView({ organizationId, conversation, user, mem
     {status && <p role="status" className="org-help org-direct-status">{status}</p>}
     {threadFor && <ThreadDialog key={threadFor} messagesPath={root + "/messages"} messageId={threadFor} canWrite={writable}
       onClose={() => setThreadFor(null)} onAuthLost={onAuthLost} onPosted={message => setMessages(existing => mergeMessages(existing, [message]))}
-      renderMessage={message => <div className={"org-message-group org-speaker-human " + speakerTone(message)}><article className="org-message">
+      renderMessage={message => <div className={"org-message-group org-speaker-human " + speakerTone(message, tones)}><article className="org-message">
         <header><strong>{authorName(message)}</strong>
           <time dateTime={new Date(message.created_at * 1000).toISOString()}>{new Date(message.created_at * 1000).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" })}</time></header>
         {messageBody(message)}</article></div>} />}

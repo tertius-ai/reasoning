@@ -24,18 +24,31 @@ export function mentionInitials(name: string): string {
   return (words.length > 1 ? [words[0], words.at(-1)!] : words).map(word => Array.from(word)[0]).join("").toLocaleUpperCase();
 }
 
-const TONES = 8;
-/** A stable color per person or bot, the same in every chat and in the mention picker. */
-export function mentionTone(id: string): number {
-  let hash = 0;
-  for (const character of id) hash = (hash * 31 + character.charCodeAt(0)) >>> 0;
-  return hash % TONES;
+/** The palette's size, as in Signal: 36 hues (organization.css). */
+export const TONES = 36;
+type Speaker = { author_id: string; author_kind?: string; assistant_model?: string | null };
+
+/** Whose color a message takes: a model's replies are colored by the model, not the requester. */
+export const speakerKey = (message: Speaker) => message.author_kind === "assistant" ? "model:" + (message.assistant_model ?? "") : message.author_id;
+
+/**
+ * Colors for one chat, as in Signal's groups: its participants, sorted by id, take the palette in order, so everyone in a
+ * chat has a different color until the palette runs out. A person's color can therefore differ between chats. Current
+ * participants come first, so their colors do not move when older history loads; anyone else who spoke there (a former
+ * member, a model) follows in the same way.
+ */
+export function chatTones(participants: Iterable<string>, speakers: Iterable<string> = []): Map<string, number> {
+  const tones = new Map<string, number>();
+  const assign = (ids: Iterable<string>) => [...new Set(ids)].filter(id => !tones.has(id)).sort()
+    .forEach(id => tones.set(id, tones.size % TONES));
+  assign(participants);
+  assign(speakers);
+  return tones;
 }
 
-/** The class giving a speaker's messages their color; a model's replies are colored by the model, not the requester. */
-export function speakerTone(message: { author_id: string; author_kind?: string; assistant_model?: string | null }): string {
-  return "org-person-tone-" + mentionTone(message.author_kind === "assistant" ? "model:" + (message.assistant_model ?? "") : message.author_id);
-}
+/** The class giving a person, bot or model its chat color: their dot, guide line, name and picker avatar. */
+export const toneClass = (tones: Map<string, number>, id: string) => "org-person-tone-" + (tones.get(id) ?? 0);
+export const speakerTone = (message: Speaker, tones: Map<string, number>) => toneClass(tones, speakerKey(message));
 
 /**
  * Paints tints behind bound mentions in the composer. A textarea cannot style parts of its text, so this mirror
