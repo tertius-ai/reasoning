@@ -70,8 +70,11 @@ test("progress follows its human message, retained failures stay inspectable, an
     const failed = page.locator('[data-run-id="failed"]');
     await failed.locator("summary").click(); await failed.getByText("Check provider credit.", { exact: true }).waitFor();
     await failed.getByText("Inspect the provider account.", { exact: true }).waitFor();
+    // The research capabilities are listed in the topic's details card.
+    await page.locator(".org-topic-menu > summary").click();
     await page.getByLabel("Effective model capabilities").filter({ hasText: "public source reader" }).waitFor();
     assert.match(await page.getByLabel("Effective model capabilities").textContent(), /no general web search.*2026-10-23 UTC/);
+    await page.keyboard.press("Escape");
     const waiting = page.locator('[data-run-id="waiting-review"]');
     await waiting.getByText("Waiting · answer incomplete", { exact: true }).waitFor();
     await waiting.locator("summary").first().click();

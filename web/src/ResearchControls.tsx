@@ -55,12 +55,12 @@ export function mergeToolReceipts(state: ToolReceiptState, incoming: ToolReceipt
 export type GoalAttempt = { client_id: string; objective: string; acceptance: string[]; model: string; budget_microusd: number; effort?: string | null;
   max_turns: number; max_tool_calls: number; duration_seconds: number };
 
-export function ResearchInstructions({ instructions, loading, error = "", onInspect }: {
+export function ResearchInstructions({ instructions, loading, error = "", onInspect, open = false }: {
   instructions: { system_prompt: string; prompt_version: string } | null; loading: boolean;
-  error?: string; onInspect?: () => void;
+  error?: string; onInspect?: () => void; open?: boolean;
 }) {
   return <article className="org-message org-system-message" aria-label="Research instructions">
-    <details onToggle={(event) => { if (event.currentTarget.open) onInspect?.(); }}><summary>System prompt</summary>
+    <details open={open || undefined} onToggle={(event) => { if (event.currentTarget.open) onInspect?.(); }}><summary>System prompt</summary>
       {instructions ? <><small>{instructions.prompt_version}</small><ResearchMarkdown>{instructions.system_prompt}</ResearchMarkdown></>
         : <p>{loading ? "Loading system prompt…" : "System prompt unavailable. Try refreshing."}</p>}
       {error && <p role="alert" className="org-error">{error}</p>}
@@ -98,18 +98,22 @@ export function ResearchGoalSummary({ goal, canControl, busy, onControl }: { goa
 }
 
 export function ResearchControls({ organizationId, topicId, userId, selectedModel, catalog, allowedModels, canWrite, canManage, online,
-  goalDraft, onGoalDraftDone, onGoalStarted, onAuthLost, toolbarTarget, onSettingsChanged, onPrepareReview, selectedEffort = null }: {
+  goalDraft, onGoalDraftDone, onGoalStarted, onAuthLost, toolbarTarget, menuTarget = null, instructions, onSettingsChanged, onPrepareReview, selectedEffort = null }: {
   organizationId: string; topicId: string; userId: string; selectedModel: string; canWrite: boolean; canManage: boolean; online: boolean;
   catalog: OrganizationPrices | null; allowedModels: string[];
   goalDraft: string | null; onGoalDraftDone: () => void; onGoalStarted: (objective: string) => void; onAuthLost: () => void;
   toolbarTarget: HTMLElement | null;
+  /** The topic details card in the top bar: capabilities, System prompt, Research account and Project files appear there. */
+  menuTarget?: HTMLElement | null;
+  /** The topic's system prompt, shown as a research pane. */
+  instructions?: React.ReactNode;
   selectedEffort?: string | null;
   onSettingsChanged?: () => void;
   onPrepareReview?: (text: string) => void;
 }) {
   const [goal, setGoal] = useState<Goal | null>(null); const [enabled, setEnabled] = useState<ResearchTool[]>([...RESEARCH_TOOLS]);
   const [context, setContext] = useState<Context | null>(null); const [proposals, setProposals] = useState<Proposal[]>([]);
-  const [pane, setPane] = useState<"goal" | "context" | "tools" | "proposals" | "ledger" | "files" | "reviews" | "account" | null>(() => typeof window !== "undefined" && new URLSearchParams(window.location.search).get("topic") === topicId && new URLSearchParams(window.location.search).has("account_revision") ? "account" : null);
+  const [pane, setPane] = useState<"goal" | "context" | "tools" | "proposals" | "ledger" | "files" | "reviews" | "account" | "instructions" | null>(() => typeof window !== "undefined" && new URLSearchParams(window.location.search).get("topic") === topicId && new URLSearchParams(window.location.search).has("account_revision") ? "account" : null);
   useEffect(() => {
     const linked = () => { const query = new URLSearchParams(window.location.search);
       if (query.get("topic") === topicId && query.has("account_revision")) setPane("account"); };
@@ -217,6 +221,16 @@ export function ResearchControls({ organizationId, topicId, userId, selectedMode
   const closeGoal = () => { setCreateOpen(false); onGoalDraftDone(); };
   const pending = proposals.filter((proposal) => ["pending", "reviewing"].includes(proposal.status));
   const activeTool = recentTools.find((tool) => tool.status === "requested");
+  // The selected model's research capabilities for the details card; a capability that is on is highlighted.
+  const model = catalogModel(catalog, selectedModel);
+  const web = enabled.includes("web"), literature = enabled.includes("arxiv"), search = web && !!sourceConfig?.web_search_configured;
+  const capabilities: [string, boolean][] = selectedModel.startsWith("bot/") ? [["CLI bot · tools depend on its live grants and runner", true]]
+    : !model ? [["Checking selected model capabilities…", false]]
+      : !model.supports_tools ? [["Plain response · selected model has no research tools", false]]
+        : !sourceConfig ? [["Checking research capabilities…", false]]
+          : [["Research", true], [web ? "public source reader" : "no web reader", web],
+            [literature ? "literature readers" : "no literature readers", literature], [search ? "web search" : "no general web search", search]];
+  if (sourceConfig?.current_date) capabilities.push([sourceConfig.current_date + " UTC", false]);
   useTopicCommand(topicId, command => {
     if (command === "context") { void loadContext(); return; }
     if (["ledger", "files", "goal", "tools", "proposals", "reviews", "account"].includes(command)) {
@@ -225,20 +239,21 @@ export function ResearchControls({ organizationId, topicId, userId, selectedMode
     }
   });
   return <div className="org-research-controls">
-    <button type="button" className="org-project-files" aria-pressed={pane === "account"} onClick={() => setPane(current => current === "account" ? null : "account")}>Research account</button>
-    <button type="button" className="org-project-files" aria-pressed={pane === "files"}
-      onClick={() => setPane(current => current === "files" ? null : "files")}>Project files</button>
-    <p className="org-help" aria-label="Effective model capabilities">{selectedModel.startsWith("bot/")
-      ? "CLI bot · tools depend on its live grants and runner"
-      : !catalogModel(catalog, selectedModel) ? "Checking selected model capabilities…"
-      : !catalogModel(catalog, selectedModel)?.supports_tools ? "Plain response · selected model has no research tools"
-        : !sourceConfig ? "Checking research capabilities…"
-          : `Research · ${enabled.includes("web") ? "public source reader" : "no web reader"} · ${enabled.includes("arxiv") ? "literature readers" : "no literature readers"} · ${enabled.includes("web") && sourceConfig.web_search_configured ? "web search" : "no general web search"}`}
-      {sourceConfig?.current_date && ` · ${sourceConfig.current_date} UTC`}</p>
+    {menuTarget && createPortal(<>
+      <p className="org-topic-card-capabilities" aria-label="Effective model capabilities">{capabilities.map(([label, on]) =>
+        <span key={label} className={on ? "org-capability-on" : undefined}>{label}</span>)}</p>
+      {([["instructions", "≡", "System prompt"], ["account", "◇", "Research account"], ["files", "▤", "Project files"]] as const).map(([value, mark, label]) =>
+        <button key={value} type="button" className="org-topic-card-row" aria-pressed={pane === value} onClick={() => {
+          // Choosing a panel closes the details card, as choosing a menu item does.
+          menuTarget.closest("details")?.removeAttribute("open");
+          setPane(current => current === value ? null : value);
+        }}><span className="org-account-mark" aria-hidden="true">{mark}</span>{label}</button>)}
+    </>, menuTarget)}
     {toolbarTarget && createPortal(<div className="org-research-toolbar" aria-label="Research actions">
     {(goal?.status === "active" || activeTool) && <span role="status" className="org-goal-live"><i />{activeTool ? `Using ${activeTool.name.replaceAll("_", " ")}` : "Working toward your goal"}</span>}
   </div>, toolbarTarget)}
     {pane && <button type="button" aria-label="Close research panel" onClick={() => setPane(null)}>×</button>}
+    {pane === "instructions" && <div className="org-research-pane">{instructions}</div>}
     {pane === "account" && <div className="org-research-pane"><ResearchAccount key={root} root={root} canWrite={canWrite} online={online}
       reviewAvailable={!!onPrepareReview && !selectedModel.startsWith("bot/") && !!catalogModel(catalog, selectedModel)?.supports_tools && enabled.includes("knowledge") && reviewEnabled}
       onPrepareReview={onPrepareReview} onAuthLost={onAuthLost} /></div>}

@@ -117,8 +117,14 @@ export function alphaMessageGroups(messages: Message[]): Message[][] {
   return groups;
 }
 
-export function TopicBreadcrumb({ channel, topic, subscribed, onFollow, onSettings, onCopyLink }: {
+/**
+ * The topic name in the top bar. Clicking it opens the topic's details, like a direct conversation's: the topic and its
+ * channel, then for AI chats its research capabilities, System prompt, Research account and Project files (placed into
+ * `researchSlot` by the conversation), then Follow, Copy topic link and Topic settings.
+ */
+export function TopicBreadcrumb({ channel, topic, subscribed, onFollow, onSettings, onCopyLink, researchSlot }: {
   channel?: Channel; topic: Topic; subscribed: boolean; onFollow: () => void; onSettings?: () => void; onCopyLink?: () => void;
+  researchSlot?: (element: HTMLDivElement | null) => void;
 }) {
   const menu = useRef<HTMLDetailsElement>(null);
   useEffect(() => {
@@ -129,15 +135,24 @@ export function TopicBreadcrumb({ channel, topic, subscribed, onFollow, onSettin
     document.addEventListener("pointerdown", close); document.addEventListener("keydown", close);
     return () => { document.removeEventListener("pointerdown", close); document.removeEventListener("keydown", close); };
   }, []);
+  const choose = (action: () => void) => { action(); if (menu.current) menu.current.open = false; };
   return <nav className="org-current-topic" aria-label="Current topic">
     <span title={channel?.name}>#{channel?.name}</span><span aria-hidden="true">›</span>
     <details className="org-topic-menu" ref={menu}>
-      <summary title={topic.name}><h1><span className="org-kind">{KIND_SYMBOL[topic.kind]}</span>-{topic.name}</h1></summary>
-      <div className="org-topic-menu-options">
-        <button type="button" onClick={() => { onFollow(); if (menu.current) menu.current.open = false; }}>
-          {subscribed ? "Unfollow topic" : "Follow topic"}</button>
-        {onCopyLink && <button type="button" onClick={() => { onCopyLink(); if (menu.current) menu.current.open = false; }}>Copy topic link</button>}
-        {onSettings && <button type="button" onClick={() => { onSettings(); if (menu.current) menu.current.open = false; }}>Topic settings</button>}
+      <summary title={topic.name}><h1><span className="org-kind">{KIND_SYMBOL[topic.kind]}</span>-{topic.name}</h1>
+        <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6" /></svg></summary>
+      <div className="org-topic-menu-options org-topic-card" role="group" aria-label="Topic details">
+        <header><strong><span className="org-kind">{KIND_SYMBOL[topic.kind]}</span>-{topic.name}</strong>
+          <small>{KIND_LABEL[topic.kind]}{channel ? ` · #${channel.name}` : ""}</small></header>
+        <div className="org-topic-card-research" ref={researchSlot} />
+        <div className="org-topic-card-actions">
+          <button type="button" role="switch" aria-checked={subscribed} className="org-topic-card-row" onClick={onFollow}>
+            <span className="org-account-mark" aria-hidden="true">♪</span><span>Follow topic</span><span className="org-topic-switch" aria-hidden="true" /></button>
+          {onCopyLink && <button type="button" className="org-topic-card-row" onClick={() => choose(onCopyLink)}>
+            <span className="org-account-mark" aria-hidden="true">⧉</span>Copy topic link</button>}
+          {onSettings && <button type="button" className="org-topic-card-row" onClick={() => choose(onSettings)}>
+            <span className="org-account-mark" aria-hidden="true">⚙{"\uFE0E"}</span>Topic settings</button>}
+        </div>
       </div>
     </details>
   </nav>;
@@ -667,11 +682,13 @@ function PresenceSidebar({ organizationId, open, onClose, onAuthLost, userId, on
   </aside>;
 }
 
-function Conversation({ organizationId, topic, members, user, canWrite, canManage, draft, updateDraft, anchor, focus, referenceTargets = [], onPreference, onForked, onAuthLost, modelAttempt, onModelAttempt, computeAttempt, onComputeAttempt, workflowAttempt, onWorkflowAttempt, workflowExecutionAttempt, onWorkflowExecutionAttempt }: {
+function Conversation({ organizationId, topic, members, user, canWrite, canManage, draft, updateDraft, anchor, focus, referenceTargets = [], menuTarget = null, onPreference, onForked, onAuthLost, modelAttempt, onModelAttempt, computeAttempt, onComputeAttempt, workflowAttempt, onWorkflowAttempt, workflowExecutionAttempt, onWorkflowExecutionAttempt }: {
   organizationId: string; topic: Topic; members: Member[]; user: Account; canWrite: boolean; canManage: boolean;
   draft: Draft; updateDraft: (draft: Draft) => void; anchor: number | null;
   /** A linked message: the conversation opens around it, scrolls to it and highlights it. */
   focus?: string;
+  /** The topic details card in the top bar, where research items appear. */
+  menuTarget?: HTMLElement | null;
   /** Topics and projects the writer can reference with `#`. */
   referenceTargets?: ReferenceCandidate[];
   onPreference: () => void; onAuthLost: () => void;
@@ -1151,8 +1168,6 @@ function Conversation({ organizationId, topic, members, user, canWrite, canManag
       const view = viewport.current;
       if (view) { bottom.current = view.scrollHeight - view.scrollTop - view.clientHeight < 64; setAtBottom(bottom.current); }
     }}>
-      {topic.kind === "beta" && <TopicSystemPrompt organizationId={organizationId} topicId={topic.id} onAuthLost={onAuthLost} revision={promptRevision}
-        onInspect={() => { bottom.current = false; setAtBottom(false); }} />}
       {older && messages.length > 0 && <button className="org-older" disabled={loadingOlder} onClick={() => void loadOlder()}>{loadingOlder ? "Loading…" : "Load earlier messages"}</button>}
       {loading && <p role="status" className="org-empty">Loading conversation…</p>}
       {!loading && messages.length === 0 && topic.kind !== "gamma" && <div className="org-empty"><h2>Start the conversation</h2><p>{canWrite ? "Write the first message below." : "Messages will appear here."}</p></div>}
@@ -1174,7 +1189,8 @@ function Conversation({ organizationId, topic, members, user, canWrite, canManag
     {!online && <p role="status" className="org-reconnecting">Reconnecting…</p>}
     {error && <p role="alert" className="org-error org-conversation-error">{error}</p>}
     {topic.kind === "beta" && <ResearchControls organizationId={organizationId} topicId={topic.id} userId={user.id}
-      toolbarTarget={composerTools} catalog={replyCatalog} allowedModels={replyConfiguration?.allowed_models ?? []}
+      toolbarTarget={composerTools} menuTarget={menuTarget}
+      instructions={<TopicSystemPrompt organizationId={organizationId} topicId={topic.id} onAuthLost={onAuthLost} revision={promptRevision} open />} catalog={replyCatalog} allowedModels={replyConfiguration?.allowed_models ?? []}
       selectedEffort={selectedEffort}
       selectedModel={selectedModel} canWrite={canWrite} canManage={canManage} online={online} goalDraft={goalDraft}
       onGoalDraftDone={() => setGoalDraft(null)} onGoalStarted={(objective) => {
@@ -1438,6 +1454,7 @@ export function OrganizationApp({ user, onAccount, onAuthenticated, onSignedOut,
   const [tool, setTool] = useState<"knowledge" | "prices" | "usage" | "bots" | null>(pairCode ? "bots" : null);
   const [knowledgeView, setKnowledgeView] = useState<KnowledgeView | null>(["ledger", "bibliography", "journal"].includes(workspace.view ?? "") ? workspace.view as KnowledgeView : null);
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
+  const [topicMenuSlot, setTopicMenuSlot] = useState<HTMLDivElement | null>(null);
   const [helpOpen, setHelpOpen] = useState(() => new URLSearchParams(window.location.search).get("view") === "help");
   useEffect(() => {
     const changed = () => { const query = new URLSearchParams(window.location.search), view = query.get("view");
@@ -1706,7 +1723,7 @@ export function OrganizationApp({ user, onAccount, onAuthenticated, onSignedOut,
       <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2" /><path d="M9 4v16" /></svg></button>
       <Brand /></div>
       {knowledgeView ? <h1 className="org-workspace-title">{knowledgeView === "journal" ? "Research blog editor" : knowledgeView === "ledger" ? "Ledger" : "Bibliography"}</h1>
-        : directConversation ? <h1 className="org-workspace-title">Direct messages · {directConversation.other_user.name}</h1> : organization && topic && <TopicBreadcrumb channel={channel} topic={topic}
+        : directConversation ? <h1 className="org-workspace-title">Direct messages · {directConversation.other_user.name}</h1> : organization && topic && <TopicBreadcrumb channel={channel} topic={topic} researchSlot={setTopicMenuSlot}
         subscribed={hierarchy.topic_state.find((item) => item.topic_id === topic.id)?.subscribed !== false}
         onFollow={() => void request(topicPath(organization.id, topic.id) + "/subscription", { method: "PUT", body: {
           subscribed: hierarchy.topic_state.find((item) => item.topic_id === topic.id)?.subscribed === false,
@@ -1779,7 +1796,7 @@ export function OrganizationApp({ user, onAccount, onAuthenticated, onSignedOut,
         </section> : organization && directConversation ? <LazyView label="Direct messages"><DirectConversationView key={organization.id + "/" + directConversation.id}
           organizationId={organization.id} conversation={directConversation} user={user} members={members} canWrite={canCreate}
           onChanged={preferenceRefresh} onAuthLost={authLost} /></LazyView> : organization && topic ? <Conversation key={organization.id + "/" + topic.id + "/" + selection?.anchor + "/" + (selection?.message ?? "")} organizationId={organization.id} topic={topic} members={members} user={user}
-          focus={selection?.message} referenceTargets={referenceTargets}
+          focus={selection?.message} referenceTargets={referenceTargets} menuTarget={topicMenuSlot}
           canWrite={canWriteSelected} canManage={["owner", "admin"].includes(organization.role)} draft={draft}
           modelAttempt={modelAttempts[draftKey]} onModelAttempt={(value) => setModelAttempts((existing) => ({ ...existing, [draftKey]: value }))}
           computeAttempt={computeAttempts[draftKey]} onComputeAttempt={(value) => setComputeAttempts((existing) => ({ ...existing, [draftKey]: value }))}

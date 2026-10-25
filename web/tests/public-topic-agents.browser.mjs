@@ -99,12 +99,15 @@ test("ordinary beta conversation delegates, streams roles and integrates without
     await page.getByRole("button", { name: "Sign in", exact: true }).click();
     await page.getByRole("button", { name: /^beta topic -Native agents/ }).click();
     assert.equal(await page.getByRole("link", { name: /^Work in/ }).count(), 0);
-    await page.getByText("System prompt", { exact: true }).click();
+    const details = page.getByRole("group", { name: "Topic details", exact: true });
+    await page.locator(".org-topic-menu > summary").click();
+    await details.getByRole("button", { name: "System prompt", exact: true }).click();
     await page.getByText(/Ordinary questions and discussion need a useful reply/).waitFor();
     const linked = await call(root + "/mathematics", { name: "ledger_claim", topic_id: topic.id,
       arguments: { statement: "A supporting tensor hypothesis." }, client_id: "browser-source-001" });
     // A sustained question has immutable candidates; ordinary discussion still sends normally.
-    await page.getByRole("button", { name: "Research account", exact: true }).click();
+    await page.locator(".org-topic-menu > summary").click();
+    await details.getByRole("button", { name: "Research account", exact: true }).click();
     const account = page.getByRole("region", { name: "Research account", exact: true });
     await account.getByRole("button", { name: "Start research account", exact: true }).click();
     await account.getByLabel("Exact question", { exact: true }).fill("Does $H$ imply $C$?");

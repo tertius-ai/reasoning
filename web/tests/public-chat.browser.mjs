@@ -155,14 +155,16 @@ test("three users create an organization, exchange alpha messages, and use durab
     assert.equal(await owner.getByLabel("Message", { exact: true }).count(), 1);
     await owner.getByRole("navigation", { name: "Projects and channels" }).getByRole("button", { name: /^alpha topic -Planning\b/ }).click();
 
+    // Follow is a switch in the topic's details card; its state survives a reload.
     await member.locator(".org-topic-menu > summary").click();
-    await member.getByRole("button", { name: "Unfollow topic" }).click();
-    await member.locator(".org-topic-menu > summary").click();
-    await visible(member.getByRole("button", { name: "Follow topic", exact: true }));
+    await member.getByRole("switch", { name: "Follow topic", checked: true }).click();
+    await visible(member.getByRole("switch", { name: "Follow topic", checked: false }));
     await member.reload();
     await member.locator(".org-topic-menu > summary").click();
-    await visible(member.getByRole("button", { name: "Follow topic", exact: true }));
-    await member.getByRole("button", { name: "Follow topic", exact: true }).click();
+    await visible(member.getByRole("switch", { name: "Follow topic", checked: false }));
+    await member.getByRole("switch", { name: "Follow topic" }).click();
+    await visible(member.getByRole("switch", { name: "Follow topic", checked: true }));
+    await member.keyboard.press("Escape");
 
     await owner.getByRole("button", { name: "Account menu", exact: true }).click();
     await owner.getByRole("button", { name: "Administration" }).click();

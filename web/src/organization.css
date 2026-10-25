@@ -57,6 +57,27 @@
 .org-topic-menu h1 { font: 600 13px var(--font-sans); margin: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .org-topic-menu-options { position: absolute; top: calc(100% + 10px); left: 0; min-width: 160px; background: var(--surface-raised); border: 1px solid var(--border); border-radius: var(--radius-control); padding: 4px; z-index: 30; box-shadow: var(--shadow-overlay); }
 .org-topic-menu-options > button { display: block; width: 100%; text-align: left; border-color: transparent; }
+/* The topic details card: the topic, its research items (placed by the conversation) and its actions. */
+.org-topic-menu > summary { display: flex; align-items: center; gap: 6px; padding: 3px 8px; margin-left: -8px; border-radius: var(--radius-control); }
+.org-topic-menu > summary:hover, .org-topic-menu[open] > summary { background: var(--surface-raised); }
+.org-topic-menu > summary > svg { flex: none; color: var(--muted); }
+.org-topic-menu-options.org-topic-card { left: -8px; box-sizing: border-box; width: 300px; max-width: calc(100vw - 24px); padding: 10px; border-color: var(--border-strong); border-radius: var(--radius-card); font-size: 12px; }
+.org-topic-card > header { display: flex; flex-direction: column; gap: 1px; padding: 0 6px 6px; }
+.org-topic-card > header strong { font-size: 13px; font-weight: 600; }
+.org-topic-card > header small { color: var(--muted); font-size: 11px; }
+.org-topic-card-capabilities { display: flex; flex-wrap: wrap; gap: 4px; margin: 0 6px 8px; padding: 0; }
+.org-topic-card-capabilities span { padding: 0 6px; border: 1px solid var(--border); border-radius: 999px; color: var(--muted); font-size: 10.5px; }
+.org-topic-card-capabilities .org-capability-on { color: var(--teal); border-color: color-mix(in srgb, var(--teal) 40%, transparent); }
+.org-topic-card-research:not(:empty) { padding: 8px 0 6px; border-top: 1px solid var(--border); }
+.org-topic-card-actions { padding-top: 6px; border-top: 1px solid var(--border); }
+.org-app .org-topic-card-row { display: flex; align-items: center; gap: 8px; width: 100%; min-height: 28px; padding: 4px 6px; border: 0; border-radius: 7px;
+  background: transparent; color: var(--foreground); font-size: 12px; text-align: left; }
+.org-app .org-topic-card-row:hover, .org-app .org-topic-card-row[aria-pressed="true"] { background: var(--surface); }
+.org-topic-card-row > span:nth-child(2) { flex: 1; }
+.org-topic-switch { position: relative; flex: none; width: 26px; height: 15px; border: 1px solid var(--border-strong); border-radius: 999px; background: var(--surface); }
+.org-topic-switch::after { content: ""; position: absolute; left: 2px; top: 2px; width: 9px; height: 9px; border-radius: 50%; background: var(--muted); }
+[aria-checked="true"] > .org-topic-switch { background: color-mix(in srgb, var(--teal) 45%, var(--surface)); }
+[aria-checked="true"] > .org-topic-switch::after { left: 13px; background: var(--foreground); }
 .org-org-selector { width: 175px; min-width: 90px; }
 .org-org-selector select { text-overflow: ellipsis; }
 .org-search { flex: none; width: clamp(140px, 19vw, 250px); min-width: 20px; margin-left: auto; }
