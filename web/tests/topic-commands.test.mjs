@@ -53,4 +53,9 @@ test("working indicator uses only live recorded round activity", () => {
   ] } }));
   assert.match(latest, /Using source read/);
   assert.doesNotMatch(latest, /Round 2|<ol|<li/);
+  // A queued request in a paused agent conversation is not working: it says so, without the live indicator.
+  const paused = renderToStaticMarkup(React.createElement(beta.RunProgress, { run: { status: "queued", activity: [],
+    agent: { role: "coordinator", root_run: "r", thread_status: "paused" } } }));
+  assert.match(paused, /Paused · starts only when resumed/); assert.doesNotMatch(paused, /org-working|Working/);
+  assert.equal(beta.pausedRun({ status: "running", agent: { root_run: "r", thread_status: "paused" } }), false, "a running reply finishes its step");
 });
