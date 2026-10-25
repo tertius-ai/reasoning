@@ -1214,7 +1214,7 @@ function Conversation({ organizationId, topic, members, user, canWrite, canManag
         updateDraft({ ...currentDraft.current, text: [currentDraft.current.text.trim(), text].filter(Boolean).join("\n\n"), clientId: crypto.randomUUID(), attempted: false });
         requestAnimationFrame(() => textarea.current?.focus());
       }} onSettingsChanged={() => setPromptRevision(value => value + 1)} onAuthLost={onAuthLost} />}
-      {topic.kind === "gamma" && <WorkflowConversation organizationId={organizationId} topicId={topic.id} userId={user.id}
+      {topic.kind === "gamma" && <WorkflowConversation organizationId={organizationId} topicId={topic.id} userId={user.id} menuTarget={menuTarget}
         canWrite={canWrite} canManage={canManage} attempt={workflowAttempt} onAttempt={onWorkflowAttempt}
         executionAttempt={workflowExecutionAttempt} onExecutionAttempt={onWorkflowExecutionAttempt} onAuthLost={onAuthLost} toolbarTarget={composerButton}
         hidePlay={Boolean(draft.text.trim())} onActivity={setWorkflowActivity} />}

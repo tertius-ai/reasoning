@@ -156,11 +156,13 @@ and failures; topic writers can **Retry text extraction**, including for existin
 uploads. Scans need OCR or a TeX/text source, and extracted text can omit diagrams.
 See [Pictures, PDFs and TeX](media.md).
 
-In gamma topics, **Workflow activity** shows the organization's allowance of 64
-unfinished workflow runs, with named workflows, topics and requesters. Waiting
-for approval or confirmation also reserves a place; actual model calls and
-computations have separate execution limits. Released places appear in collapsed
-history and are excluded from the occupied count. Administrators can inspect
+In gamma topics, **Workflow activity** in the topic's details card (click the
+topic's name) shows the organization's allowance of 64 unfinished workflow runs,
+with named workflows, topics and requesters. Filters separate runs in use, waiting
+for approval, needing inspection and released, and a search finds a workflow or
+topic. Waiting for approval or confirmation also reserves a place; actual model
+calls and computations have separate execution limits. Released places are listed
+under their own filter and are excluded from the occupied count. Administrators can inspect
 retained operational records from deleted topics. After checking an inactive
 uncertain run, **Release workflow slot** makes its place available while keeping
 the unresolved result and any held charges. This does not retry or settle the

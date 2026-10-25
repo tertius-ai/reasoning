@@ -10,6 +10,7 @@ import { ResearchAccount } from "./ResearchAccount";
 import { ResearchFiles } from "./ResearchFiles";
 import "./research-controls.css";
 import { useTopicCommand } from "./TopicCommands";
+import { TopicItemDialog } from "./TopicActivity";
 
 export const RESEARCH_TOOLS = ["history", "arxiv", "web", "knowledge", "workflows", "compute"] as const;
 export type ResearchTool = typeof RESEARCH_TOOLS[number];
@@ -67,15 +68,6 @@ export function ResearchInstructions({ instructions, loading, error = "", onInsp
   return <article className="org-message org-system-message" aria-label="Research instructions">
     {bare ? body : <details onToggle={(event) => { if (event.currentTarget.open) onInspect?.(); }}><summary>System prompt</summary>{body}</details>}
   </article>;
-}
-
-/** A topic item opened from the topic's details card, in a centered dialog like a direct conversation's files. */
-function TopicItemDialog({ title, onClose, children }: { title: string; onClose: () => void; children: React.ReactNode }) {
-  const dialog = useRef<HTMLDialogElement>(null);
-  useEffect(() => { dialog.current?.showModal(); }, []);
-  return <dialog ref={dialog} className="org-dialog org-topic-item-dialog" aria-label={title} onCancel={event => { event.preventDefault(); onClose(); }}>
-    <header><h2>{title}</h2><button type="button" aria-label="Close dialog" onClick={onClose}>×</button></header>{children}
-  </dialog>;
 }
 
 /** The short value a topic details row shows: "v9" for "topic-agents-v9". */

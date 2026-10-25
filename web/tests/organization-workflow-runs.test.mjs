@@ -170,7 +170,7 @@ test("retained execution requests disclose their original identity and do not la
 });
 
 
-test("workflow allowance explains hidden occupied places and collapses released history", () => {
+test("workflow allowance counts hidden occupied places and keeps released runs under their own filter", () => {
   const retained = { id: runId, topic_id: topic, created_at: 1700000000, status: "outcome_unknown", revision: 4,
     capacity_released: 1, workflow_name: "Tensor comparison <script>", topic_name: "Motives", project_name: "Research",
     channel_name: "Mathematics", requested_by_name: "Owner", topic_deleted: 1 };
@@ -179,19 +179,21 @@ test("workflow allowance explains hidden occupied places and collapses released 
   }));
   assert.match(html, /4 of 64/); assert.match(html, /60 available/); assert.match(html, /4 occupied runs are/);
   assert.match(html, /<meter[^>]+max="64"[^>]+value="4"/);
-  assert.ok(html.indexOf("Released places") < html.indexOf("Tensor comparison &lt;script&gt;"));
-  assert.doesNotMatch(html, /<details open|<script>|outcome_unknown|Release workflow slot/);
-  assert.match(html, /do not occupy places/); assert.match(html, /Deleted topic/);
+  assert.match(html, /aria-pressed="true">In use <span>0<\/span>/); assert.match(html, />Released <span>1<\/span>/);
+  assert.doesNotMatch(html, /Tensor comparison/, "a released run is listed only under Released");
+  assert.doesNotMatch(html, /<script>|outcome_unknown|Release workflow slot/);
+  assert.match(html, /aria-label="Search workflows and topics"/);
 });
 
-test("workflow allowance identifies occupied work separately from retained records", () => {
+test("workflow allowance lists occupied work like project files, one row per run with Inspect", () => {
   const html = renderToStaticMarkup(React.createElement(capacity.WorkflowCapacitySummary, {
     value: { limit: 64, in_use: 1, available: 63, hidden_in_use: 0, released_count: 0, truncated: false, runs: [{
       id: runId, topic_id: topic, created_at: 1700000000, status: "awaiting_approval", revision: 1, capacity_released: 0,
       workflow_name: "Check the argument", project_name: "Research", channel_name: "Mathematics", topic_name: "Motives", requested_by_name: "Ben", topic_deleted: 0,
     }] }, onInspect: () => {},
   }));
-  assert.match(html, /Check the argument/); assert.match(html, /Research \/ Mathematics \/ Motives/); assert.match(html, /Waiting for approval/);
-  assert.ok(html.indexOf("Check the argument") < html.indexOf("Released places"));
+  assert.match(html, /Check the argument/); assert.match(html, /Research \/ Mathematics \/ Motives · Ben/); assert.match(html, /Waiting for approval/);
+  assert.match(html, />Waiting <span>1<\/span>/); assert.match(html, /data-tone="waiting"/);
+  assert.match(html, /aria-label="Inspect Check the argument · [^"]+">Inspect<\/button>/);
   assert.doesNotMatch(html, /cannot access|Deleted topic/);
 });
