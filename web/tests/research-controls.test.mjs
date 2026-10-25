@@ -67,6 +67,17 @@ test("a closed reply menu shows its selection without mounting model options", (
   assert.doesNotMatch(menu, /org-model-options|org-model-card|Search models and routers|r\/other|Cited memory/);
 });
 
+test("the selected model's capabilities are one line, with each capability listed only on request", () => {
+  const readers = [["Public source reader", true], ["Literature readers (arXiv)", true], ["General web search", false]];
+  const line = renderToStaticMarkup(React.createElement(controls.ModelCapabilities, {
+    model: "test/model", summary: "Research · 2 of 3 readers", date: "2026-10-23", readers }));
+  assert.match(line, /<strong>test\/model<\/strong> · Research · 2 of 3 readers · 2026-10-23 UTC/);
+  assert.match(line, /aria-label="Capability details"/); assert.doesNotMatch(line, /General web search/, "details stay closed");
+  const plain = renderToStaticMarkup(React.createElement(controls.ModelCapabilities, {
+    model: "test/plain", summary: "Plain response · no research tools", readers: null }));
+  assert.doesNotMatch(plain, /Capability details/, "nothing to list without research tools");
+});
+
 test("system prompt is a chat-styled disclosure and JSON copy is a quiet header icon", () => {
   const html = renderToStaticMarkup(React.createElement(controls.ResearchInstructions, {
     instructions: { system_prompt: "Exact **instruction** text <script>unsafe</script>", prompt_version: "test-version" }, loading: false,

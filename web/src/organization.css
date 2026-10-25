@@ -65,10 +65,7 @@
 .org-topic-card > header { display: flex; flex-direction: column; gap: 1px; padding: 0 6px 6px; }
 .org-topic-card > header strong { font-size: 13px; font-weight: 600; }
 .org-topic-card > header small { color: var(--muted); font-size: 11px; }
-.org-topic-card-capabilities { display: flex; flex-wrap: wrap; gap: 4px; margin: 0 6px 8px; padding: 0; }
-.org-topic-card-capabilities span { padding: 0 6px; border: 1px solid var(--border); border-radius: 999px; color: var(--muted); font-size: 10.5px; }
-.org-topic-card-capabilities .org-capability-on { color: var(--teal); border-color: color-mix(in srgb, var(--teal) 40%, transparent); }
-.org-topic-card-research:not(:empty) { padding: 8px 0 6px; border-top: 1px solid var(--border); }
+.org-topic-card-research:not(:empty) { padding: 6px 0; border-top: 1px solid var(--border); }
 .org-topic-card-actions { padding-top: 6px; border-top: 1px solid var(--border); }
 .org-app .org-topic-card-row { display: flex; align-items: center; gap: 8px; width: 100%; min-height: 28px; padding: 4px 6px; border: 0; border-radius: 7px;
   background: transparent; color: var(--foreground); font-size: 12px; text-align: left; }

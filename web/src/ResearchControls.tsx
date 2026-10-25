@@ -68,6 +68,30 @@ export function ResearchInstructions({ instructions, loading, error = "", onInsp
   </article>;
 }
 
+/** The selected model's capabilities above the message box: one line, and on request each capability as on or off. */
+export function ModelCapabilities({ model, summary, date, readers }: {
+  model: string; summary: string; date?: string | null; readers: [string, boolean][] | null;
+}) {
+  const [open, setOpen] = useState(false), box = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!open) return;
+    const close = (event: PointerEvent | KeyboardEvent) => {
+      if ((event instanceof KeyboardEvent && event.key === "Escape") || (event instanceof PointerEvent && !box.current?.contains(event.target as Node))) setOpen(false);
+    };
+    document.addEventListener("pointerdown", close); document.addEventListener("keydown", close);
+    return () => { document.removeEventListener("pointerdown", close); document.removeEventListener("keydown", close); };
+  }, [open]);
+  return <div className="org-model-capabilities" aria-label="Effective model capabilities" ref={box}>
+    <p><strong>{model}</strong> · {summary}{date && ` · ${date} UTC`}
+      {readers && <button type="button" className="org-capability-toggle" aria-expanded={open} aria-label="Capability details"
+        onClick={() => setOpen(value => !value)}>details {open ? "▾" : "▴"}</button>}</p>
+    {open && readers && <dl className="org-capability-details">
+      {readers.map(([label, on]) => <React.Fragment key={label}><dt>{label}</dt><dd className={on ? "org-capability-on" : undefined}>{on ? "on" : "off"}</dd></React.Fragment>)}
+      {date && <><dt>Date the model sees</dt><dd>{date} UTC</dd></>}
+    </dl>}
+  </div>;
+}
+
 export function goalCommand(text: string): string | null {
   const match = text.trim().match(/^\/goal(?:\s+([\s\S]*))?$/); return match ? (match[1] ?? "").trim() : null;
 }
@@ -103,7 +127,7 @@ export function ResearchControls({ organizationId, topicId, userId, selectedMode
   catalog: OrganizationPrices | null; allowedModels: string[];
   goalDraft: string | null; onGoalDraftDone: () => void; onGoalStarted: (objective: string) => void; onAuthLost: () => void;
   toolbarTarget: HTMLElement | null;
-  /** The topic details card in the top bar: capabilities, System prompt, Research account and Project files appear there. */
+  /** The topic details card in the top bar: System prompt, Research account and Project files appear there. */
   menuTarget?: HTMLElement | null;
   /** The topic's system prompt, shown as a research pane. */
   instructions?: React.ReactNode;
@@ -221,16 +245,16 @@ export function ResearchControls({ organizationId, topicId, userId, selectedMode
   const closeGoal = () => { setCreateOpen(false); onGoalDraftDone(); };
   const pending = proposals.filter((proposal) => ["pending", "reviewing"].includes(proposal.status));
   const activeTool = recentTools.find((tool) => tool.status === "requested");
-  // The selected model's research capabilities for the details card; a capability that is on is highlighted.
+  // The selected model's research capabilities, summarized above the message box; "details" lists each one.
   const model = catalogModel(catalog, selectedModel);
   const web = enabled.includes("web"), literature = enabled.includes("arxiv"), search = web && !!sourceConfig?.web_search_configured;
-  const capabilities: [string, boolean][] = selectedModel.startsWith("bot/") ? [["CLI bot · tools depend on its live grants and runner", true]]
-    : !model ? [["Checking selected model capabilities…", false]]
-      : !model.supports_tools ? [["Plain response · selected model has no research tools", false]]
-        : !sourceConfig ? [["Checking research capabilities…", false]]
-          : [["Research", true], [web ? "public source reader" : "no web reader", web],
-            [literature ? "literature readers" : "no literature readers", literature], [search ? "web search" : "no general web search", search]];
-  if (sourceConfig?.current_date) capabilities.push([sourceConfig.current_date + " UTC", false]);
+  const readers: [string, boolean][] = [["Public source reader", web], ["Literature readers (arXiv)", literature], ["General web search", search]];
+  const detailed = !selectedModel.startsWith("bot/") && !!model?.supports_tools && !!sourceConfig;
+  const summary = selectedModel.startsWith("bot/") ? "CLI bot · tools depend on its live grants and runner"
+    : !model ? "Checking selected model capabilities…"
+      : !model.supports_tools ? "Plain response · no research tools"
+        : !sourceConfig ? "Checking research capabilities…"
+          : `Research · ${readers.filter(([, on]) => on).length} of ${readers.length} readers`;
   useTopicCommand(topicId, command => {
     if (command === "context") { void loadContext(); return; }
     if (["ledger", "files", "goal", "tools", "proposals", "reviews", "account"].includes(command)) {
@@ -240,8 +264,6 @@ export function ResearchControls({ organizationId, topicId, userId, selectedMode
   });
   return <div className="org-research-controls">
     {menuTarget && createPortal(<>
-      <p className="org-topic-card-capabilities" aria-label="Effective model capabilities">{capabilities.map(([label, on]) =>
-        <span key={label} className={on ? "org-capability-on" : undefined}>{label}</span>)}</p>
       {([["instructions", "≡", "System prompt"], ["account", "◇", "Research account"], ["files", "▤", "Project files"]] as const).map(([value, mark, label]) =>
         <button key={value} type="button" className="org-topic-card-row" aria-pressed={pane === value} onClick={() => {
           // Choosing a panel closes the details card, as choosing a menu item does.
@@ -249,6 +271,7 @@ export function ResearchControls({ organizationId, topicId, userId, selectedMode
           setPane(current => current === value ? null : value);
         }}><span className="org-account-mark" aria-hidden="true">{mark}</span>{label}</button>)}
     </>, menuTarget)}
+    <ModelCapabilities model={selectedModel} summary={summary} date={sourceConfig?.current_date} readers={detailed ? readers : null} />
     {toolbarTarget && createPortal(<div className="org-research-toolbar" aria-label="Research actions">
     {(goal?.status === "active" || activeTool) && <span role="status" className="org-goal-live"><i />{activeTool ? `Using ${activeTool.name.replaceAll("_", " ")}` : "Working toward your goal"}</span>}
   </div>, toolbarTarget)}
