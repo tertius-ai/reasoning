@@ -3,12 +3,14 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 import { DirectConversation, directPath } from "./DirectMessages";
 import { normalizeMathDelimiters } from "./markdownMath";
 import { MessageMarkdown, alphaMessageGroups, resizeComposer } from "./OrganizationApp";
-import { ApiError, Account, Member, Message, aborted, errorMessage, mentionMarkdown, mergeMessages, organizationPath, request } from "./organization-api";
+import { ApiError, Account, Member, Message, aborted, errorMessage, mentionMarkdown, mergeMessages, request } from "./organization-api";
 import { startPolling } from "./polling";
 import { LIVE_SAFETY_POLL_MS, subscribeEvents } from "./topicEvents";
 import { ActionMenu, CopyOutputButton, MessageMenuIcon, ReactionControl } from "./ChatFeedback";
-import { speakerTone } from "./mentions";
+import { chatTones, speakerTone } from "./mentions";
 import { ReplyBar, ReplyPointer, ThreadDialog } from "./MessageReplies";
+import { NewestMessageButton, useUnseenMessages } from "./NewestMessage";
+import type { MessageJump } from "./DirectDetails";
 import { AttachFilesButton, DirectAttachments, MAX_DIRECT_ATTACHMENTS, PendingFile, PendingFiles, joinAttachments, pendingFile, splitAttachments, uploadDirectFile } from "./DirectMedia";
 
 type Draft = { text: string; clientId: string; attempted: boolean; replyTo?: string; files: PendingFile[] };
@@ -38,9 +40,9 @@ function DirectMessageEdit({ path, message, onSaved, onCancel, onAuthLost }: {
 }
 
 /** A one-to-one conversation: only its two participants can read it, and no bot or model takes part. */
-export function DirectConversationView({ organizationId, conversation, user, members, canWrite, onChanged, onAuthLost }: {
+export function DirectConversationView({ organizationId, conversation, user, members, canWrite, jump, onChanged, onAuthLost }: {
   organizationId: string; conversation: DirectConversation; user: Account; members: Member[]; canWrite: boolean;
-  onChanged: () => void; onAuthLost: () => void;
+  jump?: MessageJump; onChanged: () => void; onAuthLost: () => void;
 }) {
   const root = directPath(organizationId, conversation.id), name = conversation.other_user.name;
   const [messages, setMessages] = useState<Message[]>([]);
@@ -48,12 +50,12 @@ export function DirectConversationView({ organizationId, conversation, user, mem
   const [online, setOnline] = useState(true), [error, setError] = useState(""), [sending, setSending] = useState(false);
   const [draft, setDraftState] = useState<Draft>(() => drafts.get(root) ?? newDraft());
   const [editing, setEditing] = useState<string | null>(null), [history, setHistory] = useState<{ id: string; versions: { revision: number; content: string; created_at: number }[] } | null>(null);
-  const [confirmBlock, setConfirmBlock] = useState(false), [busy, setBusy] = useState(false);
+  const [linked, setLinked] = useState<string | null>(null);
   const [atBottom, setAtBottom] = useState(true), [threadFor, setThreadFor] = useState<string | null>(null);
   const viewport = useRef<HTMLDivElement>(null), textarea = useRef<HTMLTextAreaElement>(null);
   const cursor = useRef(0), editCursor = useRef(0), acknowledged = useRef(0), bottom = useRef(true), alive = useRef(true);
-  const currentDraft = useRef(draft);
-  currentDraft.current = draft;
+  const currentDraft = useRef(draft), currentMessages = useRef(messages);
+  currentDraft.current = draft; currentMessages.current = messages;
   const setDraft = (value: Draft) => { drafts.set(root, value); currentDraft.current = value; setDraftState(value); };
   const fail = (cause: unknown) => { if (cause instanceof ApiError && cause.status === 401) onAuthLost(); else setError(errorMessage(cause)); };
   const writable = canWrite && conversation.other_member && !conversation.blocked;
@@ -102,6 +104,9 @@ export function DirectConversationView({ organizationId, conversation, user, mem
     return caption || files.map(file => file.name).join(", ");
   };
   const authorName = (message: Message) => message.author_id === user.id ? "You" : name;
+  const unseen = useUnseenMessages(messages, atBottom, user.id);
+  // A direct conversation's group is its two participants, so they always differ.
+  const tones = useMemo(() => chatTones([user.id, conversation.other_user.id]), [user.id, conversation.other_user.id]);
   const replyOriginal = draft.replyTo ? messages.find(message => message.id === draft.replyTo) : undefined;
   useEffect(() => { alive.current = true; return () => { alive.current = false; }; }, []);
   useEffect(() => { if (textarea.current) resizeComposer(textarea.current); }, [draft.text]);
@@ -198,11 +203,30 @@ export function DirectConversationView({ organizationId, conversation, user, mem
     } catch (cause) { if (alive.current) fail(cause); }
     finally { if (alive.current) setLoadingOlder(false); }
   };
-  const preference = (work: () => Promise<unknown>) => {
-    setBusy(true); setError("");
-    void work().then(onChanged).catch(fail).finally(() => { if (alive.current) { setBusy(false); setConfirmBlock(false); } });
-  };
-  const blockPath = organizationPath(organizationId) + "/direct-blocks/" + encodeURIComponent(conversation.other_user.id);
+  // "Show in chat" from the files list: older pages load until the sharing message is present, then it is scrolled to and marked.
+  useEffect(() => {
+    if (!jump) return;
+    let cancelled = false;
+    void (async () => {
+      let loaded = currentMessages.current;
+      for (let page = 0; page < 20 && (!loaded.length || loaded[0].sequence > jump.sequence); page++) {
+        const before = loaded[0]?.sequence ?? Number.MAX_SAFE_INTEGER, earlier = await request<Message[]>(root + `/messages?before=${before}&limit=100`);
+        if (cancelled || !earlier.length) break;
+        loaded = mergeMessages(loaded, earlier);
+        setOlder(earlier.length === 100);
+        setMessages(existing => mergeMessages(existing, earlier));
+      }
+      if (cancelled) return;
+      bottom.current = false; setAtBottom(false); setLinked(jump.id);
+    })().catch(cause => { if (!cancelled) fail(cause); });
+    return () => { cancelled = true; };
+  }, [jump?.nonce]);
+  useEffect(() => {
+    if (!linked) return;
+    viewport.current?.querySelector(`[data-message-id="${linked}"]`)?.scrollIntoView({ block: "center" });
+    const timer = setTimeout(() => setLinked(null), 2600);
+    return () => clearTimeout(timer);
+  }, [linked]);
 
   // The same layout as topic chats: speaker groups in each person's color, a floating toolbar, a reaction pill,
   // and reply pointers that open the whole thread. Your own groups are mirrored to the right.
@@ -213,11 +237,11 @@ export function DirectConversationView({ organizationId, conversation, user, mem
       {(groupIndex === 0 || new Date(groups[groupIndex - 1][0].created_at * 1000).toDateString() !== new Date(group[0].created_at * 1000).toDateString())
         && <div className="org-message-day"><time dateTime={new Date(group[0].created_at * 1000).toISOString().slice(0, 10)}>
           {new Date(group[0].created_at * 1000).toLocaleDateString(undefined, { weekday: "long", month: "short", day: "numeric", year: "numeric" })}</time></div>}
-      <div className={"org-message-group org-speaker-human " + speakerTone(group[0]) + (group[0].author_id === user.id ? " org-message-group-mine" : "")}>{group.map((message, index) => {
+      <div className={"org-message-group org-speaker-human " + speakerTone(group[0], tones) + (group[0].author_id === user.id ? " org-message-group-mine" : "")}>{group.map((message, index) => {
         const own = message.author_id === user.id, original = message.reply_to ? byId.get(message.reply_to) : undefined;
         const hasMenu = (own && writable) || Boolean(message.revision);
         return <article key={message.id} id={"direct-message-" + message.sequence} data-sequence={message.sequence} data-message-id={message.id}
-          className={"org-message " + (index ? "org-message-continuation " : "") + (own ? "org-message-own" : "")}>
+          className={"org-message " + (index ? "org-message-continuation " : "") + (own ? "org-message-own" : "") + (message.id === linked ? " org-message-linked" : "")}>
           {message.reply_to && <ReplyPointer original={original} label={original && authorName(original)} onOpen={() => setThreadFor(message.id)} />}
           <header>{!index && <strong>{own ? "You" : name}</strong>}
             <time dateTime={new Date(message.created_at * 1000).toISOString()} title={new Date(message.created_at * 1000).toLocaleString()}>
@@ -248,24 +272,12 @@ export function DirectConversationView({ organizationId, conversation, user, mem
           </div>}
         </article>;
       })}</div></div>);
-  }, [messages, editing, history, members, user.id, name, root, writable, onAuthLost]);
+  }, [messages, editing, history, members, user.id, name, root, writable, tones, linked, onAuthLost]);
 
   const status = !conversation.other_member ? `${name} is no longer a member of this organization.`
     : conversation.blocked ? `You blocked ${name}. Neither of you can send messages here until you unblock them.`
       : !canWrite ? "You have read-only access." : "";
   return <section className="org-conversation org-direct-conversation" aria-label={`Direct messages with ${name}`}>
-    <header className="org-direct-header">
-      <div><h2>{name}</h2><small>Only you and {name} can read this conversation. Bots and models never take part.</small></div>
-      <div className="org-direct-controls">
-        <button type="button" disabled={busy} aria-pressed={conversation.muted} title={conversation.muted ? "Show unread counts again" : "Hide unread counts for this conversation"}
-          onClick={() => preference(() => request(root + "/mute", { method: "PUT", body: { muted: !conversation.muted } }))}>{conversation.muted ? "Unmute" : "Mute"}</button>
-        {conversation.blocked ? <button type="button" disabled={busy} onClick={() => preference(() => request(blockPath, { method: "DELETE" }))}>Unblock</button>
-          : !confirmBlock ? <button type="button" disabled={busy || !conversation.other_member} onClick={() => setConfirmBlock(true)}>Block</button>
-            : <span className="org-direct-confirm" role="group" aria-label={`Block ${name}?`}>Block {name}? They will not be able to message you.
-              <button type="button" className="org-danger" disabled={busy} onClick={() => preference(() => request(blockPath, { method: "PUT", body: {} }))}>Block</button>
-              <button type="button" disabled={busy} onClick={() => setConfirmBlock(false)}>Cancel</button></span>}
-      </div>
-    </header>
     <div className="org-stream">
       <div className="org-transcript" ref={viewport} tabIndex={0} aria-label="Message history" onScroll={() => {
         const view = viewport.current;
@@ -276,13 +288,16 @@ export function DirectConversationView({ organizationId, conversation, user, mem
         {!loading && !messages.length && <div className="org-empty"><h2>Send {name} a message</h2><p>New messages show as unread in their Direct messages list.</p></div>}
         {transcript}
       </div>
+      {!atBottom && messages.length > 0 && <NewestMessageButton unseen={unseen} onJump={() => {
+        bottom.current = true; setAtBottom(true); if (viewport.current) viewport.current.scrollTop = viewport.current.scrollHeight;
+      }} />}
     </div>
     {!online && <p role="status" className="org-reconnecting">Reconnecting…</p>}
     {error && <p role="alert" className="org-error org-conversation-error">{error}</p>}
     {status && <p role="status" className="org-help org-direct-status">{status}</p>}
     {threadFor && <ThreadDialog key={threadFor} messagesPath={root + "/messages"} messageId={threadFor} canWrite={writable}
       onClose={() => setThreadFor(null)} onAuthLost={onAuthLost} onPosted={message => setMessages(existing => mergeMessages(existing, [message]))}
-      renderMessage={message => <div className={"org-message-group org-speaker-human " + speakerTone(message)}><article className="org-message">
+      renderMessage={message => <div className={"org-message-group org-speaker-human " + speakerTone(message, tones)}><article className="org-message">
         <header><strong>{authorName(message)}</strong>
           <time dateTime={new Date(message.created_at * 1000).toISOString()}>{new Date(message.created_at * 1000).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" })}</time></header>
         {messageBody(message)}</article></div>} />}

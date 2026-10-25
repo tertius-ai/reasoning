@@ -158,9 +158,10 @@ test("a member messages a colleague from People, who finds, reads and replies, t
     await ownOriginal.hover();
     const [box, launcher] = await Promise.all([ownOriginal.boundingBox(), ownOriginal.getByRole("button", { name: "Add reaction", exact: true }).boundingBox()]);
     assert.ok(launcher.x + launcher.width / 2 < box.x + box.width / 2, "the toolbar of your own message is on the left");
-    const tone = async (locator) => /org-person-tone-\d/.exec(await locator.locator("xpath=..").getAttribute("class"))?.[0];
+    const tone = async (locator) => /org-person-tone-\d+/.exec(await locator.locator("xpath=..").getAttribute("class"))?.[0];
     assert.ok(await tone(ownOriginal));
     assert.equal(await tone(ownOriginal), await tone(theirCopy), "Owner has the same color in both browsers");
+    assert.notEqual(await tone(ownOriginal), await tone(answered), "the two people in a conversation never share a color");
     assert.equal(await tone(answered), await tone(reply.locator(".org-message").filter({ hasText: "Section 3 looks right" })));
 
     // Files arrive as media bubbles: pictures in a grid that opens full size, PDFs as rows with Open and Download.
@@ -188,19 +189,52 @@ test("a member messages a colleague from People, who finds, reads and replies, t
     await member.keyboard.press("Escape");
     await lightbox.waitFor({ state: "detached" });
 
+    // Scrolled up, the reader gets the newest-message button of topic chats; it counts the other person's new messages.
+    await member.setViewportSize({ width: 1280, height: 480 });
+    await reply.getByLabel("Message history", { exact: true }).evaluate((view) => { view.scrollTop = 0; view.dispatchEvent(new Event("scroll")); });
+    const newest = reply.getByRole("button", { name: "Jump to newest message", exact: true });
+    await visible(newest);
+    await owner.getByLabel("Message", { exact: true }).fill("One more thought on section 3.");
+    await owner.keyboard.press("Enter");
+    await visible(reply.getByRole("button", { name: "Jump to newest message, 1 new", exact: true }));
+    await reply.getByRole("button", { name: "Jump to newest message, 1 new", exact: true }).click();
+    await visible(reply.locator(".org-message").filter({ hasText: "One more thought on section 3." }));
+    await reply.locator(".org-jump").waitFor({ state: "detached" });
+    await member.setViewportSize({ width: 1280, height: 860 });
+
+    // The title in the top bar opens the conversation's details: who can read it, Mute, the shared files and Block.
+    assert.equal(await reply.getByText("Only you and Owner can read this conversation", { exact: false }).count(), 0, "no header strip");
+    const title = member.getByRole("button", { name: /Direct messages · Owner/ });
+    await title.click();
+    const details = member.getByRole("dialog", { name: "Conversation details" });
+    await visible(details.getByText("Only you and Owner can read this conversation. Bots and models never take part."));
+    await details.getByRole("button", { name: "Files, 2", exact: true }).click();
+    const files = member.getByRole("dialog", { name: "Files with Owner" });
+    await visible(files.getByRole("link", { name: "notes.pdf", exact: true }));
+    await files.getByRole("button", { name: /^PDFs/ }).click();
+    assert.equal(await files.getByRole("link", { name: "board.png", exact: true }).count(), 0, "the PDF filter hides pictures");
+    await files.getByRole("button", { name: /^All/ }).click();
+    await files.getByRole("listitem").filter({ hasText: "board.png" }).getByRole("button", { name: "Show in chat", exact: true }).click();
+    await files.waitFor({ state: "detached" });
+    await visible(reply.locator(".org-message-linked").filter({ hasText: "The board after the seminar" }));
+
     // Muting hides the unread count; blocking stops the other person's messages with a neutral refusal.
-    await reply.getByRole("button", { name: "Mute", exact: true }).click();
+    await title.click();
+    await details.getByRole("switch", { name: "Mute" }).click();
     await visible(ownerRow.getByLabel("Muted"));
-    await reply.getByRole("button", { name: "Block", exact: true }).click();
-    await reply.getByRole("group", { name: "Block Owner?" }).getByRole("button", { name: "Block", exact: true }).click();
+    await visible(details.getByRole("switch", { name: "Mute", checked: true }));
+    await details.getByRole("button", { name: "Block Owner", exact: true }).click();
+    await details.getByRole("group", { name: "Block Owner?" }).getByRole("button", { name: "Block", exact: true }).click();
     await visible(reply.getByText("You blocked Owner."));
+    await member.keyboard.press("Escape");
     assert.equal(await member.getByLabel("Message", { exact: true }).isDisabled(), true);
     await owner.getByLabel("Message", { exact: true }).fill("Thanks!");
     await owner.keyboard.press("Enter");
     await visible(conversation.getByRole("alert").filter({ hasText: "direct messages to this person are unavailable" }));
     assert.equal(await conversation.getByText(/blocked/i).count(), 0, "the refusal does not reveal the block");
-    await reply.getByRole("button", { name: "Unblock", exact: true }).click();
-    await visible(reply.getByRole("button", { name: "Block", exact: true }));
+    await title.click();
+    await details.getByRole("button", { name: "Unblock Owner", exact: true }).click();
+    await visible(details.getByRole("button", { name: "Block Owner", exact: true }));
     assert.deepEqual(pageErrors, []);
     context.diagnostic("Verified People-initiated direct messages, unread navigation, reading, replying, files, muting and blocking.");
   } finally {

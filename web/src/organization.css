@@ -141,12 +141,12 @@
 .org-sidebar > footer { display: flex; flex-direction: column; padding: 6px 10px 8px; gap: 5px; border-top: 1px solid var(--border); }
 .org-sidebar > footer button { text-align: left; }
 .org-sidebar > footer a { padding: 4px 10px; color: var(--muted); font-size: 11px; }
-/* Your name and ⌃ open the account menu; the bug button sits at the right edge of the same row. */
-.org-account-row { position: relative; display: flex; align-items: center; gap: 4px; }
-.org-account-row > .org-account-menu { flex: 1; min-width: 0; }
+/* The account button is only as wide as your name and its down chevron; the bug button sits at the right edge of the same row. */
+.org-account-row { position: relative; display: flex; align-items: center; justify-content: space-between; gap: 4px; }
+.org-account-row > .org-account-menu { flex: 0 1 auto; min-width: 0; }
 .org-account-menu { position: relative; }
 .org-account-menu > summary { display: flex; align-items: center; justify-content: flex-start; gap: 7px; min-height: 28px; padding: 5px 7px; border-radius: var(--radius-control); font-size: 12px; cursor: pointer; list-style: none; }
-.org-account-menu > summary > span:last-child { color: var(--muted); font-size: 11px; }
+.org-account-menu > summary > span:last-child { display: inline-grid; flex: none; place-items: center; color: var(--muted); }
 .org-account-menu > summary:hover, .org-account-menu[open] > summary { background: var(--surface-raised); }
 .org-account-menu > summary > span:first-child { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .org-account-options { position: absolute; bottom: calc(100% + 7px); left: 0; width: 250px; max-width: 82vw; overflow: hidden; border: 1px solid var(--border-strong); border-radius: var(--radius-card); background: var(--surface-raised); box-shadow: var(--shadow-overlay); z-index: 30; }
@@ -425,10 +425,16 @@ a.org-reference:hover, a.org-reference:focus-visible { text-decoration: underlin
 /* Signal-style avatars in the picker: initials on a stable per-member color. */
 .org-mention-avatar { display: grid; place-items: center; width: 22px; height: 22px; flex: none; border-radius: 50%; font-size: 10px; font-weight: 600;
   background: color-mix(in srgb, var(--mention-tone) 26%, transparent); color: color-mix(in srgb, var(--mention-tone) 80%, var(--foreground)); }
-/* One color per person or bot (mentionTone), used for their dot, guide line and name in every chat and their picker avatar. */
-.org-person-tone-0 { --person-tone: var(--blue); } .org-person-tone-1 { --person-tone: var(--teal); } .org-person-tone-2 { --person-tone: var(--amber); }
-.org-person-tone-3 { --person-tone: var(--red); } .org-person-tone-4 { --person-tone: #9b7ee8; } .org-person-tone-5 { --person-tone: #e57ea5; }
-.org-person-tone-6 { --person-tone: #f09a5b; } .org-person-tone-7 { --person-tone: #a8d26b; }
+/* A person's, bot's or model's color in one chat (chatTones), for their dot, guide line, name and picker avatar. The 36 hues
+   are ordered so that each is as far as possible from all hues before it, so a chat's first participants differ most. */
+.org-person-tone-0 { --person-hue: 210; } .org-person-tone-1 { --person-hue: 30; } .org-person-tone-2 { --person-hue: 120; } .org-person-tone-3 { --person-hue: 300; } .org-person-tone-4 { --person-hue: 80; } .org-person-tone-5 { --person-hue: 260; }
+.org-person-tone-6 { --person-hue: 160; } .org-person-tone-7 { --person-hue: 340; } .org-person-tone-8 { --person-hue: 140; } .org-person-tone-9 { --person-hue: 320; } .org-person-tone-10 { --person-hue: 100; } .org-person-tone-11 { --person-hue: 280; }
+.org-person-tone-12 { --person-hue: 60; } .org-person-tone-13 { --person-hue: 240; } .org-person-tone-14 { --person-hue: 10; } .org-person-tone-15 { --person-hue: 190; } .org-person-tone-16 { --person-hue: 0; } .org-person-tone-17 { --person-hue: 180; }
+.org-person-tone-18 { --person-hue: 350; } .org-person-tone-19 { --person-hue: 170; } .org-person-tone-20 { --person-hue: 330; } .org-person-tone-21 { --person-hue: 150; } .org-person-tone-22 { --person-hue: 310; } .org-person-tone-23 { --person-hue: 130; }
+.org-person-tone-24 { --person-hue: 290; } .org-person-tone-25 { --person-hue: 110; } .org-person-tone-26 { --person-hue: 270; } .org-person-tone-27 { --person-hue: 90; } .org-person-tone-28 { --person-hue: 250; } .org-person-tone-29 { --person-hue: 70; }
+.org-person-tone-30 { --person-hue: 230; } .org-person-tone-31 { --person-hue: 50; } .org-person-tone-32 { --person-hue: 220; } .org-person-tone-33 { --person-hue: 40; } .org-person-tone-34 { --person-hue: 200; } .org-person-tone-35 { --person-hue: 20; }
+[class*="org-person-tone-"] { --person-tone: hsl(var(--person-hue) 62% 70%); }
+:root[data-theme="light"] [class*="org-person-tone-"] { --person-tone: hsl(var(--person-hue) 62% 36%); }
 .org-mention-avatar { --mention-tone: var(--person-tone, var(--blue)); }
 .org-message-group[class*="org-person-tone-"] { --speaker-tone: var(--person-tone); }
 .org-message-group > .org-message:first-child > header strong { color: color-mix(in srgb, var(--speaker-tone) 80%, var(--foreground)); }

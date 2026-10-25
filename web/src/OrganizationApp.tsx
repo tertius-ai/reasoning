@@ -17,7 +17,7 @@ import { ComputeConversation } from "./ComputeConversation";
 import { DirectConversation, DirectMessageMarks, DirectMessagePicker, NewDirectMessageButton, directPath, directUnread, directUnreadTotal, peopleInbox } from "./DirectMessages";
 import { KnowledgeLinks, KnowledgeView } from "./KnowledgeLinks";
 import { ReplyBar, ReplyPointer, ThreadDialog } from "./MessageReplies";
-import { MentionMirror, MentionSelf, MentionTag, mentionFromHref, mentionInitials, mentionTone, speakerTone } from "./mentions";
+import { MentionMirror, MentionSelf, MentionTag, chatTones, mentionFromHref, mentionInitials, speakerKey, speakerTone, toneClass } from "./mentions";
 import { LazyView } from "./LazyView";
 import { WorkflowConversation } from "./WorkflowConversation";
 import { TopicActivity, orderedActivity } from "./TopicActivity";
@@ -52,6 +52,8 @@ const loadKnowledgeWorkspace = () => import("./KnowledgeWorkspace");
 const KnowledgeWorkspace = lazy(() => loadKnowledgeWorkspace().then(module => ({ default: module.KnowledgeWorkspace })));
 const KnowledgeBrowser = lazy(() => import("./KnowledgeBrowser").then(module => ({ default: module.KnowledgeBrowser })));
 import { FeedbackAdministration, FeedbackButton } from "./Feedback";
+import { NewestMessageButton, useUnseenMessages } from "./NewestMessage";
+import { DirectTitle, type MessageJump } from "./DirectDetails";
 const BotAdministration = lazy(() => import("./BotAdministration").then(module => ({ default: module.BotAdministration })));
 const ComputeAdministration = lazy(() => import("./ComputeAdministration").then(module => ({ default: module.ComputeAdministration })));
 const OrganizationModelBrowser = lazy(() => import("./OrganizationUsage").then(module => ({ default: module.OrganizationModelBrowser })));
@@ -263,7 +265,8 @@ export function AccountMenu({ user, organization, organizations, canCreateOrgani
   const act = (action: () => void) => { setOpen(false); action(); };
   return <details className="org-account-menu" ref={menu} open={open}>
     <summary role="button" aria-label="Account menu" aria-expanded={open} onClick={(event) => { event.preventDefault(); setOpen(!open); }}>
-      <span>{user.name}</span><span aria-hidden="true">⌃</span></summary>
+      <span>{user.name}</span><span aria-hidden="true"><svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4"
+        strokeLinecap="round" strokeLinejoin="round"><path d="m6 9 6 6 6-6" /></svg></span></summary>
     <div className="org-account-options">
       <header><strong>{user.name}</strong><small>{user.email}</small></header>
       <label className="org-org-selector"><span className="org-visually-hidden">Organization</span>
@@ -752,11 +755,7 @@ function Conversation({ organizationId, topic, members, user, canWrite, canManag
   currentDraft.current = draft;
   const root = topicPath(organizationId, topic.id);
   const [threadFor, setThreadFor] = useState<string | null>(null);
-  // Messages from others that arrived while the reader was scrolled up; the newest-message button counts them.
-  const [seenSequence, setSeenSequence] = useState(0);
-  const latestSequence = messages.at(-1)?.sequence ?? 0;
-  useEffect(() => { if (atBottom) setSeenSequence(latestSequence); }, [atBottom, latestSequence]);
-  const unseen = atBottom ? 0 : messages.filter(message => message.sequence > seenSequence && message.author_id !== user.id).length;
+  const unseen = useUnseenMessages(messages, atBottom, user.id);
   // Choosing or cancelling a reply target starts a fresh attempt, so a retry never changes what a sent message answers.
   const startReply = useRef((_id: string) => {});
   startReply.current = (id: string) => {
@@ -808,6 +807,9 @@ function Conversation({ organizationId, topic, members, user, canWrite, canManag
   const mentionPeopleKey = [...members, ...topicBots].map(person => person.id + ":" + person.name).join("\0");
   // Recomputed only when a name changes, so transcript rendering does not depend on routine member refreshes.
   const mentionPeople = useMemo(() => [...members, ...topicBots], [mentionPeopleKey]);
+  // The topic's members and bots are its group; former members and models who spoke here follow them.
+  const speakersKey = [...new Set(messages.map(speakerKey))].sort().join("\0");
+  const tones = useMemo(() => chatTones(mentionPeople.map(person => person.id), speakersKey ? speakersKey.split("\0") : []), [mentionPeople, speakersKey]);
   const boundMention = mention && draft.mentions?.find(binding => binding.start === mention.start);
   const modelMentionBots = mention ? topicBots.filter(bot => mention.query.toLocaleLowerCase().startsWith(bot.name.toLocaleLowerCase() + "-")
     && (!boundMention || boundMention.id === bot.id)).sort((a, b) => b.name.length - a.name.length) : [];
@@ -1100,7 +1102,7 @@ function Conversation({ organizationId, topic, members, user, canWrite, canManag
       id: "message:" + group[0].id, created_at: group[0].created_at, sequence: group[0].sequence, body: <>
       {topic.kind === "alpha" && (groupIndex === 0 || new Date(groups[groupIndex - 1][0].created_at * 1000).toDateString() !== new Date(group[0].created_at * 1000).toDateString())
         && <div className="org-message-day"><time dateTime={new Date(group[0].created_at * 1000).toISOString().slice(0, 10)}>{new Date(group[0].created_at * 1000).toLocaleDateString(undefined, { weekday: "long", month: "short", day: "numeric", year: "numeric" })}</time></div>}
-      <div className={"org-message-group org-speaker-" + (group[0].author_kind ?? "human") + " " + speakerTone(group[0])}>{group.map((message, index) => <article className={"org-message " + (index ? "org-message-continuation " : "") + (message.author_kind !== "assistant" && message.author_id === user.id ? "org-message-own" : "") + (message.id === highlighted ? " org-message-linked" : "")}
+      <div className={"org-message-group org-speaker-" + (group[0].author_kind ?? "human") + " " + speakerTone(group[0], tones)}>{group.map((message, index) => <article className={"org-message " + (index ? "org-message-continuation " : "") + (message.author_kind !== "assistant" && message.author_id === user.id ? "org-message-own" : "") + (message.id === highlighted ? " org-message-linked" : "")}
         key={message.id} id={"message-" + message.sequence} data-sequence={message.sequence} data-message-id={message.id}
         tabIndex={message.id === focus ? -1 : undefined} aria-current={message.id === highlighted ? "location" : undefined}>
         {message.reply_to && <ReplyPointer original={byId.get(message.reply_to)} onOpen={() => setThreadFor(message.id)}
@@ -1129,7 +1131,7 @@ function Conversation({ organizationId, topic, members, user, canWrite, canManag
             onForked(id);
           }} onAuthLost={onAuthLost} />
       </article>)}</div></> }));
-  }, [messages, reactions, workflowRunKey, topic.kind, topic.id, mentionPeople, members, user.id, organizationId, canWrite, canReplyAgain, onAuthLost, focus, highlighted]);
+  }, [messages, reactions, workflowRunKey, topic.kind, topic.id, mentionPeople, tones, members, user.id, organizationId, canWrite, canReplyAgain, onAuthLost, focus, highlighted]);
   return <MediaScope.Provider value={{ organizationId, topicId: topic.id, canWrite }}><section className="org-conversation" aria-label="Topic conversation">
     {texOpen && <TexRequestDialog bots={botModels} names={botNames} onClose={() => setTexOpen(false)} onPrepare={(source, bot) => {
       const label = `@${botNames[bot.bot_id] ?? bot.name}`;
@@ -1139,7 +1141,7 @@ function Conversation({ organizationId, topic, members, user, canWrite, canManag
     }} />}
     {threadFor && <ThreadDialog key={threadFor} messagesPath={root + "/messages"} messageId={threadFor} canWrite={canWrite}
       onClose={() => setThreadFor(null)} onAuthLost={onAuthLost} onPosted={message => setMessages(existing => mergeMessages(existing, [message]))}
-      renderMessage={message => <div className={"org-message-group org-speaker-" + (message.author_kind ?? "human") + " " + speakerTone(message)}><article className="org-message">
+      renderMessage={message => <div className={"org-message-group org-speaker-" + (message.author_kind ?? "human") + " " + speakerTone(message, tones)}><article className="org-message">
         <header><strong>{authorLabel(message, members)}</strong>
           <time dateTime={new Date(message.created_at * 1000).toISOString()}>{new Date(message.created_at * 1000).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" })}</time></header>
         <MessageMarkdown markdown={normalizeMathDelimiters(mentionMarkdown(message.content, mentionPeople))} /></article></div>} />}
@@ -1166,10 +1168,9 @@ function Conversation({ organizationId, topic, members, user, canWrite, canManag
         canWrite={canWrite} canManage={canManage} onActivity={setBotActivity} onAuthLost={onAuthLost} wake={messages.at(-1)?.sequence} />
 
     </div>
-    {!atBottom && messages.length + workflowActivity.length + computeActivity.length + betaActivity.length > 0 && <button className="org-jump" aria-label={unseen ? `Jump to newest message, ${unseen} new` : "Jump to newest message"} title="Newest message" onClick={() => {
+    {!atBottom && messages.length + workflowActivity.length + computeActivity.length + betaActivity.length > 0 && <NewestMessageButton unseen={unseen} onJump={() => {
       bottom.current = true; setAtBottom(true); if (viewport.current) viewport.current.scrollTop = viewport.current.scrollHeight;
-    }}><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6" /></svg>
-      {unseen > 0 && <span className="org-jump-count" aria-hidden="true">{unseen > 99 ? "99+" : unseen}</span>}</button>}
+    }} />}
     </div>
     {!online && <p role="status" className="org-reconnecting">Reconnecting…</p>}
     {error && <p role="alert" className="org-error org-conversation-error">{error}</p>}
@@ -1259,7 +1260,7 @@ function Conversation({ organizationId, topic, members, user, canWrite, canManag
         {mentionMembers.map((member, index) => <button type="button" role="option" tabIndex={-1} id={"org-mention-" + (member.optionId ?? member.id)}
           aria-selected={index === mentionIndex % mentionMembers.length} key={member.optionId ?? member.id}
           onMouseDown={(event) => event.preventDefault()} onClick={() => chooseMention(member)}>
-          <span className={"org-mention-avatar org-person-tone-" + mentionTone(member.id)} aria-hidden="true">{mentionInitials(member.name)}</span>
+          <span className={"org-mention-avatar " + toneClass(tones, member.id)} aria-hidden="true">{mentionInitials(member.name)}</span>
           <span className="org-mention-option-name">{member.name}{member.model ? "-" + member.model : ""}{member.effort ? "!" + member.effort : ""}</span>
           {member.owner && <small> · {member.owner}</small>}</button>)}</div>}
       {!mentionMembers.length && referenceMatches.length > 0 && <div id="org-reference-list" role="listbox" className="org-mention-menu" aria-label="Reference a topic or project">
@@ -1438,6 +1439,7 @@ export function OrganizationApp({ user, onAccount, onAuthenticated, onSignedOut,
   const [tool, setTool] = useState<"knowledge" | "prices" | "usage" | "bots" | null>(pairCode ? "bots" : null);
   const [knowledgeView, setKnowledgeView] = useState<KnowledgeView | null>(["ledger", "bibliography", "journal"].includes(workspace.view ?? "") ? workspace.view as KnowledgeView : null);
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
+  const [directJump, setDirectJump] = useState<MessageJump | null>(null);
   const [helpOpen, setHelpOpen] = useState(() => new URLSearchParams(window.location.search).get("view") === "help");
   useEffect(() => {
     const changed = () => { const query = new URLSearchParams(window.location.search), view = query.get("view");
@@ -1706,7 +1708,9 @@ export function OrganizationApp({ user, onAccount, onAuthenticated, onSignedOut,
       <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2" /><path d="M9 4v16" /></svg></button>
       <Brand /></div>
       {knowledgeView ? <h1 className="org-workspace-title">{knowledgeView === "journal" ? "Research blog editor" : knowledgeView === "ledger" ? "Ledger" : "Bibliography"}</h1>
-        : directConversation ? <h1 className="org-workspace-title">Direct messages · {directConversation.other_user.name}</h1> : organization && topic && <TopicBreadcrumb channel={channel} topic={topic}
+        : directConversation && organization ? <DirectTitle key={directConversation.id} organizationId={organization.id} conversation={directConversation} members={members}
+          userId={user.id} onChanged={preferenceRefresh} onAuthLost={authLost} onShowMessage={target => setDirectJump(previous => ({ ...target, nonce: (previous?.nonce ?? 0) + 1 }))} />
+        : organization && topic && <TopicBreadcrumb channel={channel} topic={topic}
         subscribed={hierarchy.topic_state.find((item) => item.topic_id === topic.id)?.subscribed !== false}
         onFollow={() => void request(topicPath(organization.id, topic.id) + "/subscription", { method: "PUT", body: {
           subscribed: hierarchy.topic_state.find((item) => item.topic_id === topic.id)?.subscribed === false,
@@ -1778,6 +1782,7 @@ export function OrganizationApp({ user, onAccount, onAuthenticated, onSignedOut,
             <p><ReferenceText text={mentionText(result.content, members)} /></p></button></li>)}</ol>}
         </section> : organization && directConversation ? <LazyView label="Direct messages"><DirectConversationView key={organization.id + "/" + directConversation.id}
           organizationId={organization.id} conversation={directConversation} user={user} members={members} canWrite={canCreate}
+          jump={directJump?.conversation === directConversation.id ? directJump : undefined}
           onChanged={preferenceRefresh} onAuthLost={authLost} /></LazyView> : organization && topic ? <Conversation key={organization.id + "/" + topic.id + "/" + selection?.anchor + "/" + (selection?.message ?? "")} organizationId={organization.id} topic={topic} members={members} user={user}
           focus={selection?.message} referenceTargets={referenceTargets}
           canWrite={canWriteSelected} canManage={["owner", "admin"].includes(organization.role)} draft={draft}
