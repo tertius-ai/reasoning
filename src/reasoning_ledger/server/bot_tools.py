@@ -48,6 +48,14 @@ class BotTools:
             self.runtime.bots._meter(credential, "read")
         with self.store.transaction() as db:
             bot, run = self.runtime.leased(db, credential, run_id, lease)
+            if run["direct_conversation_id"]:
+                # Your conversation with your bot has no topic, so no Reasoning research tools: the bot answers with its own
+                # local abilities, and local execution still asks you first. The scope names the conversation, as in claim.
+                direct = run["direct_conversation_id"]
+                return {"tools": [], "scope": {"organization_id": run["organization_id"], "project_id": direct, "channel_id": direct,
+                        "topic_id": direct, "project_name": "Direct messages", "channel_name": "Direct messages",
+                        "topic_title": "Direct messages", "topic_kind": "direct"}, "bot_id": bot["id"], "owner_id": bot["created_by"],
+                        "requested_by": run["requested_by"], "developer": {"enabled": False}, "gateway": json.loads(run["gateway_json"])}
             delegation = db.execute("SELECT a.status FROM topic_agent_tasks t JOIN topic_agent_threads a ON a.root_run=t.root_run "
                                     "WHERE t.child_bot_run=?", (run_id,)).fetchone()
             if delegation and delegation[0] != "active":

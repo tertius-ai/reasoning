@@ -230,6 +230,68 @@ class BotRuntime:
                    (effort, ResearchContext.edit_sequence(db, org, topic), run_id))
         return self.public(db.execute("SELECT * FROM bot_runs WHERE id=?", (run_id,)).fetchone())
 
+    def enqueue_direct(self, db, user, org, conversation_id, bot, message, model=None, effort=None):
+        """Queue your own bot's answer to your `message` in your direct conversation with it.
+
+        Unlike a topic request, an offline bot is not refused: the run waits, queued, until its runner reconnects."""
+        runtime = db.execute("SELECT * FROM bot_runtimes WHERE bot_id=?", (bot["id"],)).fetchone()
+        if runtime is None:
+            raise StoreError(409, "start this bot's runner once so it can list its models")
+        models = json.loads(runtime["models_json"])
+        model = model or (models[0] if models else None)
+        if model not in models:
+            raise StoreError(400, "this model was not advertised by the bot")
+        from .reasoning_effort import checked
+
+        checked(effort)
+        if effort and effort not in json.loads(runtime["capabilities_json"]).get("efforts", {}).get(model, []):
+            raise StoreError(400, "this bot model does not advertise that reasoning effort")
+        if db.execute("SELECT COUNT(*) FROM bot_runs WHERE bot_id=? AND status IN ('queued','running','waiting_approval')",
+                      (bot["id"],)).fetchone()[0] >= 50:
+            raise StoreError(409, "bot has 50 pending requests; finish or cancel existing work")
+        run_id, now = _id(), int(time.time())
+        identity = json.dumps({"model": f"bot/{bot['id']}/{model}", "through": message["sequence"], "prompt": None,
+                               "effort": effort, "direct_conversation_id": conversation_id}, sort_keys=True)
+        db.execute("INSERT INTO bot_runs(id,organization_id,project_id,channel_id,topic_id,direct_conversation_id,bot_id,"
+                   "requested_by,model,client_id,request_json,prompt,status,phase,created_at,updated_at,context_through_sequence,"
+                   "enqueued_at_ms,effort) "
+                   "VALUES(?,?,NULL,NULL,NULL,?,?,?,?,?,?,?,'queued','thinking',?,?,?,?,?)",
+                   (run_id, org, conversation_id, bot["id"], user, model, "direct-" + message["id"], identity, message["content"],
+                    now, now, message["sequence"], int(time.time() * 1000), effort))
+        self.store._audit(db, org, user, "bot.inference.request", run_id)
+        return self.public(db.execute("SELECT * FROM bot_runs WHERE id=?", (run_id,)).fetchone())
+
+    def direct_listing(self, user, org, conversation_id):
+        """Your bot's runs in your direct conversation with it, newest first."""
+        from .direct_messages import DirectMessages
+
+        with self.store.transaction(write=True) as db:
+            DirectMessages.access(db, user, org, conversation_id)
+            self.expire(db, org)
+            return [self.public(row) for row in db.execute("SELECT r.*,u.name AS bot_name,b.created_by AS owner_user_id,"
+                + APPROVAL_BY + " FROM bot_runs r JOIN users u ON u.id=r.bot_id JOIN bots b ON b.id=r.bot_id "
+                "WHERE r.organization_id=? AND r.direct_conversation_id=? ORDER BY r.created_at DESC,r.id DESC LIMIT 50",
+                (org, conversation_id))]
+
+    def _direct_access(self, db, bot, run):
+        if bot["revoked_at"] is not None or bot["expires_at"] <= int(time.time()):
+            raise StoreError(403, "bot access is no longer active")
+        if bot["created_by"] != run["requested_by"]:
+            raise StoreError(403, "only a bot's owner can message it directly")
+        self.store._require(db, run["requested_by"], run["organization_id"], write=True)
+        first, second = sorted((run["requested_by"], bot["id"]))
+        if db.execute("SELECT 1 FROM direct_conversations WHERE organization_id=? AND id=? AND first_user_id=? AND second_user_id=?",
+                      (run["organization_id"], run["direct_conversation_id"], first, second)).fetchone() is None:
+            raise StoreError(404, "direct conversation unavailable")
+
+    @staticmethod
+    def _direct_history(db, run):
+        rows = db.execute("SELECT m.*,u.name,u.account_kind FROM direct_messages m JOIN users u ON u.id=m.author_id "
+                          "WHERE m.organization_id=? AND m.conversation_id=? AND m.sequence<=? ORDER BY m.sequence DESC LIMIT 20",
+                          (run["organization_id"], run["direct_conversation_id"], run["context_through_sequence"])).fetchall()
+        return [{"id": row["id"], "sequence": row["sequence"], "sender": row["name"],
+                 "kind": "bot" if row["account_kind"] == "bot" else "human", "text": row["content"]} for row in reversed(rows)]
+
     def from_message(self, credential, message_id):
         self.bots._meter(credential, "write")
         with self.store.transaction(write=True) as db:
@@ -294,11 +356,17 @@ class BotRuntime:
 
     @staticmethod
     def public(row):
-        return {"bot_name": dict(row).get("bot_name"), "timing": BotRuntime.timing(row),
-                "effort": dict(row).get("effort"), "gateway": json.loads(dict(row).get("gateway_json", "{}")),
-                "activity": json.loads(dict(row).get("activity_json", "[]")),
-                "owner_user_id": dict(row).get("owner_user_id"), "approval_by": dict(row).get("approval_by"),
-                **{key: row[key] for key in ("id", "organization_id", "project_id", "channel_id", "topic_id", "bot_id",
+        value = dict(row)
+        direct = value.get("direct_conversation_id")
+        # A run in a direct conversation has no topic. Runners name their workspace after these three IDs, so the
+        # conversation's own ID stands in for each: one private workspace per conversation, and older runners keep working.
+        scope = {key: direct if direct and value[key] is None else value[key] for key in ("project_id", "channel_id", "topic_id")}
+        return {"bot_name": value.get("bot_name"), "timing": BotRuntime.timing(row),
+                "effort": value.get("effort"), "gateway": json.loads(value.get("gateway_json", "{}")),
+                "activity": json.loads(value.get("activity_json", "[]")),
+                "owner_user_id": value.get("owner_user_id"), "approval_by": value.get("approval_by"),
+                "direct_conversation_id": direct, **scope,
+                **{key: row[key] for key in ("id", "organization_id", "bot_id",
                 "requested_by", "model", "status", "phase", "created_at", "updated_at", "context_through_sequence",
                 "output_text", "error_code")}}
 
@@ -310,10 +378,18 @@ class BotRuntime:
                 + APPROVAL_BY + " FROM bot_runs r JOIN users u ON u.id=r.bot_id JOIN bots b ON b.id=r.bot_id "
                 "WHERE r.organization_id=? AND r.topic_id=? ORDER BY r.created_at DESC,r.id DESC LIMIT 100", (org, topic))]
 
+    def _viewer(self, db, user, org, run, *, write=False):
+        """The caller's role where the run lives: its topic, or the direct conversation they take part in."""
+        if run["direct_conversation_id"]:
+            from .direct_messages import DirectMessages
+
+            return DirectMessages.access(db, user, org, run["direct_conversation_id"], write=write)[0]
+        return self.store._topic_access(db, user, org, run["topic_id"], write=write)[0]
+
     def get(self, user, org, run_id):
         with self.store.transaction(write=True) as db:
             run = _row(db.execute("SELECT * FROM bot_runs WHERE organization_id=? AND id=?", (org, run_id)).fetchone())
-            self.store._topic_access(db, user, org, run["topic_id"])
+            self._viewer(db, user, org, run)
             self.expire(db, org)
             return self.public(db.execute("SELECT r.*,u.name AS bot_name,b.created_by AS owner_user_id," + APPROVAL_BY
                                           + " FROM bot_runs r JOIN users u ON u.id=r.bot_id JOIN bots b ON b.id=r.bot_id "
@@ -326,7 +402,7 @@ class BotRuntime:
         # Keep it until a replacement covers every effect and its source reread.
         with self.store.transaction(write=True) as db:
             run = _row(db.execute("SELECT * FROM bot_runs WHERE organization_id=? AND id=?", (org, run_id)).fetchone())
-            role = self.store._topic_access(db, user, org, run["topic_id"], write=True)[0]
+            role = self._viewer(db, user, org, run, write=True)
             owner = db.execute("SELECT created_by FROM bots WHERE id=?", (run["bot_id"],)).fetchone()[0]
             if user not in {run["requested_by"], owner} and role not in {"owner", "admin"}:
                 raise StoreError(403, "only the requester, bot owner or administrator can stop this invocation")
@@ -381,17 +457,26 @@ class BotRuntime:
                            (digest(lease), now, int(time.time() * 1000), row["id"]))
                 from .research_profiles import topic_instructions
 
-                kind = db.execute("SELECT kind FROM topics WHERE id=?", (row["topic_id"],)).fetchone()[0]
-                instructions = topic_instructions(db, row["organization_id"], row["topic_id"]) if kind == "beta" else {}
-                from .bot_context import conversation
+                if row["direct_conversation_id"]:
+                    instructions, history = {}, self._direct_history(db, row)
+                else:
+                    kind = db.execute("SELECT kind FROM topics WHERE id=?", (row["topic_id"],)).fetchone()[0]
+                    instructions = topic_instructions(db, row["organization_id"], row["topic_id"]) if kind == "beta" else {}
+                    from .bot_context import conversation
 
-                history = conversation(self, db, bot, row)
+                    history = conversation(self, db, bot, row)
                 return {**self.public(db.execute("SELECT * FROM bot_runs WHERE id=?", (row["id"],)).fetchone()),
                         "lease": lease, "prompt": row["prompt"], "system_prompt": instructions.get("system_prompt", ""),
                         "context": history}
             return None
 
     def _run_access(self, db, bot, run):
+        if run["direct_conversation_id"]:
+            self._direct_access(db, bot, run)
+            runtime = _row(db.execute("SELECT * FROM bot_runtimes WHERE bot_id=?", (bot["id"],)).fetchone())
+            if run["model"] not in json.loads(runtime["models_json"]):
+                raise StoreError(403, "bot model is no longer advertised")
+            return
         self.access(db, bot, run["topic_id"], write=True)
         self.store._topic_access(db, run["requested_by"], run["organization_id"], run["topic_id"], write=True)
         delegated_goal = db.execute("SELECT g.status FROM bot_agent_tasks t JOIN agent_goals g ON g.id=t.goal_id "
@@ -477,8 +562,13 @@ class BotRuntime:
             committed = None
             if status == "succeeded":
                 for index, start in enumerate(range(0, len(output), 16000)):
-                    self.store._post_message(db, bot["id"], run["organization_id"], run["topic_id"], output[start:start + 16000],
-                                             f"bot-run-{run_id}-{index}", sender_kind="bot")
+                    if run["direct_conversation_id"]:
+                        db.execute("INSERT INTO direct_messages(id,organization_id,conversation_id,author_id,content,client_id,created_at) "
+                                   "VALUES(?,?,?,?,?,?,?)", (_id(), run["organization_id"], run["direct_conversation_id"], bot["id"],
+                                                             output[start:start + 16000], f"bot-run-{run_id}-{index}", int(time.time())))
+                    else:
+                        self.store._post_message(db, bot["id"], run["organization_id"], run["topic_id"], output[start:start + 16000],
+                                                 f"bot-run-{run_id}-{index}", sender_kind="bot")
                 committed = int(time.time() * 1000)
             db.execute("UPDATE bot_runs SET status=?,phase='finishing',output_text=?,error_code=?,updated_at=?,"
                        "committed_at_ms=?,runner_timing_json=? WHERE id=?",
@@ -528,9 +618,9 @@ class BotRuntime:
         with self.store.transaction() as db:
             self.store._require(db, user, org)
             records = []
-            for row in db.execute("SELECT a.*,r.topic_id,r.requested_by,u.name AS requester_name,t.name AS topic_name "
-                "FROM bot_execution_approvals a JOIN bot_runs r ON r.id=a.run_id JOIN users u ON u.id=r.requested_by "
-                "JOIN topics t ON t.id=r.topic_id WHERE a.owner_id=? AND r.organization_id=? "
+            for row in db.execute("SELECT a.*,r.topic_id,r.direct_conversation_id,r.requested_by,u.name AS requester_name,"
+                "t.name AS topic_name FROM bot_execution_approvals a JOIN bot_runs r ON r.id=a.run_id JOIN users u ON u.id=r.requested_by "
+                "LEFT JOIN topics t ON t.id=r.topic_id WHERE a.owner_id=? AND r.organization_id=? "
                 "AND (a.status='pending' OR (a.status='approved' AND r.error_code='approval_transport_ended')) "
                 "AND r.status='waiting_approval' ORDER BY a.created_at LIMIT 100", (user, org)):
                 try:

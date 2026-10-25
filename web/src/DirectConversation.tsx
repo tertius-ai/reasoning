@@ -3,7 +3,8 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 import { DirectConversation, directPath } from "./DirectMessages";
 import { normalizeMathDelimiters } from "./markdownMath";
 import { MessageMarkdown, alphaMessageGroups, resizeComposer } from "./OrganizationApp";
-import { ReturnIcon } from "./ComposerIcons";
+import { ReturnIcon, StopIcon } from "./ComposerIcons";
+import { BotComposerControls, BotSteps, BotWorking, replyRun, useBotChoice, useBotRuns, useOwnBot } from "./BotDirect";
 import { ApiError, Account, Member, Message, aborted, errorMessage, mentionMarkdown, mergeMessages, request } from "./organization-api";
 import { startPolling } from "./polling";
 import { LIVE_SAFETY_POLL_MS, subscribeEvents } from "./topicEvents";
@@ -40,7 +41,10 @@ function DirectMessageEdit({ path, message, onSaved, onCancel, onAuthLost }: {
   </form>;
 }
 
-/** A one-to-one conversation: only its two participants can read it, and no bot or model takes part. */
+/**
+ * A one-to-one conversation: only its two participants can read it. With another person no bot or model takes part;
+ * with your own bot, each message you send asks the bot for an answer, which its runner on your computer writes.
+ */
 export function DirectConversationView({ organizationId, conversation, user, members, canWrite, jump, onChanged, onAuthLost }: {
   organizationId: string; conversation: DirectConversation; user: Account; members: Member[]; canWrite: boolean;
   jump?: MessageJump; onChanged: () => void; onAuthLost: () => void;
@@ -67,6 +71,12 @@ export function DirectConversationView({ organizationId, conversation, user, mem
       .catch(cause => { holdRead.current = false; setUnreadFrom(null); fail(cause); });
   };
   const writable = canWrite && conversation.other_member && !conversation.blocked;
+  const botChat = conversation.other_user.kind === "bot";
+  const bot = useOwnBot(organizationId, botChat ? conversation.other_user.id : null, onAuthLost);
+  const botRuns = useBotRuns(organizationId, root, botChat, messages.at(-1)?.sequence, onAuthLost);
+  const choice = useBotChoice(user.id, bot);
+  const activeRun = botRuns.runs.find(run => ["queued", "running", "waiting_approval"].includes(run.status));
+  const botOffline = botChat && bot !== null && !bot.online;
   // Choosing or cancelling a reply target starts a fresh attempt, so a retry never changes what a sent message answers.
   const startReply = useRef((_id: string) => {});
   startReply.current = (id: string) => {
@@ -187,7 +197,9 @@ export function DirectConversationView({ organizationId, conversation, user, mem
     setDraft(attempt); setSending(true); setError("");
     try {
       const message = await request<Message>(root + "/messages", { method: "POST", body: {
-        content: outgoing(attempt), client_id: attempt.clientId, ...(attempt.replyTo ? { reply_to: attempt.replyTo } : {}) } });
+        content: outgoing(attempt), client_id: attempt.clientId, ...(attempt.replyTo ? { reply_to: attempt.replyTo } : {}),
+        ...(botChat && choice.model ? { bot_model: choice.model, ...(choice.effort ? { effort: choice.effort } : {}) } : {}) } });
+      if (botChat) botRuns.reload();
       if (!alive.current) return;
       setMessages(existing => mergeMessages(existing, [message]));
       if (currentDraft.current.clientId === attempt.clientId) {
@@ -257,9 +269,12 @@ export function DirectConversationView({ organizationId, conversation, user, mem
           {editing === message.id ? <DirectMessageEdit path={root} message={message} onAuthLost={onAuthLost} onCancel={() => setEditing(null)}
             onSaved={updated => { setMessages(existing => mergeMessages(existing, [updated])); setEditing(null); }} />
             : messageBody(message)}
+          {botChat && message.author_kind === "bot" && (() => { const run = replyRun(botRuns.runs, message.client_id); return run ? <BotSteps run={run} /> : null; })()}
+          {botChat && own && botOffline && botRuns.runs.some(run => run.status === "queued" && run.context_through_sequence === message.sequence)
+            && <small className="org-bot-waiting">waiting for {name}</small>}
           <div className={"chat-message-actions chat-has-copy chat-has-fork" + (writable ? " chat-has-reply chat-has-react" : "")}>
             <ReactionControl path={root + "/messages/" + encodeURIComponent(message.id) + "/reactions"}
-              canWrite={writable} onAuthLost={onAuthLost} batched preloaded={message.reactions} />
+              canWrite={writable} onAuthLost={onAuthLost} batched preloaded={message.reactions} modelReply={message.author_kind === "bot"} />
             {writable && <button type="button" className="chat-action-launcher chat-reply-launcher" aria-label="Reply" title="Reply"
               onClick={event => { event.preventDefault(); startReply.current(message.id); }}>↩</button>}
             <ActionMenu label="Message actions" className="chat-fork-launcher" icon={<MessageMenuIcon />}>
@@ -281,9 +296,10 @@ export function DirectConversationView({ organizationId, conversation, user, mem
           </div>}
         </article></React.Fragment>;
       })}</div></div>);
-  }, [messages, editing, history, members, user.id, name, root, writable, tones, linked, onAuthLost, unreadFrom]);
+  }, [messages, editing, history, members, user.id, name, root, writable, tones, linked, onAuthLost, unreadFrom, botChat, botRuns.runs, botOffline]);
 
-  const status = !conversation.other_member ? `${name} is no longer a member of this organization.`
+  const attachControl = <span className="org-composer-attach"><AttachFilesButton disabled={!writable || sending || draft.files.length >= MAX_DIRECT_ATTACHMENTS} onFiles={attach} /></span>;
+  const status = !conversation.other_member ? (botChat ? `${name} is no longer available. Its access was revoked or expired.` : `${name} is no longer a member of this organization.`)
     : conversation.blocked ? `You blocked ${name}. Neither of you can send messages here until you unblock them.`
       : !canWrite ? "You have read-only access." : "";
   return <section className="org-conversation org-direct-conversation" aria-label={`Direct messages with ${name}`}>
@@ -294,8 +310,12 @@ export function DirectConversationView({ organizationId, conversation, user, mem
       }}>
         {older && messages.length > 0 && <button className="org-older" disabled={loadingOlder} onClick={() => void loadOlder()}>{loadingOlder ? "Loading…" : "Load earlier messages"}</button>}
         {loading && <p role="status" className="org-empty">Loading conversation…</p>}
-        {!loading && !messages.length && <div className="org-empty"><h2>Send {name} a message</h2><p>New messages show as unread in their Direct messages list.</p></div>}
+        {!loading && !messages.length && <div className="org-empty"><h2>Send {name} a message</h2><p>{botChat
+          ? `Only you can read this conversation. ${name} answers through its runner on your computer.`
+          : "New messages show as unread in their Direct messages list."}</p></div>}
         {transcript}
+        {botChat && activeRun && !(activeRun.status === "queued" && botOffline) && <BotWorking run={activeRun} name={name} online={!botOffline}
+          approvals={botRuns.approvals} onDecide={(approval, allow) => void botRuns.decide(approval, allow)} />}
       </div>
       {!atBottom && messages.length > 0 && <NewestMessageButton unseen={unseen} onJump={() => {
         bottom.current = true; setAtBottom(true); if (viewport.current) viewport.current.scrollTop = viewport.current.scrollHeight;
@@ -303,6 +323,8 @@ export function DirectConversationView({ organizationId, conversation, user, mem
     </div>
     {!online && <p role="status" className="org-reconnecting">Reconnecting…</p>}
     {error && <p role="alert" className="org-error org-conversation-error">{error}</p>}
+    {botRuns.error && <p role="alert" className="org-error org-conversation-error">{botRuns.error}</p>}
+    {botOffline && <p role="status" className="org-bot-offline">⏸ {name} is offline. Your messages wait and are sent when its runner reconnects.</p>}
     {status && <p role="status" className="org-help org-direct-status">{status}</p>}
     {threadFor && <ThreadDialog key={threadFor} messagesPath={root + "/messages"} messageId={threadFor} canWrite={writable}
       onClose={() => setThreadFor(null)} onAuthLost={onAuthLost} onPosted={message => setMessages(existing => mergeMessages(existing, [message]))}
@@ -315,9 +337,9 @@ export function DirectConversationView({ organizationId, conversation, user, mem
       {draft.replyTo && <ReplyBar original={replyOriginal} label={replyOriginal && authorName(replyOriginal)} onCancel={cancelReply} />}
       <PendingFiles files={draft.files} onRemove={removeFile} />
       <label className="org-visually-hidden" htmlFor="org-direct-message">Message</label>
-      {/* As in a human chat: the plus inside the box on the left, the one return button on the right. */}
+      {/* With a person the plus is inside the box; with your bot it sits under the box beside the model, as in an AI chat. */}
       <div className="org-composer-row">
-        <span className="org-composer-attach"><AttachFilesButton disabled={!writable || sending || draft.files.length >= MAX_DIRECT_ATTACHMENTS} onFiles={attach} /></span>
+        {!botChat && attachControl}
         <div className="org-composer-input"><textarea id="org-direct-message" ref={textarea} rows={1} maxLength={16000} value={draft.text} disabled={!writable || sending}
           placeholder={writable ? `Message ${name}…` : "Sending is unavailable"} onChange={event => setDraft({ ...draft, text: event.target.value,
             clientId: draft.attempted || !draft.clientId ? crypto.randomUUID() : draft.clientId, attempted: false })}
@@ -327,11 +349,14 @@ export function DirectConversationView({ organizationId, conversation, user, mem
             if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); void send(); }
           }} /></div>
         <div className="org-composer-send">
-          <button className="org-composer-button org-send-play" aria-label={sending ? "Sending…" : uploading ? "Waiting for uploads" : draft.attempted ? "Retry send" : "Send"}
-            title={uploading ? "Wait for the uploads to finish, or remove the failed ones" : draft.attempted ? "Retry send" : "Send message"} disabled={!canSend}>
-            {sending ? <span aria-hidden="true">…</span> : <ReturnIcon />}</button></div>
+          {botChat && activeRun ? <button type="button" className="org-composer-button" aria-label="Stop current work" title="Stop current work"
+            onClick={() => void botRuns.stop(activeRun)}><StopIcon /></button>
+            : <button className="org-composer-button org-send-play" aria-label={sending ? "Sending…" : uploading ? "Waiting for uploads" : draft.attempted ? "Retry send" : "Send"}
+              title={uploading ? "Wait for the uploads to finish, or remove the failed ones" : draft.attempted ? "Retry send" : "Send message"} disabled={!canSend}>
+              {sending ? <span aria-hidden="true">…</span> : <ReturnIcon />}</button>}</div>
       </div>
       </div>
+      {botChat && <BotComposerControls attach={attachControl} bot={bot} choice={choice} disabled={!writable || sending} />}
     </form>
   </section>;
 }

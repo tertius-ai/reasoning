@@ -633,8 +633,11 @@ function PresenceSidebar({ organizationId, open, onClose, onAuthLost, userId, on
     void poll(); return () => { controller.abort(); clearTimeout(timer); };
   }, [organizationId, open, onAuthLost]);
   if (!open) return null;
+  // Conversations with your own bots belong to the bot rows; the rest make People the inbox.
+  const botConversations = new Map(conversations.filter(item => item.other_user.kind === "bot").map(item => [item.other_user.id, item]));
+  const humanConversations = conversations.filter(item => item.other_user.kind !== "bot");
   // A partner who left the organization is no longer in presence; their conversation still lists them, offline.
-  const people = presence ? peopleInbox(peopleWithBots(presence, new Set(conversations.map(item => item.other_user.id))), conversations,
+  const people = presence ? peopleInbox(peopleWithBots(presence, new Set(humanConversations.map(item => item.other_user.id))), humanConversations,
     conversation => ({ id: conversation.other_user.id, name: conversation.other_user.name, email: "", role: "member" as const,
       online: false, last_seen_at: null, bots: [] })) : [];
   const connected = (presence?.humans.filter(person => person.online).length ?? 0) + (presence?.bots.filter(bot => bot.online).length ?? 0);
@@ -648,22 +651,31 @@ function PresenceSidebar({ organizationId, open, onClose, onAuthLost, userId, on
       {person.conversation && <DirectMessageMarks conversation={person.conversation} />}<i aria-label={person.online ? "online" : "offline"} /></div>;
   };
   // A bot shows its owner's first name; the full owner, engine, status and models appear on hover or keyboard focus.
+  // Your own bots open a private conversation, like a person. One mark at the row's end: a pending approval first,
+  // then unread replies, then the working dot.
   const botRow = (bot: Presence["bots"][number], owner: string) => {
     const pending = approvals.rows.filter(row => row.bot_id === bot.id).length;
+    const own = Boolean(onMessage) && bot.owner_user_id === userId, conversation = botConversations.get(bot.id);
+    const unread = conversation ? directUnread(conversation) : 0;
     const activity = bot.activity?.replaceAll("_", " ");
     const status = bot.online ? "Online · " + (activity ?? "idle")
       : "Offline" + (bot.last_seen_at ? " · last seen " + new Date(bot.last_seen_at * 1000).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" }) : "");
-    return <div className={"org-presence-row org-bot-row" + (bot.online ? "" : " org-bot-offline")} key={bot.id} data-bot-id={bot.id} data-owner-id={bot.owner_user_id}
-      tabIndex={pending ? undefined : 0} aria-describedby={"org-bot-hover-" + bot.id}>
-      <strong>{pending ? <button type="button" className="org-bot-review-name" onClick={() => setReviewBot(bot)}>{bot.name}</button> : bot.name}</strong>
+    return <div className={"org-presence-row org-bot-row" + (bot.online ? "" : " org-bot-offline") + (own ? " org-bot-own" : "") + (unread ? " org-presence-has-unread" : "")}
+      key={bot.id} data-bot-id={bot.id} data-owner-id={bot.owner_user_id}
+      tabIndex={pending || own ? undefined : 0} aria-describedby={"org-bot-hover-" + bot.id}>
+      <strong>{own ? <button type="button" className="org-presence-message" aria-current={conversation && conversation.id === selectedConversation ? "page" : undefined}
+        title={`Direct messages with ${bot.name}`} onClick={() => onMessage!(bot.id)}>{bot.name}</button>
+        : pending ? <button type="button" className="org-bot-review-name" onClick={() => setReviewBot(bot)}>{bot.name}</button> : bot.name}</strong>
       <span className="org-bot-owner">· {owner.split(/\s+/)[0]}</span>
       {pending ? <button type="button" className="org-bot-approval-indicator" aria-label={`Review ${pending} pending requests from ${bot.name}`}
-        title="Approval needed" onClick={() => setReviewBot(bot)}>!</button> : <i className={bot.activity ? "org-bot-thinking" : ""}
-        aria-label={activity ?? (bot.online ? "online" : "offline")} />}
+        title="Approval needed" onClick={() => setReviewBot(bot)}>!</button>
+        : unread > 0 ? <span className="org-unread" aria-label={`${unread} unread messages from ${bot.name}`}>{unread}</span>
+          : <i className={bot.activity ? "org-bot-thinking" : ""} aria-label={activity ?? (bot.online ? "online" : "offline")} />}
       <div className="org-bot-hover" role="tooltip" id={"org-bot-hover-" + bot.id}>
         <span className="org-bot-hover-title"><strong>{bot.name}</strong> · {bot.engine === "claude" ? "Claude Code" : bot.engine === "codex" ? "Codex" : "Bot"}</span>
         <span>{owner}’s bot</span><span className={activity ? "org-bot-hover-active" : undefined}>{status}</span>
-        {!!bot.models?.length && <span>{bot.models.join(", ")}</span>}{bot.developer && <span>Developer tools</span>}</div></div>;
+        {!!bot.models?.length && <span>{bot.models.join(", ")}</span>}{bot.developer && <span>Developer tools</span>}
+        {own && <span className="org-bot-hover-action">Click to message</span>}</div></div>;
   };
   const onlinePeople = people.filter(person => person.online);
   const groups = [
@@ -1747,7 +1759,8 @@ export function OrganizationApp({ user, onAccount, onAuthenticated, onSignedOut,
       <Brand /></div>
       {knowledgeView ? <h1 className="org-workspace-title">{knowledgeView === "journal" ? "Research blog editor" : knowledgeView === "ledger" ? "Ledger" : "Bibliography"}</h1>
         : directConversation && organization ? <DirectTitle key={directConversation.id} organizationId={organization.id} conversation={directConversation} members={members}
-          userId={user.id} onChanged={preferenceRefresh} onAuthLost={authLost} onShowMessage={target => setDirectJump(previous => ({ ...target, nonce: (previous?.nonce ?? 0) + 1 }))} />
+          userId={user.id} onChanged={preferenceRefresh} onAuthLost={authLost} onShowMessage={target => setDirectJump(previous => ({ ...target, nonce: (previous?.nonce ?? 0) + 1 }))}
+          onBotSettings={() => setTool("bots")} />
         : organization && topic && <TopicBreadcrumb channel={channel} topic={topic} researchSlot={setTopicMenuSlot}
         subscribed={hierarchy.topic_state.find((item) => item.topic_id === topic.id)?.subscribed !== false}
         onFollow={() => void request(topicPath(organization.id, topic.id) + "/subscription", { method: "PUT", body: {

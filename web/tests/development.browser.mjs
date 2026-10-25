@@ -26,7 +26,9 @@ test('local hot-reload workflow signs in, streams a simulated beta answer, and c
   const origin = `http://127.0.0.1:${frontend}`;
   let logs = '', browser, page;
   const server = spawn(path.join(repository, '.venv/bin/python'), ['-m', 'reasoning_ledger.development', 'serve',
-    '--frontend-port', String(frontend), '--backend-port', String(backend)], { cwd: repository });
+    '--frontend-port', String(frontend), '--backend-port', String(backend)],
+  // Without the simulated development bot, which advertises local execution; tests/bot-direct.browser.mjs covers it.
+  { cwd: repository, env: { ...process.env, REASONING_DEV_BOT: '0' } });
   server.stdout.on('data', chunk => { logs += chunk; });
   server.stderr.on('data', chunk => { logs += chunk; });
   const exited = once(server, 'exit');

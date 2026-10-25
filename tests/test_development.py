@@ -133,7 +133,9 @@ def test_persistent_fixture_restart_does_not_duplicate_or_replace_user_edits(loc
     before = store.database.read_bytes()
     another = dev_app.create_dev_app()
     with another.state.store.transaction() as db:
-        assert db.execute("SELECT count(*) FROM users").fetchone()[0] == 3
+        # Three people and the owner's development bot.
+        assert db.execute("SELECT count(*) FROM users WHERE account_kind='human'").fetchone()[0] == 3
+        assert db.execute("SELECT count(*) FROM users WHERE account_kind='bot'").fetchone()[0] == 1
         assert db.execute("SELECT count(*) FROM topics").fetchone()[0] == 3
     assert before == store.database.read_bytes()
 

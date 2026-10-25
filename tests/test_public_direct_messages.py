@@ -87,7 +87,7 @@ def test_participants_exchange_messages_with_unread_state_and_edits(people):
     created = people["first"].post(root + "/direct-conversations", json={"user_id": people["second_id"]})
     assert created.status_code == 201
     direct = created.json()
-    assert direct["other_user"] == {"id": people["second_id"], "name": "Member"} and direct["unread_count"] == 0
+    assert direct["other_user"] == {"id": people["second_id"], "name": "Member", "kind": "human"} and direct["unread_count"] == 0
     again = people["second"].post(root + "/direct-conversations", json={"user_id": people["first_id"]})
     assert again.status_code == 200 and again.json()["id"] == direct["id"]
     # An empty conversation is listed only for the person who opened it.
@@ -208,11 +208,11 @@ def test_bots_cannot_participate_or_read_direct_conversations(people):
     # A bot that follows its owner's access sees the owner's topics but never their direct conversations.
     assert {item["id"] for item in bots.topics(follower["token"])} == {topic["id"] for topic in topics}
     assert bots.messages(follower["token"]) == []
-    # Bot credentials are not human sessions, and a bot cannot be a recipient.
+    # Bot credentials are not human sessions, and only its owner may message a bot (tests/test_public_bot_direct.py).
     bearer = {"Authorization": "Bearer " + follower["token"]}
     assert people["first"].get(root + f"/direct-conversations/{direct['id']}/messages", headers=bearer).status_code == 401
     assert people["first"].get(root + "/direct-conversations", headers=bearer).status_code == 401
-    assert people["first"].post(root + "/direct-conversations", json={"user_id": follower["id"]}).status_code == 404
+    assert people["second"].post(root + "/direct-conversations", json={"user_id": follower["id"]}).status_code == 404
     assert people["first"].put(root + f"/direct-blocks/{follower['id']}", json={}).status_code == 404
     assert people["first"].post(root + "/direct-conversations", json={"user_id": people["first_id"]}).status_code == 400
     assert people["first"].post(root + "/direct-conversations", json={"user_id": "f" * 32}).status_code == 404

@@ -662,3 +662,7 @@ MIGRATIONS += (DIRECT_MEDIA_SCHEMA,)
 from .feedback_reports_schema import SCHEMA as FEEDBACK_REPORTS_SCHEMA  # noqa: E402
 
 MIGRATIONS += (FEEDBACK_REPORTS_SCHEMA,)
+
+from .bot_direct_schema import SCHEMA as BOT_DIRECT_SCHEMA  # noqa: E402
+
+MIGRATIONS += (BOT_DIRECT_SCHEMA,)

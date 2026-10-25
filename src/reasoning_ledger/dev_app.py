@@ -3,9 +3,12 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import os
 import stat
+import threading
+import time
 import uuid
 from pathlib import Path
 from urllib.parse import urlsplit
@@ -65,7 +68,70 @@ def seed(store: Store) -> None:
         store.post_message(user, org, topic["id"],
                            "Local development fixture: no paid LLM calls or mathematical verification. "
                            "Try development/slow for streaming and cancellation.", "development-welcome-" + kind)
+    # The owner's own bot, answered by the simulated runner below: message it from People.
+    from .server.bot_store import BotStore
+
+    bot = BotStore(store).create(user, org, "Development bot", [], ["messages:read", "messages:write"], personal=True, public_access=True)
+    write_document(store.data_dir / "development-bot.json", {"format": 1, "token": bot["token"], "bot_id": bot["id"]}, new=True)
     write_document(store.data_dir / "development-seeded.json", {"format": 1, "complete": True}, new=True)
+
+
+def simulated_bot(state: Path) -> None:
+    """Stand in for the development bot's runner on this machine: no CLI, model or command ever runs.
+
+    It answers each message with a fixed note. Asked to "run" something, it first requests one approval, so the
+    conversation shows Approve and Decline."""
+    from .server.bot_runtime import BotRuntime
+    from .server.bot_store import BotStore
+    from .server.store import StoreError
+
+    document = state / "development-bot.json"
+    if not document.exists():
+        return
+    fixture = read_document(document)
+    token, bot_id = fixture["token"], fixture["bot_id"]
+    store = Store(state)
+    runtime = BotRuntime(BotStore(store))
+    advertised = 0.0
+    while True:
+        try:
+            # Stay online with an occasional write; look for queued work with a read, and claim only when some waits.
+            if time.monotonic() - advertised > 15:
+                runtime.advertise(token, "codex", ["dev-quick", "dev-careful"], False, True, {"efforts": {"dev-careful": ["low", "high"]}})
+                advertised = time.monotonic()
+            with store.transaction() as db:
+                waiting = db.execute("SELECT 1 FROM bot_runs WHERE bot_id=? AND status='queued' LIMIT 1", (bot_id,)).fetchone()
+            run = runtime.claim(token) if waiting else None
+            if run is None:
+                time.sleep(1)
+                continue
+            lease, prompt = run["lease"], run["prompt"]
+            runtime.progress(token, run["id"], lease, "reading", "reading_workspace")
+            time.sleep(1.5)
+            note = ""
+            if "run" in prompt.lower().split():
+                approval = runtime.request_execution(token, run["id"], lease, ["python", "census.py", "--small"])
+                status = "pending"
+                for _ in range(300):
+                    status = runtime.execution(token, run["id"], lease, approval["id"])["status"]
+                    if status != "pending":
+                        break
+                    runtime.progress(token, run["id"], lease)
+                    time.sleep(1)
+                if status == "approved":
+                    runtime.execution(token, run["id"], lease, approval["id"], consume=True)
+                    runtime.progress(token, run["id"], lease, "using_tools", "using_tools")
+                    time.sleep(1.5)
+                    note = "\n\nI would have run `python census.py --small` now; this simulated runner runs nothing."
+                else:
+                    note = "\n\nYou declined, so nothing was run."
+            runtime.progress(token, run["id"], lease, "writing", "writing_response")
+            time.sleep(1)
+            model = run["model"] + (f" · {run['effort']}" if run.get("effort") else "")
+            runtime.finish(token, run["id"], lease, "succeeded",
+                           f"Simulated reply from the development bot ({model}); no model was called.\n\nYou wrote: {prompt}{note}")
+        except StoreError:
+            time.sleep(2)
 
 
 class SimulatedStream(httpx.AsyncByteStream):
@@ -106,8 +172,10 @@ def simulated_provider() -> OpenRouter:
                 "id": model, "name": "Simulated " + model.split("/")[1],
                 "architecture": {"input_modalities": ["text"], "output_modalities": ["text"]},
                 "pricing": {"prompt": "0", "completion": "0"}, "context_length": 200000,
-                "supported_parameters": ["tools", "tool_choice", "max_completion_tokens"],
+                "supported_parameters": ["tools", "tool_choice", "max_completion_tokens"] + (["reasoning"] if model == MODELS[1] else []),
                 "top_provider": {"max_completion_tokens": 8192},
+                # development/slow offers effort levels, so the effort picker can be tried.
+                **({"reasoning": {"supported_efforts": ["low", "medium", "high", "xhigh"]}} if model == MODELS[1] else {}),
             } for model in MODELS]})
         if request.headers.get("Authorization") != "Bearer " + KEY:
             return httpx.Response(401, json={"error": {"message": "Use only the seeded development fixture key"}})
@@ -137,6 +205,18 @@ def create_dev_app():
     seed(Store(state))
     app = create_app(Config(state, origin, openrouter_url="http://127.0.0.1/api/v1"), provider=simulated_provider(),
                      webhook_transport=httpx.MockTransport(lambda request: httpx.Response(200)))
+
+    if os.environ.get("REASONING_DEV_BOT") == "1":
+        # Only a served development backend runs the simulated bot, once it starts; building the app writes nothing.
+        serve = app.router.lifespan_context
+
+        @contextlib.asynccontextmanager
+        async def lifespan(application):
+            threading.Thread(target=simulated_bot, args=(state,), name="development-bot", daemon=True).start()
+            async with serve(application) as value:
+                yield value
+
+        app.router.lifespan_context = lifespan
 
     @app.middleware("http")
     async def development_header(request, call_next):

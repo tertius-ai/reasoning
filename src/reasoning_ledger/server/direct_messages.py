@@ -1,11 +1,12 @@
-"""One-to-one direct conversations between human members of one organization.
+"""One-to-one direct conversations between human members of one organization, or between a member and their own bot.
 
 Copyright Benjamin Antieau and Deven Manam. SPDX-License-Identifier: Apache-2.0
 
 Direct conversations live in their own tables, outside the project/channel/topic hierarchy, so no
 topic, bot, webhook, search, knowledge, export or inference path can read them. Every read and
 write here requires the caller to be one of the conversation's two participants; organization
-owners and administrators have no other access. Bots cannot be participants.
+owners and administrators have no other access. A bot takes part only in its owner's conversation with it:
+its replies come from a bot run that belongs to that conversation (bot_runtime.enqueue_direct), not to a topic.
 """
 
 import time
@@ -15,7 +16,7 @@ from typing import Annotated, Any
 from fastapi import Depends, FastAPI, Query, Response
 from pydantic import Field
 
-from .reaction_emoji_schema import EMOJIS
+from .reaction_emoji_schema import EMOJIS, MODEL_REPLY_EMOJIS
 from .request_input import RequestInput
 from .store import Store, StoreError, _id, _row
 
@@ -35,6 +36,15 @@ class DirectMessages:
             "WHERE m.organization_id=? AND m.user_id=? AND u.account_kind='human'",
             (organization_id, user_id),
         ).fetchone() is not None
+
+    @staticmethod
+    def _own_bot(db, organization_id: str, user_id: str, other_id: str):
+        """`other_id`'s bot row when it is the caller's own active bot in this organization."""
+        row = db.execute(
+            "SELECT * FROM bots WHERE id=? AND organization_id=? AND created_by=? AND revoked_at IS NULL AND expires_at>?",
+            (other_id, organization_id, user_id, int(time.time())),
+        ).fetchone()
+        return dict(row) if row is not None else None
 
     @staticmethod
     def _blocked(db, organization_id: str, user_id: str, other_id: str) -> bool:
@@ -62,6 +72,8 @@ class DirectMessages:
         return role, conversation
 
     def _deliverable(self, db, organization_id: str, user_id: str, other_id: str) -> None:
+        if self._own_bot(db, organization_id, user_id, other_id):
+            return
         if self._blocked(db, organization_id, user_id, other_id):
             raise StoreError(403, SENDER_BLOCKED)
         if self._blocked(db, organization_id, other_id, user_id) or not self._human_member(db, organization_id, other_id):
@@ -91,10 +103,12 @@ class DirectMessages:
             # A conversation appears to its recipient only once it holds a message.
             if conversation_id is None and not item["last_message_sequence"] and item["created_by"] != user_id:
                 continue
-            other = db.execute("SELECT id,name FROM users WHERE id=?", (item.pop("other_user_id"),)).fetchone()
+            other = db.execute("SELECT id,name,account_kind FROM users WHERE id=?", (item.pop("other_user_id"),)).fetchone()
             item.pop("created_by")
-            item["other_user"] = {"id": other["id"], "name": other["name"]}
-            item["other_member"] = self._human_member(db, organization_id, other["id"])
+            bot = other["account_kind"] == "bot"
+            item["other_user"] = {"id": other["id"], "name": other["name"], "kind": "bot" if bot else "human"}
+            item["other_member"] = (bool(self._own_bot(db, organization_id, user_id, other["id"])) if bot
+                                    else self._human_member(db, organization_id, other["id"]))
             item["blocked"] = self._blocked(db, organization_id, user_id, other["id"])
             item["muted"] = bool(item["muted"])
             result.append(item)
@@ -110,6 +124,11 @@ class DirectMessages:
         by_id = {message["id"]: message for message in messages}
         if not by_id:
             return messages
+        authors = {message["author_id"] for message in messages}
+        bots = {row[0] for row in db.execute("SELECT id FROM users WHERE account_kind='bot' AND id IN ("
+                                             + ",".join("?" for _ in authors) + ")", tuple(authors))}
+        for message in messages:
+            message["author_kind"] = "bot" if message["author_id"] in bots else "human"
         rows = db.execute(
             "SELECT r.message_id,r.user_id,r.emoji,u.name FROM direct_message_reactions r "
             "JOIN users u ON u.id=r.user_id WHERE r.message_id IN (" + ",".join("?" for _ in by_id) + ") ORDER BY r.user_id",
@@ -135,6 +154,9 @@ class DirectMessages:
             ).fetchone())
             if active is not None:
                 self._deliverable(db, organization_id, user_id, conversation["other_user_id"])
+                if active and emoji not in MODEL_REPLY_EMOJIS and db.execute(
+                        "SELECT 1 FROM users WHERE id=? AND account_kind='bot'", (message["author_id"],)).fetchone():
+                    raise StoreError(400, "react to a model reply with thumbs up, thumbs down or the upside-down smile")
                 if self.store._postgres:
                     self.store._postgres.lock(db.native, "direct-reaction:" + message_id)
                 old = db.execute("SELECT emoji FROM direct_message_reactions WHERE message_id=? AND user_id=?",
@@ -160,12 +182,12 @@ class DirectMessages:
             return self._summaries(db, user_id, organization_id, conversation_id)[0]
 
     def open(self, user_id: str, organization_id: str, other_id: str) -> tuple[dict[str, Any], bool]:
-        """Return the caller's conversation with another human member, creating it when allowed."""
+        """Return the caller's conversation with another human member or their own bot, creating it when allowed."""
         if other_id == user_id:
             raise StoreError(400, "choose another member")
         with self.store.transaction(write=True) as db:
             role = Store._require(db, user_id, organization_id)
-            if not self._human_member(db, organization_id, other_id):
+            if not self._human_member(db, organization_id, other_id) and not self._own_bot(db, organization_id, user_id, other_id):
                 raise StoreError(404, "not found")
             first, second = sorted((user_id, other_id))
             existing = db.execute(
@@ -198,7 +220,9 @@ class DirectMessages:
             result = self._reactions(db, user_id, [self._message(row) for row in rows])
             return list(reversed(result)) if before is not None else result
 
-    def post(self, user_id, organization_id, conversation_id, content: str, client_id: str, reply_to: str | None = None) -> dict[str, Any]:
+    def post(self, user_id, organization_id, conversation_id, content: str, client_id: str, reply_to: str | None = None,
+             bot_model: str | None = None, effort: str | None = None) -> dict[str, Any]:
+        """Post a message. In a conversation with your own bot it also queues the bot's answer, with that model and effort."""
         with self.store.transaction(write=True) as db:
             _, conversation = self.access(db, user_id, organization_id, conversation_id, write=True)
             existing = db.execute(
@@ -229,6 +253,13 @@ class DirectMessages:
             message = self._message(db.execute("SELECT * FROM direct_messages WHERE id=?", (message_id,)).fetchone())
             # The author has read everything up to their own message.
             self._read(db, user_id, organization_id, conversation_id, message["sequence"])
+            bot = self._own_bot(db, organization_id, user_id, conversation["other_user_id"])
+            if bot is not None:
+                from .bot_runtime import BotRuntime
+                from .bot_store import BotStore
+
+                BotRuntime(BotStore(self.store)).enqueue_direct(db, user_id, organization_id, conversation_id, bot, message,
+                                                                 bot_model, effort)
             return self._reactions(db, user_id, [message])[0]
 
     def edit(self, user_id, organization_id, conversation_id, message_id, content, revision) -> dict[str, Any]:
@@ -431,6 +462,9 @@ class DirectMessage(RequestInput):
     content: Annotated[str, Field(min_length=1, max_length=16000, pattern=r"\S")]
     client_id: Annotated[str, Field(min_length=1, max_length=128)]
     reply_to: Annotated[str | None, Field(pattern=r"^[a-f0-9]{32}$")] = None
+    # In a conversation with your own bot: which of its models answers, and with which effort.
+    bot_model: Annotated[str | None, Field(min_length=1, max_length=100)] = None
+    effort: Annotated[str | None, Field(min_length=1, max_length=16)] = None
 
 
 class DirectMessageEdit(RequestInput):
@@ -489,7 +523,14 @@ def install_routes(app: FastAPI, store: Store, authenticated: Callable) -> None:
 
     @app.post(conversation + "/messages", status_code=201)
     def post_message(organization_id: str, conversation_id: str, body: DirectMessage, user: User):
-        return direct.post(user, organization_id, conversation_id, body.content, body.client_id, body.reply_to)
+        return direct.post(user, organization_id, conversation_id, body.content, body.client_id, body.reply_to, body.bot_model, body.effort)
+
+    @app.get(conversation + "/bot-runs")
+    def bot_runs(organization_id: str, conversation_id: str, user: User):
+        from .bot_runtime import BotRuntime
+        from .bot_store import BotStore
+
+        return BotRuntime(BotStore(store)).direct_listing(user, organization_id, conversation_id)
 
     @app.get(conversation + "/messages/{message_id}/thread")
     def message_thread(organization_id: str, conversation_id: str, message_id: str, user: User):

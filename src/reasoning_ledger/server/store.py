@@ -474,13 +474,24 @@ class Store:
                 runtime = BotStore._runtime(db, bot["id"])
                 bot["engine"] = runtime["engine"] if runtime else None
                 bot["models"] = runtime["models"] if runtime else []
-                activity = db.execute("SELECT topic_id,phase,status,activity_json FROM bot_runs WHERE bot_id=? "
+                if bot["owner_user_id"] == user_id and runtime:
+                    # What the composer offers when you message your own bot: its effort levels per model and local tools.
+                    capabilities = db.execute("SELECT capabilities_json FROM bot_runtimes WHERE bot_id=?", (bot["id"],)).fetchone()[0]
+                    bot["efforts"] = json.loads(capabilities or "{}").get("efforts", {})
+                    bot["local_tools"] = runtime["local_tools"]
+                activity = db.execute("SELECT topic_id,direct_conversation_id,requested_by,phase,status,activity_json FROM bot_runs "
+                    "WHERE bot_id=? "
                     "AND status IN ('running','waiting_approval') AND updated_at>? ORDER BY updated_at DESC LIMIT 1",
                     (bot["id"], now - 120)).fetchone()
                 bot["activity"] = None
                 if activity:
                     try:
-                        self._topic_access(db, user_id, organization_id, activity["topic_id"])
+                        if activity["direct_conversation_id"]:
+                            # Work in a direct conversation shows only to the owner who asked for it.
+                            if activity["requested_by"] != user_id:
+                                raise StoreError(404, "not found")
+                        else:
+                            self._topic_access(db, user_id, organization_id, activity["topic_id"])
                         bot["activity"] = activity["status"] if activity["status"] == "waiting_approval" else activity["phase"]
                         entries = json.loads(activity["activity_json"])
                         if entries and activity["status"] != "waiting_approval":

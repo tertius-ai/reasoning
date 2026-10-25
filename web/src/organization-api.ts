@@ -13,7 +13,9 @@ export type Topic = { id: string; name: string; channel_id: string; kind: TopicK
 export type Presence = {
   humans: (Account & { role: Role; online: boolean; last_seen_at: number | null })[];
   bots: { id: string; name: string; owner_user_id: string; online: boolean; last_seen_at: number | null; activity?: string | null;
-    developer?: boolean; engine?: string | null; models?: string[] }[];
+    developer?: boolean; engine?: string | null; models?: string[];
+    /** Only for your own bots: effort levels per model, and whether the bot may run local tools. */
+    efforts?: Record<string, string[]>; local_tools?: boolean }[];
 };
 export type KnowledgeKind = "ledger" | "bibliography" | "journal";
 export type KnowledgeEntry = {
@@ -29,7 +31,7 @@ export type TopicState = {
 };
 /** The signed-in member's view of one of their direct conversations. */
 export type DirectConversation = {
-  id: string; created_at: number; other_user: { id: string; name: string }; other_member: boolean;
+  id: string; created_at: number; other_user: { id: string; name: string; kind?: "human" | "bot" }; other_member: boolean;
   muted: boolean; blocked: boolean; last_read_sequence: number; last_message_sequence: number;
   last_message_at: number | null; unread_count: number;
 };

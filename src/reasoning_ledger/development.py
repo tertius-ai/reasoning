@@ -144,6 +144,7 @@ def serve(root: Path, directory: Path | None, frontend_port: int, backend_port: 
         directory = development_state(directory)
         origin = f"http://127.0.0.1:{frontend_port}"
         environment = {**os.environ, "REASONING_DEV_STATE": str(directory), "REASONING_DEV_ORIGIN": origin,
+                       "REASONING_DEV_BOT": os.environ.get("REASONING_DEV_BOT", "1"),
                        "REASONING_DEV_BACKEND_PORT": str(backend_port), "REASONING_DEV_FRONTEND_PORT": str(frontend_port)}
         print(f"\nLocal development: {origin}/organization.html\n"
               f"Simulated inference only — no paid model calls. State: {directory}\n"

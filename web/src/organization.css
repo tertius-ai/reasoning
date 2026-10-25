@@ -426,6 +426,11 @@ a.org-reference:hover, a.org-reference:focus-visible { text-decoration: underlin
 .org-bot-hover-title strong { font-weight: 600; }
 .org-bot-hover-active { color: var(--amber); }
 .org-bot-row:hover > .org-bot-hover, .org-bot-row:focus-within > .org-bot-hover { display: flex; }
+/* Your own bot opens your conversation with it; its approval mark stays clickable above the row's button. */
+.org-presence .org-bot-own { cursor: pointer; }
+.org-presence .org-bot-own .org-bot-approval-indicator { position: relative; z-index: 1; }
+.org-presence .org-bot-own .org-unread { margin-left: auto; }
+.org-bot-hover-action { color: var(--blue); }
 /* The group says whether someone is online; the dot stays for assistive technology and shows only a working bot. */
 .org-presence-group .org-presence-row > i:not(.org-bot-thinking) { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
 .org-presence-row i[aria-label="offline"] { background: var(--muted); opacity: .35; }
