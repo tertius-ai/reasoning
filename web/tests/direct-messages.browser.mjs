@@ -202,19 +202,39 @@ test("a member messages a colleague from People, who finds, reads and replies, t
     await reply.locator(".org-jump").waitFor({ state: "detached" });
     await member.setViewportSize({ width: 1280, height: 860 });
 
+    // The title in the top bar opens the conversation's details: who can read it, Mute, the shared files and Block.
+    assert.equal(await reply.getByText("Only you and Owner can read this conversation", { exact: false }).count(), 0, "no header strip");
+    const title = member.getByRole("button", { name: /Direct messages · Owner/ });
+    await title.click();
+    const details = member.getByRole("dialog", { name: "Conversation details" });
+    await visible(details.getByText("Only you and Owner can read this conversation. Bots and models never take part."));
+    await details.getByRole("button", { name: "Files, 2", exact: true }).click();
+    const files = member.getByRole("dialog", { name: "Files with Owner" });
+    await visible(files.getByRole("link", { name: "notes.pdf", exact: true }));
+    await files.getByRole("button", { name: /^PDFs/ }).click();
+    assert.equal(await files.getByRole("link", { name: "board.png", exact: true }).count(), 0, "the PDF filter hides pictures");
+    await files.getByRole("button", { name: /^All/ }).click();
+    await files.getByRole("listitem").filter({ hasText: "board.png" }).getByRole("button", { name: "Show in chat", exact: true }).click();
+    await files.waitFor({ state: "detached" });
+    await visible(reply.locator(".org-message-linked").filter({ hasText: "The board after the seminar" }));
+
     // Muting hides the unread count; blocking stops the other person's messages with a neutral refusal.
-    await reply.getByRole("button", { name: "Mute", exact: true }).click();
+    await title.click();
+    await details.getByRole("switch", { name: "Mute" }).click();
     await visible(ownerRow.getByLabel("Muted"));
-    await reply.getByRole("button", { name: "Block", exact: true }).click();
-    await reply.getByRole("group", { name: "Block Owner?" }).getByRole("button", { name: "Block", exact: true }).click();
+    await visible(details.getByRole("switch", { name: "Mute", checked: true }));
+    await details.getByRole("button", { name: "Block Owner", exact: true }).click();
+    await details.getByRole("group", { name: "Block Owner?" }).getByRole("button", { name: "Block", exact: true }).click();
     await visible(reply.getByText("You blocked Owner."));
+    await member.keyboard.press("Escape");
     assert.equal(await member.getByLabel("Message", { exact: true }).isDisabled(), true);
     await owner.getByLabel("Message", { exact: true }).fill("Thanks!");
     await owner.keyboard.press("Enter");
     await visible(conversation.getByRole("alert").filter({ hasText: "direct messages to this person are unavailable" }));
     assert.equal(await conversation.getByText(/blocked/i).count(), 0, "the refusal does not reveal the block");
-    await reply.getByRole("button", { name: "Unblock", exact: true }).click();
-    await visible(reply.getByRole("button", { name: "Block", exact: true }));
+    await title.click();
+    await details.getByRole("button", { name: "Unblock Owner", exact: true }).click();
+    await visible(details.getByRole("button", { name: "Block Owner", exact: true }));
     assert.deepEqual(pageErrors, []);
     context.diagnostic("Verified People-initiated direct messages, unread navigation, reading, replying, files, muting and blocking.");
   } finally {

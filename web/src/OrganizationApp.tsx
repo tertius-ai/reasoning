@@ -53,6 +53,7 @@ const KnowledgeWorkspace = lazy(() => loadKnowledgeWorkspace().then(module => ({
 const KnowledgeBrowser = lazy(() => import("./KnowledgeBrowser").then(module => ({ default: module.KnowledgeBrowser })));
 import { FeedbackAdministration, FeedbackButton } from "./Feedback";
 import { NewestMessageButton, useUnseenMessages } from "./NewestMessage";
+import { DirectTitle, type MessageJump } from "./DirectDetails";
 const BotAdministration = lazy(() => import("./BotAdministration").then(module => ({ default: module.BotAdministration })));
 const ComputeAdministration = lazy(() => import("./ComputeAdministration").then(module => ({ default: module.ComputeAdministration })));
 const OrganizationModelBrowser = lazy(() => import("./OrganizationUsage").then(module => ({ default: module.OrganizationModelBrowser })));
@@ -1438,6 +1439,7 @@ export function OrganizationApp({ user, onAccount, onAuthenticated, onSignedOut,
   const [tool, setTool] = useState<"knowledge" | "prices" | "usage" | "bots" | null>(pairCode ? "bots" : null);
   const [knowledgeView, setKnowledgeView] = useState<KnowledgeView | null>(["ledger", "bibliography", "journal"].includes(workspace.view ?? "") ? workspace.view as KnowledgeView : null);
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
+  const [directJump, setDirectJump] = useState<MessageJump | null>(null);
   const [helpOpen, setHelpOpen] = useState(() => new URLSearchParams(window.location.search).get("view") === "help");
   useEffect(() => {
     const changed = () => { const query = new URLSearchParams(window.location.search), view = query.get("view");
@@ -1706,7 +1708,9 @@ export function OrganizationApp({ user, onAccount, onAuthenticated, onSignedOut,
       <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2" /><path d="M9 4v16" /></svg></button>
       <Brand /></div>
       {knowledgeView ? <h1 className="org-workspace-title">{knowledgeView === "journal" ? "Research blog editor" : knowledgeView === "ledger" ? "Ledger" : "Bibliography"}</h1>
-        : directConversation ? <h1 className="org-workspace-title">Direct messages · {directConversation.other_user.name}</h1> : organization && topic && <TopicBreadcrumb channel={channel} topic={topic}
+        : directConversation && organization ? <DirectTitle key={directConversation.id} organizationId={organization.id} conversation={directConversation} members={members}
+          userId={user.id} onChanged={preferenceRefresh} onAuthLost={authLost} onShowMessage={target => setDirectJump(previous => ({ ...target, nonce: (previous?.nonce ?? 0) + 1 }))} />
+        : organization && topic && <TopicBreadcrumb channel={channel} topic={topic}
         subscribed={hierarchy.topic_state.find((item) => item.topic_id === topic.id)?.subscribed !== false}
         onFollow={() => void request(topicPath(organization.id, topic.id) + "/subscription", { method: "PUT", body: {
           subscribed: hierarchy.topic_state.find((item) => item.topic_id === topic.id)?.subscribed === false,
@@ -1778,6 +1782,7 @@ export function OrganizationApp({ user, onAccount, onAuthenticated, onSignedOut,
             <p><ReferenceText text={mentionText(result.content, members)} /></p></button></li>)}</ol>}
         </section> : organization && directConversation ? <LazyView label="Direct messages"><DirectConversationView key={organization.id + "/" + directConversation.id}
           organizationId={organization.id} conversation={directConversation} user={user} members={members} canWrite={canCreate}
+          jump={directJump?.conversation === directConversation.id ? directJump : undefined}
           onChanged={preferenceRefresh} onAuthLost={authLost} /></LazyView> : organization && topic ? <Conversation key={organization.id + "/" + topic.id + "/" + selection?.anchor + "/" + (selection?.message ?? "")} organizationId={organization.id} topic={topic} members={members} user={user}
           focus={selection?.message} referenceTargets={referenceTargets}
           canWrite={canWriteSelected} canManage={["owner", "admin"].includes(organization.role)} draft={draft}
