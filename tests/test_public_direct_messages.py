@@ -431,3 +431,22 @@ def test_direct_uploads_are_checked_and_unfinished_ones_stay_with_their_uploader
     assert refused.status_code == 403 and refused.json()["detail"] == UNAVAILABLE
     refused = upload(people, direct["id"], PDF, "late.pdf", "application/pdf", sender="second")
     assert refused.status_code == 403 and refused.json()["detail"] == SENDER_BLOCKED
+
+
+def test_shared_files_list_only_files_a_message_shares(people):
+    direct = conversation(people)
+    media = people["root"] + f"/direct-conversations/{direct['id']}/media"
+    first = upload(people, direct["id"], PDF, "notes.pdf", "application/pdf").json()
+    unsent = upload(people, direct["id"], PNG, "draft.png", "image/png").json()
+    assert people["first"].get(media).json() == [], "an upload is listed only once a message shares it"
+    shared = post(people, direct["id"], first["markdown"] + "\n\nThe notes.", "notes").json()
+    picture = upload(people, direct["id"], PNG, "board.png", "image/png", sender="second").json()
+    answer = post(people, direct["id"], picture["markdown"], "board", sender="second").json()
+    for reader in ("first", "second"):
+        files = people[reader].get(media).json()
+        assert [file["name"] for file in files] == ["board.png", "notes.pdf"], "newest message first"
+        assert files[0]["message_id"] == answer["id"] and files[0]["shared_by"] == people["second_id"]
+        assert files[1]["message_sequence"] == shared["sequence"] and files[1]["url"] == first["url"]
+    assert unsent["id"] not in {file["id"] for file in people["second"].get(media).json()}
+    for outsider in (people["owner"], people["admin"]):
+        assert outsider.get(media).status_code == 404

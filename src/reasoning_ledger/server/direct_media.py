@@ -26,6 +26,7 @@ MAX_ORGANIZATION_BYTES = 256 * 1024 * 1024
 MAX_ORGANIZATION_FILES = 10000
 MAX_PENDING_FILES = 32
 BEGINS_PER_MINUTE = 30
+MAX_LISTED = 500
 
 
 def content_path(row):
@@ -134,6 +135,27 @@ class DirectMedia:
             db.execute("UPDATE direct_media SET complete=1 WHERE id=?", (identity,))
             return view({**row, "complete": 1})
 
+    def shared(self, user, org, conversation_id):
+        """Files a message of this conversation shares, newest first. An upload never sent is not listed, so the other
+        participant never learns of it; each file names the first message that shares it."""
+        with self.store.transaction() as db:
+            DirectMessages.access(db, user, org, conversation_id)
+            rows = db.execute(
+                "SELECT * FROM direct_media WHERE organization_id=? AND conversation_id=? AND complete=1 "
+                "ORDER BY created_at DESC,id LIMIT ?", (org, conversation_id, MAX_LISTED),
+            ).fetchall()
+            files = []
+            for row in rows:
+                # Content paths hold only hex identifiers, '/' and letters, so they are literal LIKE patterns.
+                message = db.execute(
+                    "SELECT id,sequence,author_id,created_at FROM direct_messages WHERE organization_id=? AND conversation_id=? "
+                    "AND content LIKE ? ORDER BY sequence LIMIT 1", (org, conversation_id, "%" + content_path(row) + "%"),
+                ).fetchone()
+                if message is not None:
+                    files.append({**view(row), "message_id": message["id"], "message_sequence": message["sequence"],
+                                  "shared_by": message["author_id"], "shared_at": message["created_at"]})
+            return sorted(files, key=lambda item: (-item["message_sequence"], item["name"]))
+
     def read(self, user, org, conversation_id, identity, sha256, *, binary=False):
         with self.store.transaction() as db:
             row, _ = self._row(db, user, org, conversation_id, identity)
@@ -157,6 +179,10 @@ def install_routes(app, store, authenticated):
     media = DirectMedia(store)
     User = Annotated[str, Depends(authenticated)]
     root = "/api/organizations/{organization_id}/direct-conversations/{conversation_id}/media"
+
+    @app.get(root)
+    def shared(organization_id: str, conversation_id: str, user: User):
+        return media.shared(user, organization_id, conversation_id)
 
     @app.post(root)
     def begin(organization_id: str, conversation_id: str, body: DirectMediaBegin, user: User):
