@@ -74,6 +74,27 @@ def test_reactions_toggle_idempotently_and_use_recorded_model(installation):
     assert client.put(path, json={"emoji": "up", "active": "yes"}).status_code == 422
 
 
+def test_model_replies_take_only_thumbs_and_the_upside_down_smile(installation):
+    _, state, client, owner, topics = prepare(installation)
+    org, topic, user = owner["organization_id"], topics[1]["id"], owner["user_id"]
+    run, message = response(state, owner, topic, "A model's answer")
+    message_path = f"/api/organizations/{org}/topics/{topic}/reactions/message/{message['id']}"
+    run_path = f"/api/organizations/{org}/topics/{topic}/reactions/run/{run['id']}"
+    for path in (message_path, run_path):
+        refused = client.put(path, json={"emoji": "heart", "active": True})
+        assert refused.status_code == 400 and "upside-down smile" in refused.text
+    for emoji in ("up", "down", "upside_down"):
+        assert client.put(message_path, json={"emoji": emoji, "active": True}).json()["mine"] == [emoji]
+    # A reaction left before the restriction stays readable and can still be removed.
+    with state.store.transaction(write=True) as db:
+        db.execute("UPDATE chat_reactions SET emoji='heart' WHERE organization_id=? AND user_id=?", (org, user))
+    assert client.get(run_path).json()["mine"] == ["heart"]
+    assert client.put(run_path, json={"emoji": "heart", "active": False}).json()["mine"] == []
+    # A person's message keeps every reaction.
+    human = state.store.messages(user, org, topic)[0]
+    assert ChatFeedback(state.store).set(user, org, topic, "message", human["id"], "heart", True)["mine"] == ["heart"]
+
+
 def test_reactor_identities_are_bounded_and_do_not_expose_contact_information(installation):
     _, store, client, owner = installation
     org, user = owner["organization_id"], owner["user_id"]

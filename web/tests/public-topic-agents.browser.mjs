@@ -297,7 +297,10 @@ test("ordinary beta conversation delegates, streams roles and integrates without
     await answer.getByLabel("Copy message", { exact: true }).click();
     assert.equal(await page.evaluate(() => window.__copiedMessage), "Retained comparison answer for fixture/new");
     await answer.getByLabel("Add reaction", { exact: true }).click();
-    await page.getByRole("menuitem", { name: "More reactions", exact: true }).click();
+    // A model's reply offers only thumbs up, thumbs down and the upside-down smile, without "+".
+    assert.deepEqual(await page.getByRole("menu", { name: "Add reaction", exact: true }).getByRole("menuitemcheckbox").evaluateAll(items => items.map(item => item.getAttribute("aria-label"))),
+      ["Thumbs up", "Thumbs down", "Upside-down smile"]);
+    assert.equal(await page.getByRole("menuitem", { name: "More reactions", exact: true }).count(), 0);
     await page.getByRole("menuitemcheckbox", { name: "Upside-down smile", exact: true }).click();
     await until(async () => (await call(root + "/model-feedback", undefined, "GET")).models
       .some(row => row.model === "fixture/new" && row.upside_down === 1));
@@ -324,7 +327,6 @@ test("ordinary beta conversation delegates, streams roles and integrates without
       await mobileAnswer.getByLabel("Add reaction", { exact: true }).tap();
       await mobile.route("**/reactions/message/*", route => route.request().method() === "PUT"
         ? route.fulfill({ status: 503, contentType: "application/json", body: JSON.stringify({ detail: "Fixture reaction refused" }) }) : route.continue());
-      await mobile.getByRole("menuitem", { name: "More reactions", exact: true }).tap();
       await mobile.getByRole("menuitemcheckbox", { name: "Upside-down smile", exact: true }).tap();
       assert.equal(await mobile.getByRole("menu", { name: "Add reaction", exact: true }).count(), 0, "refused reactions still close the picker immediately");
       await mobileAnswer.getByRole("alert").waitFor();

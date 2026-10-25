@@ -19,6 +19,8 @@ const labels: Record<keyof typeof emojis, string> = {
 };
 type Emoji = keyof typeof emojis;
 const ALL = Object.keys(emojis) as Emoji[], QUICK = ALL.slice(0, 6);
+/** A model's reply takes only these (reaction_emoji_schema.MODEL_REPLY_EMOJIS): useful, not useful, confidently wrong. */
+const MODEL_REPLY: readonly Emoji[] = ["up", "down", "upside_down"];
 export type Feedback = { counts: Partial<Record<Emoji, number>>; mine: Emoji[]; reactors?: Partial<Record<Emoji, { id: string; name: string }[]>> };
 const count = (feedback: Feedback, emoji: Emoji) => feedback.counts[emoji] ?? 0;
 /** Signal's reaction mark: a smiling face with a small plus. */
@@ -133,19 +135,23 @@ export function ReactionChips({ feedback, canWrite, busy, onToggle }: {
   })}{total > 1 && <span className="chat-reaction-total" aria-hidden="true">{total}</span>}</span>;
 }
 
-export function ReactionBar({ organizationId, topicId, targetKind, targetId, nodeId, canWrite = true, onAuthLost, batched = false, preloaded }: {
+export function ReactionBar({ organizationId, topicId, targetKind, targetId, nodeId, canWrite = true, onAuthLost, batched = false, preloaded, modelReply = false }: {
   organizationId: string; topicId: string; targetKind: "message" | "run" | "bot" | "node"; targetId: string; nodeId?: string;
   canWrite?: boolean; onAuthLost?: () => void;
+  /** A message written by a model or bot; runs, bot runs and workflow results are always model replies. */
+  modelReply?: boolean;
   /** The conversation reads this target's reactions in one request for its whole message page. */
   batched?: boolean; preloaded?: Feedback;
 }) {
   const path = topicPath(organizationId, topicId) + "/reactions/" + targetKind + "/" + encodeURIComponent(targetId)
     + (nodeId ? "?node_id=" + encodeURIComponent(nodeId) : "");
-  return <ReactionControl {...{ path, canWrite, onAuthLost, batched, preloaded }} />;
+  return <ReactionControl {...{ path, canWrite, onAuthLost, batched, preloaded }} modelReply={modelReply || targetKind !== "message"} />;
 }
 
-export function ReactionControl({ path, canWrite = true, onAuthLost, batched = false, preloaded }: {
+export function ReactionControl({ path, canWrite = true, onAuthLost, batched = false, preloaded, modelReply = false }: {
   path: string; canWrite?: boolean; onAuthLost?: () => void; batched?: boolean; preloaded?: Feedback;
+  /** A model's, bot's or workflow's reply: the picker offers only 👍 👎 🙃, without "+". */
+  modelReply?: boolean;
 }) {
   const [feedback, setFeedback] = useState<Feedback>(preloaded ?? { counts: {}, mine: [] });
   const [busy, setBusy] = useState(false), [error, setError] = useState(""), [more, setMore] = useState(false);
@@ -169,10 +175,10 @@ export function ReactionControl({ path, canWrite = true, onAuthLost, batched = f
     <ReactionChips {...{ feedback, canWrite, busy }} onToggle={toggle} />
     {canWrite && <ActionMenu label="Add reaction" className="chat-reaction-launcher" icon={<ReactionIcon />}
       menuClassName={"chat-reaction-menu" + (more ? " chat-reaction-menu-all" : "")} onClosed={() => setMore(false)}>
-      {close => <>{(more ? ALL : QUICK).map(emoji => <button key={emoji} type="button" role="menuitemcheckbox"
+      {close => <>{(modelReply ? MODEL_REPLY : more ? ALL : QUICK).map(emoji => <button key={emoji} type="button" role="menuitemcheckbox"
         aria-label={labels[emoji]} title={labels[emoji]} aria-checked={feedback.mine.includes(emoji)} disabled={busy}
         onClick={() => { close(); setMore(false); toggle(emoji); }}>{emojis[emoji]}</button>)}
-        {!more && <button type="button" role="menuitem" className="chat-reaction-more" aria-label="More reactions" title="More reactions"
+        {!more && !modelReply && <button type="button" role="menuitem" className="chat-reaction-more" aria-label="More reactions" title="More reactions"
           onClick={event => {
             const menu = event.currentTarget.parentElement; setMore(true);
             requestAnimationFrame(() => menu?.querySelector<HTMLButtonElement>("button:not(:disabled)")?.focus({ preventScroll: true }));
@@ -213,7 +219,7 @@ export function MessageActions({ organizationId, topicId, messageId, kind, canWr
   const hasMenu = Boolean(message) || (kind === "beta" && canWrite) || canEdit;
   return <div className={`chat-message-actions${hasMenu ? " chat-has-fork" : ""}${message ? " chat-has-copy" : ""}${onReply ? " chat-has-reply" : ""}${canWrite ? " chat-has-react" : ""}`}>
     <ReactionBar {...{ organizationId, topicId, canWrite, onAuthLost }} targetKind="message" targetId={messageId}
-      batched={batchedReactions} preloaded={reactions} />
+      batched={batchedReactions} preloaded={reactions} modelReply={message?.author_kind === "assistant" || message?.author_kind === "bot"} />
     {onReply && <button type="button" className="chat-action-launcher chat-reply-launcher" aria-label="Reply" title="Reply"
       onClick={event => { event.preventDefault(); onReply(); }}>↩</button>}
     {hasMenu && <ActionMenu label="Message actions" className="chat-fork-launcher" icon={<MessageMenuIcon />}>

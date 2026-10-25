@@ -7,6 +7,8 @@ Copyright Benjamin Antieau and Deven Manam. SPDX-License-Identifier: Apache-2.0
 
 EMOJIS = ("up", "down", "heart", "laugh", "surprised", "sad", "upside_down", "party", "thinking", "eyes", "check", "cross",
           "fire", "idea", "pray", "clap", "rocket", "hundred", "star", "question", "wave", "smile", "wink", "confused")
+# A model's, bot's or workflow's reply takes only these: useful, not useful, and confidently wrong.
+MODEL_REPLY_EMOJIS = ("up", "down", "upside_down")
 
 # PostgreSQL names an inline column check <table>_<column>_check and runs these as written; SQLite rebuilds the
 # table for each statement (schema_operations.sqlite_migration), keeping every row and index.

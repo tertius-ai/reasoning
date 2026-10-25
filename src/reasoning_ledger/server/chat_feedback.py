@@ -3,7 +3,7 @@
 import re
 import time
 
-from .reaction_emoji_schema import EMOJIS
+from .reaction_emoji_schema import EMOJIS, MODEL_REPLY_EMOJIS
 from .store import StoreError, _row
 
 MESSAGE_BATCH = 200
@@ -152,6 +152,10 @@ class ChatFeedback:
             key, model = self.target(db, user, org, topic, kind, target, node, write=True)
             if _row(db.execute("SELECT account_kind FROM users WHERE id=?", (user,)).fetchone())["account_kind"] != "human":
                 raise StoreError(403, "human feedback requires a human account")
+            # Only a person's own message resolves to a message key without a model; everything else is model output.
+            # Earlier reactions outside the three remain readable and removable.
+            if active and emoji not in MODEL_REPLY_EMOJIS and (model or not key.startswith("message:")):
+                raise StoreError(400, "react to a model reply with thumbs up, thumbs down or the upside-down smile")
             if active:
                 db.execute(
                     "INSERT INTO chat_reactions VALUES(?,?,?,?,?,?,?) ON CONFLICT(organization_id,target_key,user_id) "
