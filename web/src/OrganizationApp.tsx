@@ -264,7 +264,8 @@ export function AccountMenu({ user, organization, organizations, canCreateOrgani
   const act = (action: () => void) => { setOpen(false); action(); };
   return <details className="org-account-menu" ref={menu} open={open}>
     <summary role="button" aria-label="Account menu" aria-expanded={open} onClick={(event) => { event.preventDefault(); setOpen(!open); }}>
-      <span>{user.name}</span><span aria-hidden="true">⌃</span></summary>
+      <span>{user.name}</span><span aria-hidden="true"><svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4"
+        strokeLinecap="round" strokeLinejoin="round"><path d="m6 9 6 6 6-6" /></svg></span></summary>
     <div className="org-account-options">
       <header><strong>{user.name}</strong><small>{user.email}</small></header>
       <label className="org-org-selector"><span className="org-visually-hidden">Organization</span>

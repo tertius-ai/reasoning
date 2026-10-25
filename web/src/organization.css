@@ -141,12 +141,12 @@
 .org-sidebar > footer { display: flex; flex-direction: column; padding: 6px 10px 8px; gap: 5px; border-top: 1px solid var(--border); }
 .org-sidebar > footer button { text-align: left; }
 .org-sidebar > footer a { padding: 4px 10px; color: var(--muted); font-size: 11px; }
-/* Your name and ⌃ open the account menu; the bug button sits at the right edge of the same row. */
-.org-account-row { position: relative; display: flex; align-items: center; gap: 4px; }
-.org-account-row > .org-account-menu { flex: 1; min-width: 0; }
+/* The account button is only as wide as your name and its down chevron; the bug button sits at the right edge of the same row. */
+.org-account-row { position: relative; display: flex; align-items: center; justify-content: space-between; gap: 4px; }
+.org-account-row > .org-account-menu { flex: 0 1 auto; min-width: 0; }
 .org-account-menu { position: relative; }
 .org-account-menu > summary { display: flex; align-items: center; justify-content: flex-start; gap: 7px; min-height: 28px; padding: 5px 7px; border-radius: var(--radius-control); font-size: 12px; cursor: pointer; list-style: none; }
-.org-account-menu > summary > span:last-child { color: var(--muted); font-size: 11px; }
+.org-account-menu > summary > span:last-child { display: inline-grid; flex: none; place-items: center; color: var(--muted); }
 .org-account-menu > summary:hover, .org-account-menu[open] > summary { background: var(--surface-raised); }
 .org-account-menu > summary > span:first-child { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .org-account-options { position: absolute; bottom: calc(100% + 7px); left: 0; width: 250px; max-width: 82vw; overflow: hidden; border: 1px solid var(--border-strong); border-radius: var(--radius-card); background: var(--surface-raised); box-shadow: var(--shadow-overlay); z-index: 30; }
