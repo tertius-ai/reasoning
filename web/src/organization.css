@@ -320,6 +320,9 @@ a.org-reference:hover, a.org-reference:focus-visible { text-decoration: underlin
 .org-composer-box { border: 1px solid var(--border-strong); border-radius: var(--radius-composer); padding: 7px 7px 7px 8px; }
 .org-composer-row { display: flex; align-items: flex-end; gap: 8px; }
 .org-composer-row > .org-composer-input { flex: 1; min-width: 0; align-self: center; }
+/* Without a model picker the plus sits inside the box, on the left, level with the one button on the right. */
+.org-composer-row > .org-composer-attach { display: inline-flex; flex: none; }
+.org-composer-box:has(.org-composer-row > .org-composer-attach) { padding-left: 6px; }
 .org-composer textarea { position: relative; z-index: 1; display: block; background: transparent; border: none; resize: none; width: 100%; min-height: 24px; max-height: 240px; color: var(--foreground); padding: 0 4px; font: 14px/1.6 var(--font-sans); box-sizing: border-box; }
 /* Mentions, as in Signal: tinted text; mentions of the reader in amber. */
 .org-mention { padding: 0 2px; border-radius: 4px; background: color-mix(in srgb, var(--blue) 18%, transparent); color: color-mix(in srgb, var(--blue) 75%, var(--foreground)); }
@@ -342,9 +345,7 @@ a.org-reference:hover, a.org-reference:focus-visible { text-decoration: underlin
 /* Under the box: + on the left; the ⓘ, the model and the effort on the right, each 24px tall with 6px corners. */
 .org-composer-controls { display: flex; align-items: center; gap: 4px; min-height: 24px; padding: 5px 2px 0; }
 .org-composer-controls > span { display: inline-flex; }
-.org-app .org-upload-plus { display: inline-grid; place-items: center; width: 24px; height: 24px; min-height: 24px; padding: 0; border: 0; border-radius: 6px;
-  background: transparent; color: var(--muted); font-size: 18px; font-weight: 300; line-height: 1; }
-.org-app .org-upload-plus:hover { background: var(--surface-raised); color: var(--foreground); }
+.org-composer-controls > .org-composer-attach { margin-left: -2px; }
 .org-composer-model { display: flex; align-items: center; gap: 2px; margin-left: auto; min-width: 0; }
 .org-composer-model .org-model-menu { min-width: 0; max-width: 100%; }
 .org-composer-capabilities { display: inline-flex; }

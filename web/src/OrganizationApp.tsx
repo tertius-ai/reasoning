@@ -32,8 +32,9 @@ import { ResearchControls, RESEARCH_TOOLS, ResearchTool, TOOL_LABELS, goalComman
 import { TopicCopyButton, TopicSystemPrompt } from "./TopicDiagnostics";
 import { NavigationUsage, readNavigation, saveNavigation, Spend } from "./navigationState";
 import { ThemeToggle } from "./ThemeToggle";
-import { ReturnIcon, ShortcutsHelp, SlashCommandPalette, TOPIC_COMMANDS, TopicCommand, dispatchTopicCommand, useTopicCommand } from "./TopicCommands";
+import { ShortcutsHelp, SlashCommandPalette, TOPIC_COMMANDS, TopicCommand, dispatchTopicCommand, useTopicCommand } from "./TopicCommands";
 import { AttachmentButton, MarkdownMedia, MediaScope } from "./TopicMedia";
+import { ReturnIcon } from "./ComposerIcons";
 import { TexRequestDialog, texRequest } from "./TexRequestDialog";
 import { EmailVerification, VerifyEmailBanner } from "./EmailVerification";
 import { BatchInvitations, InvitationDeliveryProgress } from "./BatchInvitations";
@@ -1150,6 +1151,15 @@ function Conversation({ organizationId, topic, members, user, canWrite, canManag
           }} onAuthLost={onAuthLost} />
       </article>)}</div></> }));
   }, [messages, reactions, workflowRunKey, topic.kind, topic.id, mentionPeople, members, user.id, organizationId, canWrite, canReplyAgain, onAuthLost, focus, highlighted]);
+  // The plus sits under the box beside the model picker in AI chats, and inside the box on its left everywhere else.
+  const attach = <span ref={attachmentControl} className="org-composer-attach"><AttachmentButton organizationId={organizationId} topicId={topic.id}
+    disabled={!canWrite || sending || (topic.kind === "beta" && !!modelAttempt)} onError={cause => {
+      if (cause instanceof ApiError && cause.status === 401) onAuthLost();
+    }} onInsert={markdown => {
+      const previous = currentDraft.current, text = previous.text + (previous.text ? "\n\n" : "") + markdown;
+      updateDraft({ text, clientId: crypto.randomUUID(), attempted: false, mentions: previous.mentions });
+      requestAnimationFrame(() => textarea.current?.focus());
+    }} /></span>;
   return <MediaScope.Provider value={{ organizationId, topicId: topic.id, canWrite }}><section className="org-conversation" aria-label="Topic conversation">
     {texOpen && <TexRequestDialog bots={botModels} names={botNames} onClose={() => setTexOpen(false)} onPrepare={(source, bot) => {
       const label = `@${botNames[bot.bot_id] ?? bot.name}`;
@@ -1214,7 +1224,7 @@ function Conversation({ organizationId, topic, members, user, canWrite, canManag
       <div className="org-composer-box">
       {draft.replyTo && <ReplyBar original={replyOriginal} label={replyOriginal && authorLabel(replyOriginal, members)} onCancel={cancelReply} />}
       <label className="org-visually-hidden" htmlFor="org-message">Message</label>
-      <div className="org-composer-row"><div className="org-composer-input"><MentionMirror ref={mirror} text={draft.text} bindings={draft.mentions} self={user.id} />
+      <div className="org-composer-row">{topic.kind !== "beta" && attach}<div className="org-composer-input"><MentionMirror ref={mirror} text={draft.text} bindings={draft.mentions} self={user.id} />
       <textarea id="org-message" ref={textarea} onScroll={event => { if (mirror.current) mirror.current.scrollTop = event.currentTarget.scrollTop; }} placeholder={!canWrite ? "You have read-only access" : topic.kind === "beta" && modelAttempt
         ? modelAttempt.unconfirmed ? "Retry or dismiss the unconfirmed reply request before sending another message"
           : "Sending the reply request…" : topic.kind === "beta" && selectedModel
@@ -1262,23 +1272,16 @@ function Conversation({ organizationId, topic, members, user, canWrite, canManag
           {topic.kind !== "alpha" && <div className="org-composer-transport" ref={setComposerButton} />}
         </div></div>
       </div>
-      <div className="org-composer-controls">
-        <span ref={attachmentControl}><AttachmentButton organizationId={organizationId} topicId={topic.id} plus
-          disabled={!canWrite || sending || (topic.kind === "beta" && !!modelAttempt)} onError={cause => {
-            if (cause instanceof ApiError && cause.status === 401) onAuthLost();
-          }} onInsert={markdown => {
-            const previous = currentDraft.current, text = previous.text + (previous.text ? "\n\n" : "") + markdown;
-            updateDraft({ text, clientId: crypto.randomUUID(), attempted: false, mentions: previous.mentions });
-            requestAnimationFrame(() => textarea.current?.focus());
-          }} /></span>
-        {topic.kind !== "alpha" && <div className="org-composer-tools" ref={setComposerTools} />}
-        {topic.kind === "beta" && <div className="org-composer-model">
+      {topic.kind === "beta" && <div className="org-composer-controls">
+        {attach}
+        <div className="org-composer-tools" ref={setComposerTools} />
+        <div className="org-composer-model">
           <span className="org-composer-capabilities" ref={setCapabilitiesSlot} />
           <BetaModelMenu configuration={replyConfiguration} catalog={replyCatalog} selected={selectedModel} tools={topic.knowledge_tools}
             disabled={sending || !!modelAttempt} error={selectedModel.startsWith("bot/") ? "" : modelError} onSelect={setSelectedModel} />
           <EffortPicker model={selectedModel} catalog={replyCatalog} effort={effort} disabled={sending || !!modelAttempt} onSelect={chooseEffort} />
-        </div>}
-      </div>
+        </div>
+      </div>}
       {mentionMembers.length > 0 && <div id="org-mention-list" role="listbox" className="org-mention-menu" aria-label="Mention a member">
         {mentionMembers.map((member, index) => <button type="button" role="option" tabIndex={-1} id={"org-mention-" + (member.optionId ?? member.id)}
           aria-selected={index === mentionIndex % mentionMembers.length} key={member.optionId ?? member.id}

@@ -10626,3 +10626,9 @@ html[data-platform="darwin"] .sidebar-col.explorer-panel {
     max-width: 92%;
   }
 }
+
+/* Every upload button carries the same plus: alone beside a message box, or before a label. */
+.upload-labelled { display: inline-flex; align-items: center; gap: 5px; }
+.upload-labelled > svg { flex: none; }
+.chat-input-box .attach-btn { border: 0 !important; border-radius: 8px !important; }
+.chat-input-box .attach-btn:hover { background: var(--surface-raised) !important; }

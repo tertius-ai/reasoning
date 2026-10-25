@@ -88,10 +88,11 @@ test("progress follows its human message, retained failures stay inspectable, an
     const box = await page.locator(".org-composer-box").boundingBox(), button = await stop.boundingBox();
     assert.equal(button.width, 28); assert.equal(button.height, 28);
     assert.ok(button.x + button.width <= box.x + box.width && button.x + button.width >= box.x + box.width - 12, "the button sits at the box's right edge");
-    // Under the box, the +, the ⓘ and the model share the ⓘ square's 24px height on one line.
+    // Under the box: the 28px plus, then the ⓘ and the model at the ⓘ square's 24px height, all centred on one line.
     const row = await Promise.all(["Attach picture or PDF", "Model details", "Choose reply model"]
       .map(name => page.getByRole("button", { name, exact: true }).boundingBox()));
-    for (const item of row) { assert.equal(item.height, 24); assert.equal(item.y, row[0].y); assert.ok(item.y >= box.y + box.height); }
+    assert.deepEqual(row.map(item => item.height), [28, 24, 24]);
+    for (const item of row) { assert.equal(item.y + item.height / 2, row[0].y + row[0].height / 2); assert.ok(item.y >= box.y + box.height); }
     assert.ok(row[1].x < row[2].x, "the ⓘ is left of the model");
     // The paused request still resumes with /play.
     const message = page.getByLabel("Message", { exact: true });

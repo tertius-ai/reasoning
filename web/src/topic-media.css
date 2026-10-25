@@ -8,6 +8,8 @@
 .topic-pdf canvas { max-width: 100%; }
 .topic-pdf .artifact-pdf-page-number { position: absolute; bottom: .25rem; right: .4rem; }
 .topic-attachment-control { display: inline-flex; gap: .35rem; align-items: center; }
-.org-app .org-upload-play { width:32px; min-height:32px; padding:4px; border:0; background:transparent; color:var(--foreground); }
-.org-upload-play > span { display:inline-block; transform:rotate(-90deg); }
-.org-upload-play:disabled { color:var(--muted); }
+/* Every upload button is a plus: an 18px cross in a 28px button that turns grey under the pointer. */
+.org-app .org-upload-plus { display:inline-grid; place-items:center; flex:none; width:28px; height:28px; min-width:28px; min-height:28px; padding:0; border:0;
+  border-radius:8px; background:transparent; color:var(--muted); }
+.org-app .org-upload-plus:hover { background:var(--surface-raised); color:var(--foreground); }
+.org-app .org-upload-plus:disabled { opacity:1; background:transparent; color:var(--faint); }

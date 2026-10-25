@@ -1,6 +1,7 @@
 // Copyright Benjamin Antieau and Deven Manam. SPDX-License-Identifier: Apache-2.0
 import React, { lazy, Suspense, useEffect, useRef, useState } from "react";
 import { request } from "./organization-api";
+import { PlusIcon } from "./ComposerIcons";
 import { attachmentMime, uploadAttachment } from "./TopicMedia";
 import "./topic-media.css";
 
@@ -133,8 +134,8 @@ export function PendingFiles({ files, onRemove }: { files: PendingFile[]; onRemo
 /** The composer's attach control: several pictures and PDFs at once. */
 export function AttachFilesButton({ disabled, onFiles }: { disabled: boolean; onFiles: (files: File[]) => void }) {
   const input = useRef<HTMLInputElement>(null);
-  return <><button type="button" className="org-upload-play" disabled={disabled} aria-label="Attach pictures or PDFs"
-    title="Attach pictures or PDFs" onClick={() => input.current?.click()}><span aria-hidden="true">▶</span></button>
+  return <><button type="button" className="org-upload-plus" disabled={disabled} aria-label="Attach pictures or PDFs"
+    title="Attach pictures or PDFs" onClick={() => input.current?.click()}><PlusIcon /></button>
     <input hidden ref={input} type="file" multiple accept="image/png,image/jpeg,image/webp,application/pdf" onChange={event => {
       const files = Array.from(event.target.files ?? []); event.target.value = ""; if (files.length) onFiles(files);
     }} /></>;

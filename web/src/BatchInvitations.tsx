@@ -1,5 +1,6 @@
 // Copyright Benjamin Antieau and Deven Manam. SPDX-License-Identifier: Apache-2.0
 import React, { useRef, useState } from "react";
+import { PlusIcon } from "./ComposerIcons";
 import { errorMessage, invitationEmailLabel, organizationPath, request, type Invitation } from "./organization-api";
 
 export function invitationAddresses(text: string) {
@@ -90,7 +91,7 @@ export function BatchInvitations({ organizationId, owner, mailEnabled, workerRun
         <small>Paste addresses separated by lines, commas, or spaces, or upload a one-column email CSV. Up to 100 people.</small>
       </label>
       <div className="org-batch-upload">
-        <button type="button" disabled={locked} onClick={() => fileInput.current?.click()}>{readingFile ? "Reading CSV…" : "Upload CSV"}</button>
+        <button type="button" className="upload-labelled" disabled={locked} onClick={() => fileInput.current?.click()}><PlusIcon size={13} />{readingFile ? "Reading CSV…" : "Upload CSV"}</button>
         {filename && <small title={filename}>{filename}</small>}
         <input ref={fileInput} hidden type="file" accept=".csv,text/csv,text/plain" aria-label="Upload email CSV" disabled={locked}
           onChange={event => {

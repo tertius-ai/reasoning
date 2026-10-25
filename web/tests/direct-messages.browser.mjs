@@ -175,6 +175,11 @@ test("a member messages a colleague from People, who finds, reads and replies, t
     const sendFiles = conversation.getByRole("button", { name: "Send", exact: true });
     await sendFiles.waitFor({ state: "visible" });
     for (const stop = Date.now() + 15000; await sendFiles.isDisabled() && Date.now() < stop;) await new Promise((resolve) => setTimeout(resolve, 100));
+    // As in a human chat, the plus and the return button sit inside the box, at its left and right ends.
+    const composerBox = await conversation.locator(".org-composer-box").boundingBox(), sendBox = await sendFiles.boundingBox();
+    const plusBox = await conversation.getByRole("button", { name: "Attach pictures or PDFs", exact: true }).boundingBox();
+    assert.ok(plusBox.x - composerBox.x < 12 && composerBox.x + composerBox.width - sendBox.x - sendBox.width < 12, "plus left, return right, inside the box");
+    assert.equal(plusBox.y, sendBox.y); assert.equal(plusBox.height, 28);
     await sendFiles.click();
     await tray.waitFor({ state: "detached" });
     const delivered = reply.locator(".org-message").filter({ hasText: "The board after the seminar" });

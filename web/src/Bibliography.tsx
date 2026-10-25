@@ -1,4 +1,5 @@
 import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { PlusIcon } from "./ComposerIcons";
 import {
   BibliographyDraft,
   BibliographyConnection,
@@ -433,7 +434,7 @@ export function Bibliography({
                   <button className="confirm" disabled={!onDraftPrompt || !scopeProject} title={scopeProject ? "Draft a question in a research chat" : "Choose a project before asking"} onClick={() => scopeProject && onDraftPrompt?.(scopeProject.id, askDraft(selected))}>ask…</button>
                   <button disabled={!onDraftPrompt || !scopeProject} title={scopeProject ? `Draft a ${scope} summary request` : "Choose a project before summarizing"} onClick={() => scopeProject && onDraftPrompt?.(scopeProject.id, summaryDraft(selected, scope))}>summarize</button>
                   <button disabled={!onUseInWorkflow || !scopeProject} title={scopeProject ? "Create a project workflow seeded with this source" : "Choose a project before creating a workflow"} onClick={() => scopeProject && onUseInWorkflow?.(scopeProject.id, selected, workflowDraft(selected))}>use in workflow</button>
-                  <button disabled={busy} onClick={() => fileInputRef.current?.click()}>attach document</button>
+                  <button className="upload-labelled" disabled={busy} onClick={() => fileInputRef.current?.click()}><PlusIcon size={13} />attach document</button>
                   <input ref={fileInputRef} className="library-file-input" type="file" accept=".bib,.csv,.json,.jsonl,.md,.markdown,.pdf,.tex,.txt,image/*,text/*" onChange={(event) => uploadResource(event.target.files?.[0] ?? null)} />
                   {sourceUrl(selected) && <a className="bibliography-export" href={sourceUrl(selected)!} target="_blank" rel="noreferrer">open source</a>}
                   {scopeProject && (projectConnected ? <button disabled={busy} onClick={() => detach(selected, "project")}>remove from project</button> : <button disabled={busy} onClick={() => attach(selected, "project")}>add to project</button>)}

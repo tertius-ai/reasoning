@@ -3,6 +3,7 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 import { DirectConversation, directPath } from "./DirectMessages";
 import { normalizeMathDelimiters } from "./markdownMath";
 import { MessageMarkdown, alphaMessageGroups, resizeComposer } from "./OrganizationApp";
+import { ReturnIcon } from "./ComposerIcons";
 import { ApiError, Account, Member, Message, aborted, errorMessage, mentionMarkdown, mergeMessages, organizationPath, request } from "./organization-api";
 import { startPolling } from "./polling";
 import { LIVE_SAFETY_POLL_MS, subscribeEvents } from "./topicEvents";
@@ -287,22 +288,27 @@ export function DirectConversationView({ organizationId, conversation, user, mem
           <time dateTime={new Date(message.created_at * 1000).toISOString()}>{new Date(message.created_at * 1000).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" })}</time></header>
         {messageBody(message)}</article></div>} />}
     <form className="org-composer" onSubmit={event => void send(event)}>
+      <div className="org-composer-box">
       {draft.replyTo && <ReplyBar original={replyOriginal} label={replyOriginal && authorName(replyOriginal)} onCancel={cancelReply} />}
       <PendingFiles files={draft.files} onRemove={removeFile} />
       <label className="org-visually-hidden" htmlFor="org-direct-message">Message</label>
-      <textarea id="org-direct-message" ref={textarea} rows={1} maxLength={16000} value={draft.text} disabled={!writable || sending}
-        placeholder={writable ? `Message ${name}…` : "Sending is unavailable"} onChange={event => setDraft({ ...draft, text: event.target.value,
-          clientId: draft.attempted || !draft.clientId ? crypto.randomUUID() : draft.clientId, attempted: false })}
-        onKeyDown={event => {
-          if (event.nativeEvent.isComposing) return;
-          if (event.key === "Escape" && draft.replyTo) { cancelReply(); return; }
-          if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); void send(); }
-        }} />
-      <div className="org-composer-controls"><div className="org-composer-actions">
-        <AttachFilesButton disabled={!writable || sending || draft.files.length >= MAX_DIRECT_ATTACHMENTS} onFiles={attach} />
-        <button className="org-primary org-send-play" aria-label={sending ? "Sending…" : uploading ? "Waiting for uploads" : draft.attempted ? "Retry send" : "Send"}
-          title={uploading ? "Wait for the uploads to finish, or remove the failed ones" : draft.attempted ? "Retry send" : "Send message"} disabled={!canSend}>
-          <span aria-hidden="true">{sending ? "…" : "▶"}</span></button></div></div>
+      {/* As in a human chat: the plus inside the box on the left, the one return button on the right. */}
+      <div className="org-composer-row">
+        <span className="org-composer-attach"><AttachFilesButton disabled={!writable || sending || draft.files.length >= MAX_DIRECT_ATTACHMENTS} onFiles={attach} /></span>
+        <div className="org-composer-input"><textarea id="org-direct-message" ref={textarea} rows={1} maxLength={16000} value={draft.text} disabled={!writable || sending}
+          placeholder={writable ? `Message ${name}…` : "Sending is unavailable"} onChange={event => setDraft({ ...draft, text: event.target.value,
+            clientId: draft.attempted || !draft.clientId ? crypto.randomUUID() : draft.clientId, attempted: false })}
+          onKeyDown={event => {
+            if (event.nativeEvent.isComposing) return;
+            if (event.key === "Escape" && draft.replyTo) { cancelReply(); return; }
+            if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); void send(); }
+          }} /></div>
+        <div className="org-composer-send">
+          <button className="org-composer-button org-send-play" aria-label={sending ? "Sending…" : uploading ? "Waiting for uploads" : draft.attempted ? "Retry send" : "Send"}
+            title={uploading ? "Wait for the uploads to finish, or remove the failed ones" : draft.attempted ? "Retry send" : "Send message"} disabled={!canSend}>
+            {sending ? <span aria-hidden="true">…</span> : <ReturnIcon />}</button></div>
+      </div>
+      </div>
     </form>
   </section>;
 }

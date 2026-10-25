@@ -7,6 +7,7 @@ import {
   useRef,
   useState,
 } from "react";
+import { PlusIcon } from "./ComposerIcons";
 import {
   ClaimDetail,
   LedgerOverview,
@@ -212,10 +213,11 @@ function ReferenceSource({
         </a>
       )}
       <button
-        className="icon-btn"
+        className="icon-btn upload-labelled"
         disabled={busy}
         onClick={() => inputRef.current?.click()}
       >
+        <PlusIcon size={13} />
         {busy
           ? "uploading…"
           : reference.file
@@ -524,7 +526,8 @@ function ArtifactsTab({
           placeholder="Search artifacts…"
           aria-label="Search artifacts"
         />
-        <button className="icon-btn" onClick={() => fileRef.current?.click()}>
+        <button className="icon-btn upload-labelled" onClick={() => fileRef.current?.click()}>
+          <PlusIcon size={13} />
           upload
         </button>
         <input

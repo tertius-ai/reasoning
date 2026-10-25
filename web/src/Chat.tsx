@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { PlusIcon } from "./ComposerIcons";
 import {
   ChatExecutionOptions,
   ChatInfo,
@@ -1530,18 +1531,7 @@ function ChatInput({
           title="attach a file (stored in the project's artifacts)"
           onClick={() => fileRef.current?.click()}
         >
-          <svg
-            aria-hidden="true"
-            width="15"
-            height="15"
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            strokeWidth="2"
-            strokeLinecap="round"
-          >
-            <path d="M12 5.5v13M5.5 12h13" />
-          </svg>
+          <PlusIcon />
         </button>
         <input
           ref={fileRef}

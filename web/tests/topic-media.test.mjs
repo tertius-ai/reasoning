@@ -32,8 +32,8 @@ test("markdown blocks remote tracking and raw HTML, embeds only scoped uploaded 
 test("attachment control offers bounded supported media without native HTML uploads", () => {
   const html = renderToStaticMarkup(React.createElement(media.AttachmentButton, { organizationId: org, topicId: topic, onInsert() {} }));
   assert.match(html, /Attach picture or PDF/);
-  assert.match(html, /class="org-upload-play"/);
-  assert.match(html, /aria-hidden="true">▶/);
+  assert.match(html, /class="org-upload-plus"/); assert.match(html, /<svg width="18"/);
+  assert.match(html, /<path d="M12 4.5v15M4.5 12h15"/, "the drawn plus shared by every upload button");
   assert.match(html, /accept="image\/png,image\/jpeg,image\/webp,application\/pdf"/);
   assert.doesNotMatch(html, /image\/svg|iframe/);
 });
