@@ -99,6 +99,17 @@ test("a finished run stays visible only until its reply message is loaded", () =
   assert.equal(beta.awaitingReply({ ...run, status: "running" }, transcript([], 1)), false);
   assert.equal(beta.awaitingReply({ ...run, message_id: null }, transcript([], 1)), false);
   assert.equal(beta.awaitingReply({ ...run, context_through_sequence: 0 }, transcript([], 0)), false);
+});
+
+test("a stopped run gives way to its partial reply once the transcript shows it, unless its charge is unknown", () => {
+  const run = { status: "cancelled", message_id: "partial", context_through_sequence: 10, accounting_state: "settled" };
+  const transcript = (ids) => ({ ids: new Set(ids), from: 1 });
+  assert.equal(beta.replacedByReply(run, transcript(["m10", "partial"])), true, "one entry, not the card and the reply");
+  assert.equal(beta.replacedByReply(run, transcript(["m10"])), false, "the card stays until the reply is loaded");
+  assert.equal(beta.replacedByReply({ ...run, status: "failed" }, transcript(["partial"])), true);
+  assert.equal(beta.replacedByReply({ ...run, accounting_state: "uncertain" }, transcript(["partial"])), false, "reconciliation stays reachable");
+  assert.equal(beta.replacedByReply({ ...run, message_id: null }, transcript(["partial"])), false);
+  assert.equal(beta.replacedByReply({ ...run, status: "running" }, transcript(["partial"])), false);
   assert.equal(beta.awaitingReply(run, undefined), false);
 });
 

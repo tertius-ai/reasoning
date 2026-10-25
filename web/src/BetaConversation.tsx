@@ -123,6 +123,14 @@ export type LoadedTranscript = { ids: ReadonlySet<string>; from: number };
 /** A run that succeeded with a reply message the loaded transcript should contain but does not yet show. */
 export const awaitingReply = (run: ModelRun, transcript?: LoadedTranscript) => run.status === "succeeded" && !!run.message_id
   && !!transcript && !transcript.ids.has(run.message_id) && run.context_through_sequence > 0 && run.context_through_sequence >= transcript.from;
+/**
+ * A stopped or failed run gives way to its retained partial reply once the transcript shows it: the reply states that it
+ * is partial and why, with its usage. An unknown charge keeps the card, which carries reconciliation.
+ */
+export const replacedByReply = (run: ModelRun, transcript?: LoadedTranscript) => !["queued", "running", "succeeded"].includes(run.status)
+  && !!run.message_id && !!transcript?.ids.has(run.message_id) && run.accounting_state !== "uncertain";
+/** A queued request whose agent conversation is paused: it does not start until someone resumes it. */
+export const pausedRun = (run: ModelRun) => run.status === "queued" && run.agent?.thread_status === "paused";
 
 export function BetaConversation({ organizationId, topicId, userId, canWrite, canManage, online, attempt, onAttempt, onAuthLost, onActivity, toolbarTarget, hidePlay, wake, transcript, onReplyPending }: {
   organizationId: string; topicId: string; userId: string; canWrite: boolean; canManage: boolean;
@@ -136,7 +144,7 @@ export function BetaConversation({ organizationId, topicId, userId, canWrite, ca
   /** Called while a finished run's reply message is not yet in the transcript, so messages refresh at once. */
   onReplyPending?: () => void;
 }) {
-  const [runs, setRuns] = useState<ModelRun[]>([]);
+  const [runs, setRuns] = useState<ModelRun[]>([]), [reconciled, setReconciled] = useState<ReadonlySet<string>>(new Set());
   const [threads, setThreads] = useState<{ root_run: string; status: string; reason?: string | null; requested_by: string; tasks: number }[]>([]);
   const [goal, setGoal] = useState<{ id: string; status: string; owned_by: string } | null>(null);
   const [busy, setBusy] = useState(false);
@@ -254,16 +262,19 @@ export function BetaConversation({ organizationId, topicId, userId, canWrite, ca
   useTopicCommand(topicId, command => { if (command === "play" || command === "stop") void transport(command === "play"); });
   // A finished run gives way to its reply message only once the transcript shows it, so the output never disappears.
   const visibleRuns = runs.filter((run) => (run.context_through_sequence !== 0 || run.agent)
-    && (run.status !== "succeeded" || !run.message_id || awaitingReply(run, transcript)));
+    && (run.status !== "succeeded" || !run.message_id || awaitingReply(run, transcript))
+    // A cost reconciled in this page stays on its card: the already loaded reply shows it only after a reload.
+    && (!replacedByReply(run, transcript) || reconciled.has(run.id)));
   const replyPending = runs.some(run => awaitingReply(run, transcript));
   useEffect(() => { if (replyPending) onReplyPending?.(); }, [replyPending, onReplyPending]);
   useEffect(() => { onActivity(visibleRuns.map(run => ({ id: "run:" + run.id, created_at: run.created_at ?? run.started_at ?? 0,
     after_sequence: run.context_through_sequence || undefined,
     body: <BetaRunCard key={run.id} root={root} organizationId={organizationId} topicId={topicId} run={run} canManage={canManage}
-      awaiting={awaitingReply(run, transcript)}
+      canControl={canManage || run.requested_by === userId} awaiting={awaitingReply(run, transcript)}
+      onReconciled={() => setReconciled(current => new Set(current).add(run.id))}
       canReact={canWrite}
       onUpdated={() => setRefresh(value => value + 1)} onAuthLost={onAuthLost} />,
-  }))); }, [runs, transcript, busy, online, connected, canWrite, canManage, userId, root, organizationId, topicId, onActivity, onAuthLost]);
+  }))); }, [runs, reconciled, transcript, busy, online, connected, canWrite, canManage, userId, root, organizationId, topicId, onActivity, onAuthLost]);
   return <section className="org-beta" aria-label="Agent activity">
     {toolbarTarget && createPortal(<TransportControls {...{ canPlay, canStop, hidePlay }}
       playTitle={attempt?.unconfirmed ? "Retry the unconfirmed reply request"
@@ -283,27 +294,43 @@ export function BetaConversation({ organizationId, topicId, userId, canWrite, ca
 
 export function RunProgress({ run }: { run: ModelRun }) {
   if (!["queued", "running"].includes(run.status)) return null;
+  if (pausedRun(run)) return <p role="status" className="org-paused" aria-label="Research progress">Paused · starts only when resumed</p>;
   const event = run.activity?.at(-1);
   const progress = event?.summary ?? (event ? event.phase === "round" ? `Round ${event.round} · working`
     : event.tool ? `${event.phase === "tool_completed" ? "Used" : "Using"} ${event.tool.replaceAll("_", " ")}` : event.phase.replaceAll("_", " ") : "Working");
   return <p role="status" className="org-working" aria-label="Research progress">{progress}…</p>;
 }
 
-function BetaRunCard({ root, organizationId, topicId, run, canManage, canReact, awaiting, onUpdated, onAuthLost }: {
+function BetaRunCard({ root, organizationId, topicId, run, canManage, canControl, canReact, awaiting, onReconciled, onUpdated, onAuthLost }: {
   root: string; organizationId: string; topicId: string; run: ModelRun; canManage: boolean; canReact: boolean;
+  /** The requester or an administrator may resume or cancel a paused request. */
+  canControl: boolean; onReconciled: () => void;
   /** Finished, with its reply message not yet shown: the output stays expanded until the message replaces it. */
   awaiting?: boolean;
   onUpdated: () => void; onAuthLost: () => void;
 }) {
   const active = ["queued", "running"].includes(run.status), expanded = active || !!awaiting, [open, setOpen] = useState(expanded);
+  const paused = pausedRun(run), [busy, setBusy] = useState(false), [error, setError] = useState("");
   useEffect(() => { if (!expanded) setOpen(false); }, [expanded]);
+  const control = (path: string, body: object) => {
+    setBusy(true); setError("");
+    void request(path, { method: "POST", body }).then(onUpdated).catch(cause => {
+      if (cause instanceof ApiError && cause.status === 401) onAuthLost(); else setError(errorMessage(cause));
+    }).finally(() => setBusy(false));
+  };
   return <details data-run-id={run.id} data-status={run.status} className="org-model-run org-run-compact" open={open}
     onToggle={event => { if (event.target === event.currentTarget) setOpen(event.currentTarget.open); }}>
-    <summary><strong>{run.agent ? `${run.agent.role.replaceAll("_", " ")} · ` : ""}{run.model}</strong><span role="status">{run.cancel_requested && active ? "Cancelling…" : run.answer_state?.status === "waiting" ? "Waiting · answer incomplete" : run.status}</span>
+    <summary><strong>{run.agent ? `${run.agent.role.replaceAll("_", " ")} · ` : ""}{run.model}</strong><span role="status">{run.cancel_requested && active ? "Cancelling…" : paused ? "paused" : run.answer_state?.status === "waiting" ? "Waiting · answer incomplete" : run.status}</span>
       {!active && run.error_code && <span title={run.diagnostics?.message}>{run.diagnostics?.http_status ? `HTTP ${run.diagnostics.http_status}` : run.error_code.replaceAll("_", " ")}</span>}
       {run.actual_microusd != null && <small>{usd(run.actual_microusd)}</small>}
     </summary>
     <RunProgress run={run} />
+    {paused && <div className="org-run-paused">
+      <p className="org-help">This request was paused before it started, for example by Stop (■). {run.reserved_microusd ? `Its internal hold of ${usd(run.reserved_microusd)} is not a charge.` : ""}</p>
+      {canControl && <span><button type="button" disabled={busy} onClick={() => control(topicPath(organizationId, topicId) + "/agents/" + run.agent!.root_run + "/control", { status: "active" })}>Resume</button>
+        <button type="button" disabled={busy} onClick={() => control(root + "/inference-runs/" + run.id + "/cancel", {})}>Cancel request</button></span>}
+      {error && <p role="alert" className="org-error">{error}</p>}
+    </div>}
     {run.answer_state?.checkpoint && <details aria-label="Latest answer checkpoint" open={!run.output_text}>
       <summary>Latest answer checkpoint</summary><p>{run.answer_state.checkpoint.summary}</p>
       {run.answer_state.checkpoint.remaining && <p>Remaining: {run.answer_state.checkpoint.remaining}</p>}
@@ -315,7 +342,7 @@ function BetaRunCard({ root, organizationId, topicId, run, canManage, canReact, 
     {run.error_code && <p className="org-error">{run.diagnostics?.message ?? runFailureMessage(run.error_code)}</p>}
     {run.diagnostics && <p className="org-help">{run.diagnostics.action}</p>}
     {run.accounting_state === "uncertain" && <p className="org-help">Charge unknown; internal hold {usd(run.reserved_microusd)} is not a charge. Check provider activity.</p>}
-    {active && run.cost_progress && <small className="org-help">Confirmed {usd(run.cost_progress.confirmed_microusd)} · next-call estimate {usd(run.cost_progress.next_call_estimate_microusd)}</small>}
-    {run.accounting_state === "uncertain" && canManage && <ReconcileCost root={root} run={run} onUpdated={onUpdated} onAuthLost={onAuthLost} />}
+    {active && !paused && run.cost_progress && <small className="org-help">Confirmed {usd(run.cost_progress.confirmed_microusd)} · next-call estimate {usd(run.cost_progress.next_call_estimate_microusd)}</small>}
+    {run.accounting_state === "uncertain" && canManage && <ReconcileCost root={root} run={run} onUpdated={() => { onReconciled(); onUpdated(); }} onAuthLost={onAuthLost} />}
   </details>;
 }

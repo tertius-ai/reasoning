@@ -88,6 +88,12 @@ _TOOL_ARGUMENT_REPAIR_PROMPT = (
     "artifact content at or below 10000 Unicode characters, preserve the essential "
     "evidence, conclusion, and terminal marker, and omit nonessential exposition."
 )
+_TOOL_ARGUMENT_FORMAT_PROMPT = (
+    "Your previous {tool_name} tool call was rejected because its arguments were not "
+    "a valid JSON object, and no tool ran. Retry the required action now with one "
+    "tool call whose arguments are a single valid JSON object matching the tool's "
+    "parameters: no text outside the object, no trailing commas, and every string quoted."
+)
 
 _OUTPUT_BUDGET_COMPLETION_PROMPT = (
     "This run has used {used} of its cumulative {limit} output-token budget. "
@@ -1008,22 +1014,27 @@ class ReasoningNativeExecutor:
                     if argument_error is None and not isinstance(arguments, dict):
                         argument_error = f"decoded arguments have type {type(arguments).__name__}, expected object"
                     if argument_error is not None:
-                        if _hit_output_limit(termination) and not tool_argument_repair_attempted:
+                        # One repair: a truncated call is retried shorter; a malformed one is asked again for valid JSON.
+                        if not tool_argument_repair_attempted:
                             tool_argument_repair_attempted = True
+                            truncated = _hit_output_limit(termination)
                             messages.pop()
                             messages.append(
                                 {
                                     "role": "user",
-                                    "content": _TOOL_ARGUMENT_REPAIR_PROMPT.format(tool_name=name),
+                                    "content": (_TOOL_ARGUMENT_REPAIR_PROMPT if truncated else _TOOL_ARGUMENT_FORMAT_PROMPT).format(
+                                        tool_name=name
+                                    ),
                                 }
                             )
                             payload = dict(payload)
                             payload["messages"] = messages
-                            payload["max_tokens"] = min(
-                                int(request.spec.budget.max_output_tokens or _COMPLETION_REPAIR_MAX_TOKENS),
-                                _COMPLETION_REPAIR_MAX_TOKENS,
-                            )
-                            payload["reasoning"] = {"effort": "low"}
+                            if truncated:
+                                payload["max_tokens"] = min(
+                                    int(request.spec.budget.max_output_tokens or _COMPLETION_REPAIR_MAX_TOKENS),
+                                    _COMPLETION_REPAIR_MAX_TOKENS,
+                                )
+                                payload["reasoning"] = {"effort": "low"}
                             break
                         raise OpenRouterError(f"model returned invalid arguments for {name}: {argument_error}")
                     parsed_tool_calls.append((call, name, arguments))

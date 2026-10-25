@@ -12,4 +12,9 @@
 .org-working::before { content:""; display:inline-block; width:.4rem; height:.4rem; border-radius:50%; background:var(--teal); animation:org-working-pulse 1.5s ease-in-out infinite; }
 .org-round-activity li:last-child::before { content:""; display:inline-block; width:.4rem; height:.4rem; margin-right:.4rem; border-radius:50%; background:var(--teal); animation:org-working-pulse 1.5s ease-in-out infinite; }
 @keyframes org-working-pulse { 50% { opacity:.3; } }
+/* A paused request is not working: a still amber dot, and its Resume and Cancel actions below. */
+.org-paused { display:flex; align-items:center; gap:.4rem; color:var(--amber); font-size:.75rem; }
+.org-paused::before { content:""; display:inline-block; width:.4rem; height:.4rem; border-radius:50%; background:var(--amber); }
+.org-run-paused { display:flex; flex-direction:column; gap:.4rem; margin:.3rem 0; }
+.org-run-paused > span { display:flex; gap:.4rem; }
 @media (prefers-reduced-motion:reduce) { .org-working::before,.org-round-activity li:last-child::before { animation:none; } }

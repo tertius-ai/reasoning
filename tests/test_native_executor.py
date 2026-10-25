@@ -2572,6 +2572,61 @@ def test_native_executor_repairs_invalid_tool_arguments_once(bad_arguments):
     )
 
 
+def _tool_call_response(arguments, finish_reason="tool_calls"):
+    return {
+        "choices": [
+            {
+                "finish_reason": finish_reason,
+                "message": {
+                    "role": "assistant",
+                    "content": "",
+                    "tool_calls": [
+                        {"id": "lookup", "type": "function", "function": {"name": "source_search", "arguments": arguments}}
+                    ],
+                },
+            }
+        ],
+        "usage": {"completion_tokens": 40},
+    }
+
+
+def test_native_executor_asks_once_for_valid_json_when_arguments_are_malformed_without_truncation():
+    tool = PreparedTool(name="source_search", description="Search sources", input_schema={"type": "object", "properties": {}})
+    client = FakeClient(
+        [
+            _tool_call_response('{"query": "standard conjectures surveys",}'),
+            _tool_call_response(json.dumps({"query": "standard conjectures surveys"})),
+            {"choices": [{"finish_reason": "stop", "message": {"role": "assistant", "content": "Kleiman 1994."}}],
+             "usage": {"completion_tokens": 5}},
+        ]
+    )
+    calls = []
+    result = ReasoningNativeExecutor(client, tool_invoker=lambda name, arguments: calls.append(arguments) or {"items": []}).execute(
+        _request(tools=(tool,))
+    )
+
+    assert result.status == "completed" and result.output_text == "Kleiman 1994."
+    assert result.metadata["tool_argument_repair_attempted"] is True
+    assert calls == [{"query": "standard conjectures surveys"}], "the malformed call never ran"
+    repair = client.payloads[1][0]
+    assert "not a valid JSON object" in repair["messages"][-1]["content"]
+    assert "output limit" not in repair["messages"][-1]["content"]
+    assert repair.get("max_tokens") == client.payloads[0][0].get("max_tokens"), "an untruncated call keeps its budget"
+    assert repair.get("reasoning") == client.payloads[0][0].get("reasoning")
+
+
+def test_native_executor_fails_when_the_repaired_tool_call_is_malformed_again():
+    tool = PreparedTool(name="source_search", description="Search sources", input_schema={"type": "object", "properties": {}})
+    client = FakeClient([_tool_call_response('{"query": '), _tool_call_response("[1, 2]")])
+    calls = []
+    result = ReasoningNativeExecutor(client, tool_invoker=lambda name, arguments: calls.append(arguments)).execute(
+        _request(tools=(tool,))
+    )
+
+    assert result.status == "failed" and result.error.startswith("model returned invalid arguments for source_search")
+    assert len(client.payloads) == 2 and calls == []
+
+
 def test_native_executor_fails_when_recovery_is_also_empty():
     client = FakeClient(
         [
