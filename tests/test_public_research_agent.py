@@ -118,9 +118,10 @@ class ResearchFixture:
             ]
             content = json.dumps(memory) if self.mode != "bad_compaction" else "unsupported ungrounded summary"
             delta, finish = {"content": content}, "stop"
-        elif self.turn == 0 and self.mode in {
-            "tools", "uncertain", "goal", "credit_later", "invalid_arguments", "gemini_nullable", "checkpoint_credit"
-        }:
+        elif (self.turn == 0 and self.mode in {
+            "tools", "uncertain", "goal", "credit_later", "invalid_arguments", "invalid_arguments_once", "gemini_nullable",
+            "checkpoint_credit"
+        }) or (self.mode == "invalid_arguments" and self.turn == 1):
             self.turn += 1
             name = "goal_checkpoint" if self.mode == "goal" else "topic_history"
             arguments = (
@@ -138,7 +139,9 @@ class ResearchFixture:
                         "index": 0,
                         "id": "call-exact-source",
                         "type": "function",
-                        "function": {"name": name, "arguments": "{" + KEY if self.mode == "invalid_arguments" else json.dumps(arguments)},
+                        "function": {
+                            "name": name, "arguments": "{" + KEY if self.mode.startswith("invalid_arguments") else json.dumps(arguments),
+                        },
                     }
                 ]
             }
@@ -550,17 +553,30 @@ def test_pre_generation_credit_refusal_releases_only_rejected_call(installation,
         assert result["message_id"] and "Segment 1." in result["output_text"]
 
 
-@pytest.mark.parametrize("mode,code", [("empty", "agent_empty_response"), ("invalid_arguments", "agent_invalid_tool_arguments")])
-def test_native_failures_keep_known_usage_and_safe_specific_reason(installation, mode, code):
+@pytest.mark.parametrize(
+    "mode,code,calls", [("empty", "agent_empty_response", 1), ("invalid_arguments", "agent_invalid_tool_arguments", 2)]
+)
+def test_native_failures_keep_known_usage_and_safe_specific_reason(installation, mode, code, calls):
     state, owner, _, run = turn(installation, ResearchFixture(mode))
     result = state.run(owner["user_id"], owner["organization_id"], run["id"])
     assert result["status"] == "failed" and result["error_code"] == code
-    assert result["accounting_state"] == "settled" and result["actual_microusd"] == 8
+    # Malformed tool arguments are asked for again once before the run fails.
+    assert result["accounting_state"] == "settled" and result["actual_microusd"] == 8 * calls
     assert KEY not in json.dumps(result)
     with state.store.transaction() as db:
         assert db.execute("SELECT count(*) FROM research_tool_receipts WHERE run_id=?", (run["id"],)).fetchone()[0] == 0
         events = [json.loads(row[0]) for row in db.execute("SELECT event_json FROM llm_events WHERE run_id=?", (run["id"],))]
         assert any(event.get("phase") == "failed" and event["reason"] == code for event in events)
+
+
+def test_malformed_tool_arguments_are_repaired_once(installation):
+    fixture = ResearchFixture("invalid_arguments_once")
+    state, owner, _, run = turn(installation, fixture)
+    result = state.run(owner["user_id"], owner["organization_id"], run["id"])
+    assert result["status"] == "succeeded" and result["message_id"] and len(fixture.requests) == 2
+    assert "not a valid JSON object" in fixture.requests[1]["messages"][-1]["content"]
+    with state.store.transaction() as db:
+        assert db.execute("SELECT count(*) FROM research_tool_receipts WHERE run_id=?", (run["id"],)).fetchone()[0] == 0
 
 
 @pytest.mark.parametrize("mode,status,calls", [("long", "succeeded", 6)])
