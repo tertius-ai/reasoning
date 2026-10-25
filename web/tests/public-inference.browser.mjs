@@ -153,9 +153,9 @@ for (const loss of ["network", "gateway-timeout"]) test(`shared beta responses s
     }
     const [owner, member, reviewer] = pages;
     await member.locator(".org-topic-menu > summary").click();
-    await member.getByRole("group", { name: "Topic details", exact: true }).getByRole("button", { name: "System prompt", exact: true }).click();
+    await member.getByRole("group", { name: "Topic details", exact: true }).getByRole("button", { name: /^System prompt\b/ }).click();
     await visible(member.getByText(/Ordinary questions and discussion need a useful reply/));
-    await member.getByLabel("Close research panel", { exact: true }).click();
+    await member.getByRole("button", { name: "Close dialog", exact: true }).click();
     let pollingOffline = true;
     const pollRoutes = ["**/topics/*/inference-runs", "**/topics/*/goal"];
     const interruptPolling = async (route) => {

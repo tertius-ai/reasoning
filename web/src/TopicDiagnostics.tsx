@@ -10,8 +10,8 @@ export function serializeTopicJSON(data: unknown): string {
     : JSON.stringify(value))).join(",\n") + "\n}";
 }
 
-export function TopicSystemPrompt({ organizationId, topicId, onAuthLost, onInspect, revision = 0, open = false }: {
-  organizationId: string; topicId: string; onAuthLost: () => void; onInspect?: () => void; revision?: number; open?: boolean;
+export function TopicSystemPrompt({ organizationId, topicId, onAuthLost, onInspect, revision = 0, bare = false }: {
+  organizationId: string; topicId: string; onAuthLost: () => void; onInspect?: () => void; revision?: number; bare?: boolean;
 }) {
   const [instructions, setInstructions] = useState<{ system_prompt: string; prompt_version: string } | null>(null);
   const [loading, setLoading] = useState(true);
@@ -27,7 +27,7 @@ export function TopicSystemPrompt({ organizationId, topicId, onAuthLost, onInspe
       }).finally(() => { if (!controller.signal.aborted) setLoading(false); });
     return () => controller.abort();
   }, [organizationId, topicId, onAuthLost, revision]);
-  return <ResearchInstructions instructions={instructions} loading={loading} error={error} onInspect={onInspect} open={open} />;
+  return <ResearchInstructions instructions={instructions} loading={loading} error={error} onInspect={onInspect} bare={bare} />;
 }
 
 export function CopyIcon({ copied = false }: { copied?: boolean }) {

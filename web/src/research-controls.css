@@ -45,3 +45,10 @@
 .org-research-account textarea, .org-research-account input, .org-research-account select { width: 100%; min-width: 0; }
 .org-research-account fieldset { min-width: 0; }
 .org-research-account button { margin: .25rem .5rem .25rem 0; }
+
+/* System prompt, Research account and Project files open from the topic's details card in a centered dialog. */
+.org-dialog.org-topic-item-dialog { width: min(760px, calc(100vw - 32px)); font-size: 13px; }
+.org-topic-item-dialog .org-mathematics { padding: 0; }
+.org-topic-item-dialog .org-mathematics > header h3, .org-topic-item-dialog .org-research-account > header h3 { display: none; }
+.org-topic-item-dialog .org-system-message { margin: 0; padding: 0; border: 0; background: none; }
+.org-topic-item-dialog .org-system-message > small { color: var(--muted); font: 11px var(--font-mono); }

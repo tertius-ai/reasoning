@@ -101,13 +101,15 @@ test("ordinary beta conversation delegates, streams roles and integrates without
     assert.equal(await page.getByRole("link", { name: /^Work in/ }).count(), 0);
     const details = page.getByRole("group", { name: "Topic details", exact: true });
     await page.locator(".org-topic-menu > summary").click();
-    await details.getByRole("button", { name: "System prompt", exact: true }).click();
+    await details.getByRole("button", { name: /^System prompt\b/ }).click();
     await page.getByText(/Ordinary questions and discussion need a useful reply/).waitFor();
+    await page.getByRole("button", { name: "Close dialog", exact: true }).click();
     const linked = await call(root + "/mathematics", { name: "ledger_claim", topic_id: topic.id,
       arguments: { statement: "A supporting tensor hypothesis." }, client_id: "browser-source-001" });
     // A sustained question has immutable candidates; ordinary discussion still sends normally.
     await page.locator(".org-topic-menu > summary").click();
-    await details.getByRole("button", { name: "Research account", exact: true }).click();
+    // The card row shows that the topic has no account yet.
+    await details.getByRole("button", { name: "Research account none", exact: true }).click();
     const account = page.getByRole("region", { name: "Research account", exact: true });
     await account.getByRole("button", { name: "Start research account", exact: true }).click();
     await account.getByLabel("Exact question", { exact: true }).fill("Does $H$ imply $C$?");
@@ -122,6 +124,9 @@ test("ordinary beta conversation delegates, streams roles and integrates without
     await account.getByRole("button", { name: "Prepare independent critique", exact: true }).click();
     assert.match(await page.getByLabel("Message", { exact: true }).inputValue(), /account version 1 using account_request_review/);
     assert.equal(calls.length, 0, "preparing a critique must not start a paid request");
+    // Preparing closes the dialog to show the message box; the card now shows the saved version.
+    await page.locator(".org-topic-menu > summary").click();
+    await details.getByRole("button", { name: "Research account v1", exact: true }).click();
     await page.setViewportSize({ width: 390, height: 844 });
     assert.equal(await account.evaluate(element => element.scrollWidth <= element.clientWidth + 1), true, "the account fits a phone viewport");
     await page.setViewportSize({ width: 1280, height: 720 });
@@ -150,7 +155,7 @@ test("ordinary beta conversation delegates, streams roles and integrates without
     const accountLink = await account.getByRole("link", { name: "Link to this account version", exact: true }).getAttribute("href");
     await page.goto(url + accountLink);
     await page.getByRole("region", { name: "Research account", exact: true }).getByText("Version 1 · earlier candidate · review cycle 1", { exact: true }).waitFor();
-    await page.getByRole("button", { name: "Close research panel", exact: true }).click();
+    await page.getByRole("button", { name: "Close dialog", exact: true }).click();
     await page.getByLabel("Message", { exact: true }).fill("Please compare two approaches and consult a librarian and critic.");
     await page.getByRole("button", { name: /^(Send|Send message)$/, exact: true }).click();
     await page.locator("article.org-message").getByText("Integrated comparison: the evidence is provisional.", { exact: true }).waitFor();

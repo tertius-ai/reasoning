@@ -83,6 +83,12 @@ test("system prompt is a chat-styled disclosure and JSON copy is a quiet header 
     instructions: { system_prompt: "Exact **instruction** text <script>unsafe</script>", prompt_version: "test-version" }, loading: false,
   }));
   assert.match(html, /<summary>System prompt<\/summary>/);
+  const bare = renderToStaticMarkup(React.createElement(controls.ResearchInstructions, {
+    instructions: { system_prompt: "Exact text", prompt_version: "topic-agents-v9" }, loading: false, bare: true,
+  }));
+  assert.doesNotMatch(bare, /<summary>/, "the System prompt dialog supplies the heading");
+  assert.equal(controls.shortVersion("topic-agents-v9"), "v9");
+  assert.equal(controls.shortVersion("custom"), "custom");
   assert.match(html, /org-message org-system-message/);
   assert.match(html, /Exact <strong>instruction<\/strong> text/); assert.doesNotMatch(html, /<script>/);
   const copy = renderToStaticMarkup(React.createElement(TopicCopyButton, { organizationId: "org", topicId: "topic", onAuthLost: () => {} }));

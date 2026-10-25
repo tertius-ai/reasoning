@@ -69,8 +69,9 @@
 .org-topic-card-actions { padding-top: 6px; border-top: 1px solid var(--border); }
 .org-app .org-topic-card-row { display: flex; align-items: center; gap: 8px; width: 100%; min-height: 28px; padding: 4px 6px; border: 0; border-radius: 7px;
   background: transparent; color: var(--foreground); font-size: 12px; text-align: left; }
-.org-app .org-topic-card-row:hover, .org-app .org-topic-card-row[aria-pressed="true"] { background: var(--surface); }
+.org-app .org-topic-card-row:hover { background: var(--surface); }
 .org-topic-card-row > span:nth-child(2) { flex: 1; }
+.org-topic-card-count { color: var(--muted); font: 11px var(--font-mono); }
 .org-topic-switch { position: relative; flex: none; width: 26px; height: 15px; border: 1px solid var(--border-strong); border-radius: 999px; background: var(--surface); }
 .org-topic-switch::after { content: ""; position: absolute; left: 2px; top: 2px; width: 9px; height: 9px; border-radius: 50%; background: var(--muted); }
 [aria-checked="true"] > .org-topic-switch { background: color-mix(in srgb, var(--teal) 45%, var(--surface)); }

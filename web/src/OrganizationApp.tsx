@@ -1190,7 +1190,7 @@ function Conversation({ organizationId, topic, members, user, canWrite, canManag
     {error && <p role="alert" className="org-error org-conversation-error">{error}</p>}
     {topic.kind === "beta" && <ResearchControls organizationId={organizationId} topicId={topic.id} userId={user.id}
       toolbarTarget={composerTools} menuTarget={menuTarget}
-      instructions={<TopicSystemPrompt organizationId={organizationId} topicId={topic.id} onAuthLost={onAuthLost} revision={promptRevision} open />} catalog={replyCatalog} allowedModels={replyConfiguration?.allowed_models ?? []}
+      instructions={<TopicSystemPrompt organizationId={organizationId} topicId={topic.id} onAuthLost={onAuthLost} revision={promptRevision} bare />} catalog={replyCatalog} allowedModels={replyConfiguration?.allowed_models ?? []}
       selectedEffort={selectedEffort}
       selectedModel={selectedModel} canWrite={canWrite} canManage={canManage} online={online} goalDraft={goalDraft}
       onGoalDraftDone={() => setGoalDraft(null)} onGoalStarted={(objective) => {

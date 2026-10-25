@@ -55,18 +55,31 @@ export function mergeToolReceipts(state: ToolReceiptState, incoming: ToolReceipt
 export type GoalAttempt = { client_id: string; objective: string; acceptance: string[]; model: string; budget_microusd: number; effort?: string | null;
   max_turns: number; max_tool_calls: number; duration_seconds: number };
 
-export function ResearchInstructions({ instructions, loading, error = "", onInspect, open = false }: {
+export function ResearchInstructions({ instructions, loading, error = "", onInspect, bare = false }: {
   instructions: { system_prompt: string; prompt_version: string } | null; loading: boolean;
-  error?: string; onInspect?: () => void; open?: boolean;
+  error?: string; onInspect?: () => void;
+  /** Shown without its own "System prompt" disclosure, as in the topic's System prompt dialog. */
+  bare?: boolean;
 }) {
+  const body = <>{instructions ? <><small>{instructions.prompt_version}</small><ResearchMarkdown>{instructions.system_prompt}</ResearchMarkdown></>
+    : <p>{loading ? "Loading system prompt…" : "System prompt unavailable. Try refreshing."}</p>}
+    {error && <p role="alert" className="org-error">{error}</p>}</>;
   return <article className="org-message org-system-message" aria-label="Research instructions">
-    <details open={open || undefined} onToggle={(event) => { if (event.currentTarget.open) onInspect?.(); }}><summary>System prompt</summary>
-      {instructions ? <><small>{instructions.prompt_version}</small><ResearchMarkdown>{instructions.system_prompt}</ResearchMarkdown></>
-        : <p>{loading ? "Loading system prompt…" : "System prompt unavailable. Try refreshing."}</p>}
-      {error && <p role="alert" className="org-error">{error}</p>}
-    </details>
+    {bare ? body : <details onToggle={(event) => { if (event.currentTarget.open) onInspect?.(); }}><summary>System prompt</summary>{body}</details>}
   </article>;
 }
+
+/** A topic item opened from the topic's details card, in a centered dialog like a direct conversation's files. */
+function TopicItemDialog({ title, onClose, children }: { title: string; onClose: () => void; children: React.ReactNode }) {
+  const dialog = useRef<HTMLDialogElement>(null);
+  useEffect(() => { dialog.current?.showModal(); }, []);
+  return <dialog ref={dialog} className="org-dialog org-topic-item-dialog" aria-label={title} onCancel={event => { event.preventDefault(); onClose(); }}>
+    <header><h2>{title}</h2><button type="button" aria-label="Close dialog" onClick={onClose}>×</button></header>{children}
+  </dialog>;
+}
+
+/** The short value a topic details row shows: "v9" for "topic-agents-v9". */
+export function shortVersion(version: string): string { return version.match(/(v\d+)$/)?.[1] ?? version; }
 
 /** The selected model's capabilities above the message box: one line, and on request each capability as on or off. */
 export function ModelCapabilities({ model, summary, date, readers }: {
@@ -91,6 +104,9 @@ export function ModelCapabilities({ model, summary, date, readers }: {
     </dl>}
   </div>;
 }
+
+/** The items of the topic details card; each opens in a dialog rather than a research pane. */
+const TOPIC_ITEMS: readonly string[] = ["instructions", "account", "files"];
 
 export function goalCommand(text: string): string | null {
   const match = text.trim().match(/^\/goal(?:\s+([\s\S]*))?$/); return match ? (match[1] ?? "").trim() : null;
@@ -129,7 +145,7 @@ export function ResearchControls({ organizationId, topicId, userId, selectedMode
   toolbarTarget: HTMLElement | null;
   /** The topic details card in the top bar: System prompt, Research account and Project files appear there. */
   menuTarget?: HTMLElement | null;
-  /** The topic's system prompt, shown as a research pane. */
+  /** The topic's system prompt, shown in the System prompt dialog. */
   instructions?: React.ReactNode;
   selectedEffort?: string | null;
   onSettingsChanged?: () => void;
@@ -161,6 +177,9 @@ export function ResearchControls({ organizationId, topicId, userId, selectedMode
   const [attempt, setAttempt] = useState<GoalAttempt | null>(null); const [clientId, setClientId] = useState(() => crypto.randomUUID());
   const [busy, setBusy] = useState(false); const [error, setError] = useState(""); const [refresh, setRefresh] = useState(0);
   const [pollError, setPollError] = useState("");
+  // What the topic details card shows beside each item: the prompt version, the account version and the number of files.
+  const [counts, setCounts] = useState<{ instructions?: string; account?: string; files?: string }>({});
+  const [countsRevision, setCountsRevision] = useState(0);
   const [receipt, setReceipt] = useState<unknown>(null);
   const receiptKey = userId + " " + topicPath(organizationId, topicId);
   const toolState = useRef<ToolReceiptState & { key: string }>({ key: receiptKey, ...readToolReceipts(receiptKey) ?? { receipts: [], cursor: 0 } });
@@ -233,6 +252,21 @@ export function ResearchControls({ organizationId, topicId, userId, selectedMode
     }).catch((cause) => { if (!aborted(cause)) fail(cause); });
     return () => { controller.abort(); clearTimeout(timer); };
   }, [root, receiptKey, refresh, reviewScope, onAuthLost]);
+  useEffect(() => {
+    if (!menuTarget) return;
+    const controller = new AbortController(), signal = controller.signal;
+    const quietly = (cause: unknown) => { if (!aborted(cause) && cause instanceof ApiError && cause.status === 401) onAuthLost(); };
+    void request<{ prompt_version: string }>(root + "/research-instructions", { signal })
+      .then(value => setCounts(current => ({ ...current, instructions: shortVersion(value.prompt_version) }))).catch(quietly);
+    void request<{ revision: number } | null>(root + "/research-account?summary=true", { signal })
+      .then(value => setCounts(current => ({ ...current, account: value ? `v${value.revision}` : "none" }))).catch(quietly);
+    void Promise.all([request<unknown[]>(root + "/research-files", { signal }), request<unknown[]>(root + "/media", { signal })])
+      .then(([files, media]) => setCounts(current => ({ ...current, files: String(files.length + media.length) }))).catch(quietly);
+    return () => controller.abort();
+  }, [root, !!menuTarget, countsRevision, onAuthLost]);
+  const closeItem = () => { setPane(null); setCountsRevision(value => value + 1); };
+  // A prepared critique goes to the message box, so the account dialog closes to show it.
+  const prepareReview = onPrepareReview && ((text: string) => { closeItem(); onPrepareReview(text); });
   const loadContext = async () => {
     setPane(pane === "context" ? null : "context"); setError("");
     try { setContext(await request<Context>(root + "/research-context")); } catch (cause) { fail(cause); }
@@ -265,23 +299,25 @@ export function ResearchControls({ organizationId, topicId, userId, selectedMode
   return <div className="org-research-controls">
     {menuTarget && createPortal(<>
       {([["instructions", "≡", "System prompt"], ["account", "◇", "Research account"], ["files", "▤", "Project files"]] as const).map(([value, mark, label]) =>
-        <button key={value} type="button" className="org-topic-card-row" aria-pressed={pane === value} onClick={() => {
-          // Choosing a panel closes the details card, as choosing a menu item does.
+        <button key={value} type="button" className="org-topic-card-row" onClick={() => {
+          // Choosing an item closes the details card, as choosing a menu item does, and opens the item's dialog.
           menuTarget.closest("details")?.removeAttribute("open");
-          setPane(current => current === value ? null : value);
-        }}><span className="org-account-mark" aria-hidden="true">{mark}</span>{label}</button>)}
+          setPane(value);
+        }}><span className="org-account-mark" aria-hidden="true">{mark}</span><span>{label}</span>
+          <small className="org-topic-card-count">{counts[value]}<span aria-hidden="true"> ›</span></small></button>)}
     </>, menuTarget)}
     <ModelCapabilities model={selectedModel} summary={summary} date={sourceConfig?.current_date} readers={detailed ? readers : null} />
     {toolbarTarget && createPortal(<div className="org-research-toolbar" aria-label="Research actions">
     {(goal?.status === "active" || activeTool) && <span role="status" className="org-goal-live"><i />{activeTool ? `Using ${activeTool.name.replaceAll("_", " ")}` : "Working toward your goal"}</span>}
   </div>, toolbarTarget)}
-    {pane && <button type="button" aria-label="Close research panel" onClick={() => setPane(null)}>×</button>}
-    {pane === "instructions" && <div className="org-research-pane">{instructions}</div>}
-    {pane === "account" && <div className="org-research-pane"><ResearchAccount key={root} root={root} canWrite={canWrite} online={online}
+    {pane && !TOPIC_ITEMS.includes(pane) && <button type="button" aria-label="Close research panel" onClick={() => setPane(null)}>×</button>}
+    {pane === "instructions" && <TopicItemDialog title="System prompt" onClose={closeItem}>{instructions}</TopicItemDialog>}
+    {pane === "account" && <TopicItemDialog title="Research account" onClose={closeItem}><ResearchAccount key={root} root={root} canWrite={canWrite} online={online}
       reviewAvailable={!!onPrepareReview && !selectedModel.startsWith("bot/") && !!catalogModel(catalog, selectedModel)?.supports_tools && enabled.includes("knowledge") && reviewEnabled}
-      onPrepareReview={onPrepareReview} onAuthLost={onAuthLost} /></div>}
+      onPrepareReview={prepareReview} onAuthLost={onAuthLost} /></TopicItemDialog>}
     {pane === "ledger" && <div className="org-research-pane"><MathematicsBrowser organizationId={organizationId} topicId={topicId} canWrite={canWrite} onAuthLost={onAuthLost} /></div>}
-    {pane === "files" && <div className="org-research-pane"><ResearchFiles organizationId={organizationId} topicId={topicId} canWrite={canWrite} onAuthLost={onAuthLost} /></div>}
+    {pane === "files" && <TopicItemDialog title="Project files" onClose={closeItem}>
+      <ResearchFiles organizationId={organizationId} topicId={topicId} canWrite={canWrite} onAuthLost={onAuthLost} /></TopicItemDialog>}
     {pane === "reviews" && <div className="org-research-pane"><label>Review scope<select value={reviewScope} onChange={event => setReviewScope(event.target.value)}><option value="">Topic default</option><option value="working_set">Account working set</option><option value="topic">This topic</option><option value="project">Authorized project</option></select></label>{reviews.map((review) => <details key={review.id}>
       <summary>{review.subject?.account_revision ? `Account v${review.subject.account_revision}${review.stale ? " · earlier candidate" : ""} · ` : ""}{review.result?.verdict?.verdict ?? review.status} · {review.reviewer_model}</summary>
       <p className="org-help">{review.subject?.account_revision ? "Exact-version account critique; ledger status is unchanged. " : ""}Fresh-context {review.result?.distinct_model === false ? "same-model " : ""}LLM review, not formal certification.</p>

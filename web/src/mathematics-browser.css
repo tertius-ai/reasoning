@@ -35,3 +35,20 @@
 .org-mathematics-list[hidden] { display: none; }
 .org-ledger-inspector { max-height: 75vh; overflow: auto; padding: .5rem; }
 @media (max-width: 650px) { .org-mathematics-layout { grid-template-columns: 1fr; } .org-mathematics-list { max-height: 35vh; } .org-mathematics > header { display: block; } }
+
+/* Project files: kind filters with counts, a name search and one row per file, as in a direct conversation's files. */
+.org-mathematics.org-project-files > header { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem; margin-bottom: .75rem; }
+.org-project-files > header > .org-topic-actions { margin-left: auto; }
+.org-project-files .org-topic-actions { display: flex; flex-wrap: wrap; align-items: center; gap: .4rem .9rem; }
+.org-project-files article > .org-topic-actions { margin: .5rem 0; }
+.org-project-files-kinds { display: flex; flex-wrap: wrap; gap: 4px; margin: 0 0 8px; }
+.org-project-files-kinds button span { color: var(--muted); font-size: 11px; }
+.org-mathematics.org-project-files > input[type="search"] { margin-bottom: 8px; }
+.org-project-files-list { margin: 0; padding: 0; list-style: none; max-height: 55vh; overflow: auto; }
+.org-project-files-list li { display: flex; align-items: center; gap: 10px; padding: 7px 2px; border-top: 1px solid var(--border); }
+.org-project-files-list img, .org-project-file-icon { flex: none; width: 28px; height: 34px; border-radius: 4px; object-fit: cover; }
+.org-project-file-icon { display: grid; place-items: center; background: color-mix(in srgb, var(--blue) 18%, var(--surface)); color: var(--blue); font: 600 9px/1 var(--font-mono); }
+.org-project-file-icon[data-kind="pdf"] { background: color-mix(in srgb, var(--red, #e5484d) 22%, var(--surface)); color: var(--red, #e5484d); }
+.org-project-files-text { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.org-project-files-text strong { overflow: hidden; font-weight: 500; text-overflow: ellipsis; white-space: nowrap; }
+.org-project-files-text small { color: var(--muted); font-size: 11px; }
