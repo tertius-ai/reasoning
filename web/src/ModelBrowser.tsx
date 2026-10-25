@@ -204,24 +204,54 @@ function ModelCard({ children, details }: { children: React.ReactNode; details: 
   </details>;
 }
 
+/** A reasoning effort as people read it: "" is the model's default. */
+export function effortLabel(effort: string): string {
+  return effort === "" ? "Default effort" : effort === "xhigh" ? "Extra high" : effort[0].toUpperCase() + effort.slice(1);
+}
+
 export function EffortMenu({ model, catalog, effort, disabled, onBack, onSelect }: {
   model: string; catalog: OrganizationPrices | null; effort: string; disabled: boolean;
-  onBack: () => void; onSelect: (effort: string) => void;
+  /** Returns to the model list; without it the menu stands alone. */
+  onBack?: () => void; onSelect: (effort: string) => void;
 }) {
   const group = useRef<HTMLDivElement>(null), name = useId();
   const choices = ["", ...availableEfforts(catalog, model)];
   const selected = choices.includes(effort) ? effort : "";
   useEffect(() => { group.current?.querySelector<HTMLInputElement>("input:checked")?.focus(); }, [model]);
   return <section className="org-effort-options" aria-label="Choose reasoning effort">
-    <header><button type="button" aria-label="Back to models" onClick={onBack}>←</button>
+    <header>{onBack && <button type="button" aria-label="Back to models" onClick={onBack}>←</button>}
       <strong title={modelSelectionLabel(catalog, model)}>{modelSelectionLabel(catalog, model)}</strong></header>
     <div ref={group} role="radiogroup" aria-label="Reasoning effort">{choices.map(choice => <label key={choice}>
       <input type="radio" name={name} value={choice} checked={choice === selected} disabled={disabled}
         aria-label={choice || "Default effort"} onChange={() => onSelect(choice)}
         onClick={() => { if (choice === selected) onSelect(choice); }} />
-      <span>{choice === "" ? "Default effort" : choice === "xhigh" ? "Extra high" : choice[0].toUpperCase() + choice.slice(1)}</span>
+      <span>{effortLabel(choice)}</span>
     </label>)}</div>
   </section>;
+}
+
+/** The reasoning effort under the message box, at its far right; a model without effort levels shows none. */
+export function EffortPicker({ model, catalog, effort, disabled = false, onSelect }: {
+  model: string; catalog: OrganizationPrices | null; effort: string; disabled?: boolean; onSelect: (effort: string) => void;
+}) {
+  const [open, setOpen] = useState(false), box = useRef<HTMLDivElement>(null), button = useRef<HTMLButtonElement>(null);
+  const choices = availableEfforts(catalog, model);
+  useEffect(() => {
+    if (!open) return;
+    const close = (event: PointerEvent) => { if (!box.current?.contains(event.target as Node)) setOpen(false); };
+    const escape = (event: KeyboardEvent) => { if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); setOpen(false); button.current?.focus(); } };
+    document.addEventListener("pointerdown", close); document.addEventListener("keydown", escape);
+    return () => { document.removeEventListener("pointerdown", close); document.removeEventListener("keydown", escape); };
+  }, [open]);
+  useEffect(() => { if (disabled) setOpen(false); }, [disabled]);
+  if (!choices.length) return null;
+  const label = effortLabel(choices.includes(effort) ? effort : "");
+  return <div className="org-effort-picker" ref={box}>
+    <button type="button" ref={button} className="org-composer-pick org-composer-effort" aria-label={`Reasoning effort: ${label}`} title="Reasoning effort"
+      aria-haspopup="true" aria-expanded={open} disabled={disabled} onClick={() => setOpen(value => !value)}>{label.replace(" effort", "")}</button>
+    {open && <div className="org-model-options org-effort-popover"><EffortMenu model={model} catalog={catalog} effort={effort} disabled={disabled}
+      onSelect={choice => { onSelect(choice); setOpen(false); button.current?.focus(); }} /></div>}
+  </div>;
 }
 
 export function ModelPicker({ label, models, catalog, value, onChange, disabled = false, children, emptyLabel = "Choose model", effort = "", onEffortChange }: {

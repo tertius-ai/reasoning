@@ -316,7 +316,10 @@ a.org-reference:hover, a.org-reference:focus-visible { text-decoration: underlin
 .org-jump-count { position: absolute; top: -6px; right: -6px; min-width: 16px; height: 16px; padding: 0 4px; box-sizing: border-box; border-radius: var(--radius-pill);
   background: var(--teal); color: var(--background); font: 600 10px/16px var(--font-mono); text-align: center; }
 .org-reconnecting { font-size: 11px; color: var(--amber); margin: 3px 16px; }
-.org-composer { margin: 0 max(16px, calc((100% - 900px) / 2)) 12px; border: 1px solid var(--border-strong); border-radius: var(--radius-composer); padding: 8px; position: relative; flex: none; }
+.org-composer { margin: 0 max(16px, calc((100% - 900px) / 2)) 10px; position: relative; flex: none; }
+.org-composer-box { border: 1px solid var(--border-strong); border-radius: var(--radius-composer); padding: 7px 7px 7px 8px; }
+.org-composer-row { display: flex; align-items: flex-end; gap: 8px; }
+.org-composer-row > .org-composer-input { flex: 1; min-width: 0; align-self: center; }
 .org-composer textarea { position: relative; z-index: 1; display: block; background: transparent; border: none; resize: none; width: 100%; min-height: 24px; max-height: 240px; color: var(--foreground); padding: 0 4px; font: 14px/1.6 var(--font-sans); box-sizing: border-box; }
 /* Mentions, as in Signal: tinted text; mentions of the reader in amber. */
 .org-mention { padding: 0 2px; border-radius: 4px; background: color-mix(in srgb, var(--blue) 18%, transparent); color: color-mix(in srgb, var(--blue) 75%, var(--foreground)); }
@@ -328,21 +331,37 @@ a.org-reference:hover, a.org-reference:focus-visible { text-decoration: underlin
 .org-composer-mirror .org-mention { padding: 0; border-radius: 3px; color: transparent; box-shadow: 0 0 0 2px color-mix(in srgb, var(--blue) 18%, transparent); }
 .org-composer-mirror .org-mention.org-mention-self { color: transparent; box-shadow: 0 0 0 2px color-mix(in srgb, var(--amber) 22%, transparent); }
 .org-composer textarea:focus { outline: none; }
-.org-composer:focus-within { border-color: var(--blue); }
-.org-composer-controls { display: flex; align-items: center; gap: 8px; padding-top: 5px; }
-.org-composer-actions { display:flex; align-items:center; gap:2px; flex:none; }
-.org-composer-actions > span { display:inline-flex; }
-.org-app .org-composer-actions button.org-send-play,
-.org-app .org-composer-actions button.org-upload-play,
-.org-app .org-composer-actions .org-transport-controls button { display:inline-flex; align-items:center; justify-content:center; width:28px; height:28px; min-width:28px; min-height:28px; padding:0; border:0; font-size:13px; line-height:1; background:transparent; color:var(--foreground); }
-.org-app .org-composer-actions button.org-send-play:hover,
-.org-app .org-composer-actions button.org-upload-play:hover,
-.org-app .org-composer-actions .org-transport-controls button:hover { background:var(--surface-2); }
-.org-app .org-composer-actions .org-transport-controls { gap:2px; }
-.org-composer-model { display:flex; align-items:center; justify-content:flex-end; gap:6px; margin-left:auto; min-width:0; }
-.org-composer-model .org-model-menu { min-width:0; max-width:100%; }
-.org-composer-tools { min-width: 0; flex: none; }
-.org-composer-tools { display: flex; flex-wrap: wrap; gap: 3px; }
+.org-composer-box:focus-within { border-color: var(--blue); }
+/* The box's one button: return (grey while the box is empty), or Stop while work runs. */
+.org-composer-send { display: flex; flex: none; }
+.org-composer-send:has([data-stopping]) > .org-send-play { display: none; }
+.org-app .org-composer-button { display: inline-grid; place-items: center; width: 28px; height: 28px; min-width: 28px; min-height: 28px; padding: 0; border: 0;
+  border-radius: 8px; background: var(--surface-raised); color: var(--foreground); }
+.org-app .org-composer-button:hover { background: color-mix(in srgb, var(--surface-raised) 82%, var(--foreground)); }
+.org-app .org-composer-button:disabled { opacity: 1; background: transparent; color: var(--faint); }
+/* Under the box: + on the left; the ⓘ, the model and the effort on the right, each 24px tall with 6px corners. */
+.org-composer-controls { display: flex; align-items: center; gap: 4px; min-height: 24px; padding: 5px 2px 0; }
+.org-composer-controls > span { display: inline-flex; }
+.org-app .org-upload-plus { display: inline-grid; place-items: center; width: 24px; height: 24px; min-height: 24px; padding: 0; border: 0; border-radius: 6px;
+  background: transparent; color: var(--muted); font-size: 18px; font-weight: 300; line-height: 1; }
+.org-app .org-upload-plus:hover { background: var(--surface-raised); color: var(--foreground); }
+.org-composer-model { display: flex; align-items: center; gap: 2px; margin-left: auto; min-width: 0; }
+.org-composer-model .org-model-menu { min-width: 0; max-width: 100%; }
+.org-composer-capabilities { display: inline-flex; }
+.org-composer-model .org-model-menu > summary { min-height: 24px; height: 24px; padding: 0 6px; border: 0; border-radius: 6px; gap: 0; }
+.org-composer-model .org-model-menu > summary > span[aria-hidden] { display: none; }
+.org-composer-model .org-model-menu[open] > summary, .org-composer-model .org-model-menu > summary:hover { background: var(--surface-raised); }
+.org-app .org-composer-info { display: inline-grid; place-items: center; width: 24px; height: 24px; min-height: 24px; padding: 0; border: 0; border-radius: 6px;
+  box-shadow: inset 0 0 0 1px var(--border-strong); background: transparent; color: var(--muted); font: italic 600 12px/1 Georgia, serif; }
+.org-app .org-composer-effort { height: 24px; min-height: 24px; padding: 0 6px; border: 0; border-radius: 6px; background: transparent; color: var(--muted); font-size: 12px; }
+.org-app .org-composer-info:hover, .org-app .org-composer-info[aria-expanded="true"],
+.org-app .org-composer-effort:hover, .org-app .org-composer-effort[aria-expanded="true"] { background: var(--surface-raised); color: var(--foreground); }
+.org-effort-picker { position: relative; }
+.org-composer-model .org-model-menu { order: 0; }
+.org-model-options.org-effort-popover { width: 220px; }
+.org-effort-popover > .org-effort-options { margin: 0; padding: 2px; border-top: 0; font-size: 12px; }
+.org-effort-popover > .org-effort-options > header { padding: 4px 8px 7px; }
+.org-composer-tools { display: flex; flex-wrap: wrap; gap: 3px; min-width: 0; flex: none; }
 .org-composer-tools .org-research-toolbar:empty { display:none; }
 .org-activity-dialog { width: min(720px, calc(100vw - 24px)); }
 .org-activity-dialog > fieldset { padding: 0; border: 0; margin: 0; min-width: 0; }
@@ -358,8 +377,6 @@ a.org-reference:hover, a.org-reference:focus-visible { text-decoration: underlin
 }
 .org-export-dialog textarea { width: 100%; height: 45vh; resize: none; font: 11px/1.5 var(--font-mono); margin-bottom: 10px; }
 .org-model-menu { position: relative; order: 1; }
-.org-composer-controls > .org-primary { order: 2; }
-.org-composer-controls > .org-send-play { order:0; min-width:32px; min-height:32px; padding:4px 8px; }
 .org-model-menu > summary { display: flex; align-items: center; gap: 7px; max-width: 260px; min-height: 32px; padding: 5px 9px; border: 1px solid var(--border); border-radius: var(--radius-control); cursor: pointer; list-style: none; font-size: 12px; }
 .org-model-menu > summary::-webkit-details-marker { display: none; }
 .org-model-menu > summary > span:first-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -709,7 +726,6 @@ a.org-reference:hover, a.org-reference:focus-visible { text-decoration: underlin
   .org-sidebar { width: 235px; }
   .org-presence { position: fixed; inset: 44px 0 0 auto; z-index: 22; width: min(280px, 88vw); box-shadow: var(--shadow-overlay); }
   .org-org-selector { width: 150px; }
-  .org-composer-controls > span { font-size: 10px; }
 }
 @media (max-width: 700px) {
   .org-appbar { gap: 6px; }
@@ -722,7 +738,6 @@ a.org-reference:hover, a.org-reference:focus-visible { text-decoration: underlin
   .org-search { width: 100px; }
   .org-transcript { padding: 14px; }
   .org-composer { margin: 0 12px 12px; }
-  .org-composer-controls > span { display: none; }
   .org-org-selector { width: 120px; }
   .org-capability-filters { grid-template-columns: 1fr; }
   .org-model-card .org-capability-badges { display: none; }

@@ -104,12 +104,14 @@ export function uploadMedia(file: File, organizationId: string, topicId: string)
   }));
 }
 
-export function AttachmentButton({ organizationId, topicId, onInsert, onError, disabled = false }: {
+export function AttachmentButton({ organizationId, topicId, onInsert, onError, disabled = false, plus = false }: {
   organizationId: string; topicId: string; onInsert: (markdown: string) => void; onError?: (error: unknown) => void; disabled?: boolean;
+  /** Drawn as a plus sign, as under the message box. */
+  plus?: boolean;
 }) {
   const input = useRef<HTMLInputElement>(null), [busy, setBusy] = useState(false), [error, setError] = useState("");
-  return <span className="topic-attachment-control"><button type="button" className="org-upload-play" disabled={disabled || busy} aria-label="Attach picture or PDF"
-    title="Attach picture or PDF" onClick={() => input.current?.click()}><span aria-hidden="true">{busy ? "…" : "▶"}</span></button>
+  return <span className="topic-attachment-control"><button type="button" className={plus ? "org-upload-plus" : "org-upload-play"} disabled={disabled || busy} aria-label="Attach picture or PDF"
+    title="Attach picture or PDF" onClick={() => input.current?.click()}><span aria-hidden="true">{busy ? "…" : plus ? "+" : "▶"}</span></button>
     <input hidden ref={input} type="file" accept="image/png,image/jpeg,image/webp,application/pdf" onChange={event => {
       const file = event.target.files?.[0]; event.target.value = ""; if (!file) return;
       setBusy(true); setError(""); void uploadMedia(file, organizationId, topicId).then(value => {

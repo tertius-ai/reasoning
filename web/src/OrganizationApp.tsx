@@ -27,12 +27,12 @@ import { ComputeAttempt } from "./compute-api";
 import { MessageUsageDetails } from "./MessageUsageDetails";
 import { normalizeMathDelimiters } from "./markdownMath";
 import { catalogModel, modelOptionGroups } from "./modelRecommendations";
-import { ModelPicker, compactTokens } from "./ModelBrowser";
+import { EffortPicker, ModelPicker, compactTokens } from "./ModelBrowser";
 import { ResearchControls, RESEARCH_TOOLS, ResearchTool, TOOL_LABELS, goalCommand } from "./ResearchControls";
 import { TopicCopyButton, TopicSystemPrompt } from "./TopicDiagnostics";
 import { NavigationUsage, readNavigation, saveNavigation, Spend } from "./navigationState";
 import { ThemeToggle } from "./ThemeToggle";
-import { ShortcutsHelp, SlashCommandPalette, TOPIC_COMMANDS, TopicCommand, dispatchTopicCommand, useTopicCommand } from "./TopicCommands";
+import { ReturnIcon, ShortcutsHelp, SlashCommandPalette, TOPIC_COMMANDS, TopicCommand, dispatchTopicCommand, useTopicCommand } from "./TopicCommands";
 import { AttachmentButton, MarkdownMedia, MediaScope } from "./TopicMedia";
 import { TexRequestDialog, texRequest } from "./TexRequestDialog";
 import { EmailVerification, VerifyEmailBanner } from "./EmailVerification";
@@ -747,6 +747,9 @@ function Conversation({ organizationId, topic, members, user, canWrite, canManag
   const [modelError, setModelError] = useState("");
   const [goalDraft, setGoalDraft] = useState<string | null>(null);
   const [composerTools, setComposerTools] = useState<HTMLDivElement | null>(null);
+  // In the message box, right of the text: the topic's start, resume or stop button. Under it, beside the model: the ⓘ.
+  const [composerButton, setComposerButton] = useState<HTMLDivElement | null>(null);
+  const [capabilitiesSlot, setCapabilitiesSlot] = useState<HTMLSpanElement | null>(null);
   const [workflowActivity, setWorkflowActivity] = useState<TopicActivity[]>([]), [computeActivity, setComputeActivity] = useState<TopicActivity[]>([]);
   const [betaActivity, setBetaActivity] = useState<TopicActivity[]>([]);
   const [botActivity, setBotActivity] = useState<TopicActivity[]>([]);
@@ -1174,7 +1177,7 @@ function Conversation({ organizationId, topic, members, user, canWrite, canManag
       {orderedActivity([...messageActivity, ...workflowActivity, ...computeActivity, ...betaActivity, ...botActivity])
         .map(item => <div key={item.id} data-activity-id={item.id}>{item.body}</div>)}
       {topic.kind === "beta" && <BetaConversation organizationId={organizationId} topicId={topic.id} userId={user.id}
-        canWrite={canWrite} canManage={canManage} online={online} toolbarTarget={composerTools} hidePlay={Boolean(draft.text.trim())}
+        canWrite={canWrite} canManage={canManage} online={online} toolbarTarget={composerButton} hidePlay={Boolean(draft.text.trim())}
         attempt={modelAttempt} onAttempt={onModelAttempt} onAuthLost={onAuthLost} onActivity={setBetaActivity} wake={messages.at(-1)?.sequence}
         transcript={transcript} onReplyPending={refreshMessages} />}
       <BotConversation organizationId={organizationId} topicId={topic.id} names={botNames} userId={user.id}
@@ -1189,7 +1192,7 @@ function Conversation({ organizationId, topic, members, user, canWrite, canManag
     {!online && <p role="status" className="org-reconnecting">Reconnecting…</p>}
     {error && <p role="alert" className="org-error org-conversation-error">{error}</p>}
     {topic.kind === "beta" && <ResearchControls organizationId={organizationId} topicId={topic.id} userId={user.id}
-      toolbarTarget={composerTools} menuTarget={menuTarget}
+      toolbarTarget={composerTools} menuTarget={menuTarget} capabilitiesTarget={capabilitiesSlot}
       instructions={<TopicSystemPrompt organizationId={organizationId} topicId={topic.id} onAuthLost={onAuthLost} revision={promptRevision} bare />} catalog={replyCatalog} allowedModels={replyConfiguration?.allowed_models ?? []}
       selectedEffort={selectedEffort}
       selectedModel={selectedModel} canWrite={canWrite} canManage={canManage} online={online} goalDraft={goalDraft}
@@ -1202,15 +1205,16 @@ function Conversation({ organizationId, topic, members, user, canWrite, canManag
       }} onSettingsChanged={() => setPromptRevision(value => value + 1)} onAuthLost={onAuthLost} />}
       {topic.kind === "gamma" && <WorkflowConversation organizationId={organizationId} topicId={topic.id} userId={user.id}
         canWrite={canWrite} canManage={canManage} attempt={workflowAttempt} onAttempt={onWorkflowAttempt}
-        executionAttempt={workflowExecutionAttempt} onExecutionAttempt={onWorkflowExecutionAttempt} onAuthLost={onAuthLost} toolbarTarget={composerTools}
+        executionAttempt={workflowExecutionAttempt} onExecutionAttempt={onWorkflowExecutionAttempt} onAuthLost={onAuthLost} toolbarTarget={composerButton}
         hidePlay={Boolean(draft.text.trim())} onActivity={setWorkflowActivity} />}
       {topic.kind !== "alpha" && <ComputeConversation organizationId={organizationId} topicId={topic.id} userId={user.id}
         canWrite={canWrite} canManage={canManage} attempt={computeAttempt} onAttempt={onComputeAttempt} onAuthLost={onAuthLost} toolbarTarget={composerTools} onActivity={setComputeActivity} />}
     <form className="org-composer" onSubmit={(event) => void send(event)}>
       <SlashCommandPalette topicId={topic.id} kind={topic.kind} text={draft.text} onSelect={chooseCommand} />
+      <div className="org-composer-box">
       {draft.replyTo && <ReplyBar original={replyOriginal} label={replyOriginal && authorLabel(replyOriginal, members)} onCancel={cancelReply} />}
       <label className="org-visually-hidden" htmlFor="org-message">Message</label>
-      <div className="org-composer-input"><MentionMirror ref={mirror} text={draft.text} bindings={draft.mentions} self={user.id} />
+      <div className="org-composer-row"><div className="org-composer-input"><MentionMirror ref={mirror} text={draft.text} bindings={draft.mentions} self={user.id} />
       <textarea id="org-message" ref={textarea} onScroll={event => { if (mirror.current) mirror.current.scrollTop = event.currentTarget.scrollTop; }} placeholder={!canWrite ? "You have read-only access" : topic.kind === "beta" && modelAttempt
         ? modelAttempt.unconfirmed ? "Retry or dismiss the unconfirmed reply request before sending another message"
           : "Sending the reply request…" : topic.kind === "beta" && selectedModel
@@ -1249,14 +1253,17 @@ function Conversation({ organizationId, topic, members, user, canWrite, canManag
           }
           if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); setMention(null); setReference(null); void send(); }
         }} /></div>
+        {/* One button: the return symbol is grey with an empty box and active with text; while work runs it is Stop. */}
+        <div className="org-composer-send">
+          {(topic.kind === "alpha" || draft.text.trim()) && <button className="org-composer-button org-send-play"
+            aria-label={sending ? "Sending…" : draft.attempted ? "Retry send" : "Send"} title={draft.attempted ? "Retry send" : "Send message"}
+            disabled={!canWrite || sending || !online || !draft.text.trim() || (topic.kind === "beta" && !!modelAttempt)}>
+            {sending ? <span aria-hidden="true">…</span> : <ReturnIcon />}</button>}
+          {topic.kind !== "alpha" && <div className="org-composer-transport" ref={setComposerButton} />}
+        </div></div>
+      </div>
       <div className="org-composer-controls">
-        <div className="org-composer-actions">
-        {(topic.kind === "alpha" || draft.text.trim()) && <button className="org-primary org-send-play"
-          aria-label={sending ? "Sending…" : draft.attempted ? "Retry send" : "Send"} title={draft.attempted ? "Retry send" : "Send message"}
-          disabled={!canWrite || sending || !online || !draft.text.trim() || (topic.kind === "beta" && !!modelAttempt)}>
-          <span aria-hidden="true">{sending ? "…" : "▶"}</span></button>}
-        {topic.kind !== "alpha" && <div className="org-composer-tools" ref={setComposerTools} />}
-        <span ref={attachmentControl}><AttachmentButton organizationId={organizationId} topicId={topic.id}
+        <span ref={attachmentControl}><AttachmentButton organizationId={organizationId} topicId={topic.id} plus
           disabled={!canWrite || sending || (topic.kind === "beta" && !!modelAttempt)} onError={cause => {
             if (cause instanceof ApiError && cause.status === 401) onAuthLost();
           }} onInsert={markdown => {
@@ -1264,12 +1271,13 @@ function Conversation({ organizationId, topic, members, user, canWrite, canManag
             updateDraft({ text, clientId: crypto.randomUUID(), attempted: false, mentions: previous.mentions });
             requestAnimationFrame(() => textarea.current?.focus());
           }} /></span>
-        </div>
-        <div className="org-composer-model">
-        {topic.kind === "beta" && <BetaModelMenu configuration={replyConfiguration} catalog={replyCatalog} selected={selectedModel} tools={topic.knowledge_tools}
-          disabled={sending || !!modelAttempt} error={selectedModel.startsWith("bot/") ? "" : modelError} onSelect={setSelectedModel}
-          effort={effort} onEffortChange={chooseEffort} />}
-        </div>
+        {topic.kind !== "alpha" && <div className="org-composer-tools" ref={setComposerTools} />}
+        {topic.kind === "beta" && <div className="org-composer-model">
+          <span className="org-composer-capabilities" ref={setCapabilitiesSlot} />
+          <BetaModelMenu configuration={replyConfiguration} catalog={replyCatalog} selected={selectedModel} tools={topic.knowledge_tools}
+            disabled={sending || !!modelAttempt} error={selectedModel.startsWith("bot/") ? "" : modelError} onSelect={setSelectedModel} />
+          <EffortPicker model={selectedModel} catalog={replyCatalog} effort={effort} disabled={sending || !!modelAttempt} onSelect={chooseEffort} />
+        </div>}
       </div>
       {mentionMembers.length > 0 && <div id="org-mention-list" role="listbox" className="org-mention-menu" aria-label="Mention a member">
         {mentionMembers.map((member, index) => <button type="button" role="option" tabIndex={-1} id={"org-mention-" + (member.optionId ?? member.id)}

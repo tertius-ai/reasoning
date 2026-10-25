@@ -123,7 +123,7 @@ test("phone toolbar retains every action and scoped navigation survives refresh"
     await composer.fill("");
     const attachment = page.getByLabel("Attach picture or PDF", { exact: true });
     assert.equal(await attachment.evaluate(element => getComputedStyle(element).borderWidth), "0px");
-    assert.notEqual(await attachment.locator("span").evaluate(element => getComputedStyle(element).transform), "none");
+    assert.equal(await attachment.innerText(), "+", "attaching is a plus sign under the message box");
     const pages = page.context().pages().length;
     await page.getByLabel("Open bibliography",{exact:true}).click();
     assert.match(page.url(), /view=bibliography/); assert.equal(page.context().pages().length,pages);

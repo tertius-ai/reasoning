@@ -80,13 +80,15 @@ test("beta creation selects a bot model then effort, persists the choice, and fa
     const creation = writes.find(write => write.path.endsWith("/topics"));
     assert.equal(creation.body.default_model, model); assert.equal(creation.body.default_effort, "xhigh");
     const picker = page.getByRole("button", { name: "Choose reply model", exact: true });
-    await picker.filter({ hasText: "My Codex · example/xhigh" }).waitFor();
-    // Effort choices share native radio keyboard behavior and restore focus to the picker.
-    await picker.click(); await page.getByRole("radio", { name: model, exact: true }).click();
+    await picker.filter({ hasText: "My Codex · example" }).waitFor();
+    // The effort is its own picker beside the model. Its choices share native radio keyboard behavior and restore focus to it.
+    await page.getByRole("button", { name: "Reasoning effort: Extra high", exact: true }).click();
     const selectedEffort = page.getByRole("radio", { name: "xhigh", exact: true });
-    await selectedEffort.waitFor(); await selectedEffort.press("ArrowUp");
-    await picker.filter({ hasText: "My Codex · example/high" }).waitFor();
-    assert.equal(await picker.evaluate(node => document.activeElement === node), true);
+    await selectedEffort.waitFor(); assert.equal(await selectedEffort.evaluate(node => document.activeElement === node), true);
+    await selectedEffort.press("ArrowUp");
+    const effort = page.getByRole("button", { name: "Reasoning effort: High", exact: true });
+    await effort.waitFor();
+    assert.equal(await effort.evaluate(node => document.activeElement === node), true);
     await picker.click(); await page.getByRole("button", { name: `Favorite ${model}`, exact: true }).click();
     await page.getByRole("button", { name: `Favorite ${model}`, exact: true }).filter({ hasText: "★" }).waitFor();
     // Bot routes and their effort must be usable independently of provider catalogue availability.

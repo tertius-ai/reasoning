@@ -1,11 +1,12 @@
 .org-research-controls { flex: none; padding: 0 max(16px, calc((100% - 900px) / 2)); }
-/* The selected model's capabilities above the message box, with each one listed on request. */
-.org-model-capabilities { position: relative; margin: 0 0 4px; font-size: 11.5px; color: var(--muted); }
-.org-model-capabilities > p { margin: 0; }
-.org-model-capabilities strong { color: var(--foreground); font-weight: 500; }
-.org-app .org-capability-toggle { min-height: 0; margin-left: 6px; padding: 0; border: 0; background: none; color: var(--blue); font-size: 11.5px; }
-.org-capability-details { position: absolute; bottom: calc(100% + 6px); left: 0; z-index: 20; display: grid; grid-template-columns: auto auto; gap: 3px 24px; margin: 0;
-  padding: 9px 11px; border: 1px solid var(--border-strong); border-radius: var(--radius-card); background: var(--surface-raised); box-shadow: var(--shadow-overlay); color: var(--foreground); }
+/* The ⓘ beside the model under the message box opens the selected model's capabilities above it. */
+.org-model-capabilities { position: relative; display: inline-flex; }
+.org-capability-details { position: absolute; bottom: calc(100% + 8px); right: 0; z-index: 20; width: 270px; box-sizing: border-box; padding: 10px 11px;
+  border: 1px solid var(--border-strong); border-radius: var(--radius-card); background: var(--surface-raised); box-shadow: var(--shadow-overlay); color: var(--foreground); font-size: 11.5px; }
+.org-capability-details > strong { display: block; font-size: 12.5px; font-weight: 600; overflow-wrap: anywhere; }
+.org-capability-details > p { margin: 1px 0 6px; color: var(--muted); }
+.org-capability-details dl { display: grid; grid-template-columns: auto auto; gap: 2px 18px; margin: 0; }
+.org-capability-details dt { color: var(--muted); }
 .org-capability-details dd { margin: 0; color: var(--muted); text-align: right; }
 .org-capability-details .org-capability-on { color: var(--teal); }
 .org-system-message { background: var(--surface); border-radius: var(--radius-card); }

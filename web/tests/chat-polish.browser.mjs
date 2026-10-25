@@ -70,34 +70,38 @@ test("progress follows its human message, retained failures stay inspectable, an
     const failed = page.locator('[data-run-id="failed"]');
     await failed.locator("summary").click(); await failed.getByText("Check provider credit.", { exact: true }).waitFor();
     await failed.getByText("Inspect the provider account.", { exact: true }).waitFor();
-    // The selected model's capabilities sit above the message box: a summary line, and each one on request.
-    const capabilities = page.getByLabel("Effective model capabilities");
-    await capabilities.filter({ hasText: "Research · 2 of 3 readers · 2026-10-23 UTC" }).waitFor();
-    await capabilities.getByRole("button", { name: "Capability details", exact: true }).click();
+    // The ⓘ beside the model under the message box opens the selected model's capabilities.
+    await page.getByRole("button", { name: "Model details", exact: true }).click();
+    const capabilities = page.getByRole("group", { name: "Effective model capabilities", exact: true });
+    await capabilities.filter({ hasText: "Research · 2 of 3 readers" }).waitFor();
     assert.match(await capabilities.textContent(), /Public source reader\s*on.*General web search\s*off.*2026-10-23 UTC/);
     await page.keyboard.press("Escape");
+    assert.equal(await capabilities.count(), 0);
     const waiting = page.locator('[data-run-id="waiting-review"]');
     await waiting.getByText("Waiting · answer incomplete", { exact: true }).waitFor();
     await waiting.locator("summary").first().click();
     await waiting.getByText("The finite case is settled.", { exact: true }).waitFor();
     await waiting.getByText("Remaining: Check the infinite case.", { exact: true }).waitFor();
-    const play = page.getByRole("button", { name: "Start or resume", exact: true });
+    // The box has one button at its right. Work is running, so it is Stop, even beside a paused request.
     const stop = page.getByRole("button", { name: "Stop current work", exact: true });
-    const upload = page.getByRole("button", { name: "Attach picture or PDF", exact: true });
-    assert.match(await play.getAttribute("title"), /Resume retained request/);
-    const assertSpacing = async buttons => {
-      const boxes = await Promise.all(buttons.map(button => button.boundingBox()));
-      for (const box of boxes) { assert.equal(box.width, 28); assert.equal(box.height, 28); }
-      for (let i = 1; i < boxes.length; i++) {
-        assert.equal(boxes[i].y, boxes[0].y);
-        assert.equal(boxes[i].x - boxes[i - 1].x - boxes[i - 1].width, 2);
-      }
-    };
-    await assertSpacing([play, stop, upload]);
-    await play.click();
-    assert.ok(writes.some(write => write.path.endsWith("/agents/failed/control") && write.body.status === "active"));
-    await page.getByLabel("Message", { exact: true }).fill("A follow-up");
-    await assertSpacing([page.getByRole("button", { name: "Send", exact: true }), stop, upload]);
+    assert.equal(await page.getByRole("button", { name: "Start or resume", exact: true }).count(), 0);
+    const box = await page.locator(".org-composer-box").boundingBox(), button = await stop.boundingBox();
+    assert.equal(button.width, 28); assert.equal(button.height, 28);
+    assert.ok(button.x + button.width <= box.x + box.width && button.x + button.width >= box.x + box.width - 12, "the button sits at the box's right edge");
+    // Under the box, the +, the ⓘ and the model share the ⓘ square's 24px height on one line.
+    const row = await Promise.all(["Attach picture or PDF", "Model details", "Choose reply model"]
+      .map(name => page.getByRole("button", { name, exact: true }).boundingBox()));
+    for (const item of row) { assert.equal(item.height, 24); assert.equal(item.y, row[0].y); assert.ok(item.y >= box.y + box.height); }
+    assert.ok(row[1].x < row[2].x, "the ⓘ is left of the model");
+    // The paused request still resumes with /play.
+    const message = page.getByLabel("Message", { exact: true });
+    await message.fill("/play"); await message.press("Enter");
+    const resumed = () => writes.some(write => write.path.endsWith("/agents/failed/control") && write.body.status === "active");
+    for (let wait = 0; wait < 50 && !resumed(); wait++) await page.waitForTimeout(100);
+    assert.ok(resumed(), "/play resumes the paused request");
+    await message.fill("A follow-up");
+    assert.equal(await page.locator(".org-composer-send button:visible").count(), 1, "one button in the box");
+    assert.ok(await stop.isVisible(), "Stop stays while work runs, even with text in the box");
     assert.deepEqual(errors, []);
   } finally { await browser.close(); await server.close(); }
 });

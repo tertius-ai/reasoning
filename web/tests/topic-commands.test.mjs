@@ -32,13 +32,16 @@ test("keyboard help exposes send, mentions, slash commands and topic restriction
   assert.match(html, /aria-label="Keyboard shortcuts and commands"/);
 });
 
-test("cassette controls are named, disabled when unavailable and omit play while composing", () => {
+test("the composer's one button stops running work, otherwise starts or resumes, and gives way to send while composing", () => {
   const render = changes => renderToStaticMarkup(React.createElement(commands.TransportControls, {
     canPlay: false, canStop: false, onPlay() {}, onStop() {}, ...changes,
   }));
   assert.match(render({}), /aria-label="Start or resume"[^>]*disabled=""/);
-  assert.match(render({}), /aria-label="Stop current work"[^>]*disabled=""/);
-  assert.doesNotMatch(render({ hidePlay: true, canStop: true }), /Start or resume/);
+  assert.doesNotMatch(render({}), /Stop current work/);
+  assert.doesNotMatch(render({ canPlay: true }), /disabled=""/);
+  assert.match(render({ canStop: true }), /aria-label="Stop current work"/); assert.doesNotMatch(render({ canStop: true }), /Start or resume/);
+  assert.match(render({ hidePlay: true, canStop: true }), /Stop current work/, "Stop stays while work runs, even while composing");
+  assert.equal(render({ hidePlay: true }), "", "with text in the box the composer's send button takes the place");
   assert.doesNotMatch(render({}), /Pause agents|Stop agents|Cancel response/);
 });
 

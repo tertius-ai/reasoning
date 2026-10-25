@@ -130,13 +130,23 @@ test("a closed reply picker mounts no model rows; opening it lists, searches, fa
   assert.equal(await search.inputValue(), "model-00");
   await search.fill("");
 
-  // A reasoning model opens its effort choices; the closed picker then shows model/effort.
+  // Choosing a model closes the picker; a reasoning model's effort is chosen at the far right, beside it.
+  await page.getByRole("radio", { name: ids[1], exact: true }).click();
+  await picker.filter({ hasText: ids[1] }).waitFor();
+  assert.equal(await page.getByRole("button", { name: /^Reasoning effort/ }).count(), 0, "a model without effort levels shows none");
+  await picker.click();
   await page.getByRole("radio", { name: ids[2], exact: true }).click();
-  const efforts = page.getByRole("radiogroup", { name: "Reasoning effort", exact: true });
-  await efforts.getByRole("radio", { name: "Default effort", exact: true }).waitFor();
-  await efforts.getByRole("radio", { name: "high", exact: true }).click();
-  await picker.filter({ hasText: `${ids[2]}/high` }).waitFor();
+  await picker.filter({ hasText: ids[2] }).waitFor();
   assert.equal(await rowCount(page), 0);
+  const effort = page.getByRole("button", { name: "Reasoning effort: Default effort", exact: true });
+  assert.equal(await effort.textContent(), "Default");
+  await effort.click();
+  const efforts = page.getByRole("radiogroup", { name: "Reasoning effort", exact: true });
+  assert.equal(await efforts.getByRole("radio", { name: "Default effort", exact: true }).isChecked(), true);
+  await efforts.getByRole("radio", { name: "high", exact: true }).click();
+  await page.getByRole("button", { name: "Reasoning effort: High", exact: true }).waitFor();
+  assert.equal(await efforts.count(), 0, "choosing an effort closes its menu");
+  assert.equal(await picker.innerText(), ids[2], "the model picker shows only the model, without an arrow");
   assert.deepEqual(errors, []);
   await page.close();
 });

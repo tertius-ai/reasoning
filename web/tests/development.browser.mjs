@@ -70,7 +70,7 @@ test('local hot-reload workflow signs in, streams a simulated beta answer, and c
     assert.equal(await page.getByRole('button', { name: /Pin.*research context/i }).count(), 0);
     assert.equal(await page.locator('.org-composer').getByRole('button', { name: 'Ledger', exact: true }).count(), 0);
     await page.getByLabel('Topic playback', { exact: true }).waitFor();
-    assert.equal(await page.getByLabel('Topic playback', { exact: true }).getByRole('button').count(), 2);
+    assert.equal(await page.getByLabel('Topic playback', { exact: true }).getByRole('button').count(), 1, 'one button in the box');
     await page.getByRole('button', { name: 'Toggle project navigation' }).click();
     assert.equal(await page.getByRole('navigation', { name: 'Projects and channels' }).isVisible(), false);
     await page.getByRole('button', { name: 'Toggle project navigation' }).click();

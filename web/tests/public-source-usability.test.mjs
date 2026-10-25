@@ -101,11 +101,11 @@ test("the health check accepts the server's own degraded 503 report but not a pr
   } finally { globalThis.fetch = original; }
 });
 
-test("composer actions and model metadata use separate compact flex groups", async () => {
+test("the composer's one button and the model metadata under it use separate compact flex groups", async () => {
   const app = await readFile(new URL("../src/OrganizationApp.tsx", import.meta.url), "utf8");
   const css = await readFile(new URL("../src/organization.css", import.meta.url), "utf8");
-  assert.ok(app.includes('className="org-composer-actions"') && app.includes('className="org-composer-model"'));
-  assert.match(css, /org-composer-model \.org-model-menu[^}]*min-width:0/);
+  assert.ok(app.includes('className="org-composer-send"') && app.includes('className="org-composer-model"'));
+  assert.match(css, /org-composer-model \.org-model-menu[^}]*min-width:\s*0/);
   assert.doesNotMatch(app, /<ReasoningEffort/);
   assert.ok(app.includes("stop_active: true"));
   assert.ok(!app.includes("Stop active work first:"));
