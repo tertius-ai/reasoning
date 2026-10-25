@@ -358,24 +358,26 @@ print(json.dumps({"id": run["id"]}))
     let seedOutput = "", seedError = ""; seed.stdout.on("data", data => { seedOutput += data; }); seed.stderr.on("data", data => { seedError += data; });
     const [seedCode] = await once(seed, "exit"); assert.equal(seedCode, 0, seedError); const retained = JSON.parse(seedOutput);
     await start(); await owner.reload();
-    await owner.getByRole("button", { name: "Workflow activity", exact: true }).click();
-    const capacity = owner.getByRole("dialog", { name: "Organization workflows", exact: true });
+    // Workflow activity is a row of the topic's details card, with the places in use, and opens a dialog like Project files.
+    await owner.locator(".org-topic-menu > summary").click();
+    await owner.getByRole("group", { name: "Topic details", exact: true }).getByRole("button", { name: /^Workflow activity \d+ of 64$/ }).click();
+    const capacity = owner.getByRole("dialog", { name: "Workflow activity", exact: true });
     await capacity.getByRole("button", { name: /^Inspect Retained uncertain workflow/ }).waitFor();
     await capacity.getByText(/of 64/).waitFor();
     assert.equal(await capacity.evaluate(element => element.scrollWidth <= element.clientWidth + 2), true, "workflow activity fits a phone");
     await capacity.getByRole("button", { name: /^Inspect Permission probe/ }).click();
-    const completedInspection = owner.getByRole("dialog", { name: "Inspect workflow place", exact: true });
+    const completedInspection = capacity.getByRole("region", { name: "Inspect workflow place", exact: true });
     await completedInspection.getByText(/Place occupied/).waitFor();
     await call(root + "/workflow-runs/" + narrowRun.id + "/cancel", { client_id: "capacity-completion-cancel" });
     await completedInspection.getByText("Finished; this run no longer uses a place.", { exact: true }).waitFor();
-    await completedInspection.getByRole("button", { name: "Close inspect workflow place", exact: true }).click();
+    await completedInspection.getByRole("button", { name: "‹ All runs", exact: true }).click();
     const beforeCapacity = await call(root + "/workflow-capacity", undefined, "GET");
     assert.ok(beforeCapacity.runs.some(run => run.id === retained.id && run.topic_deleted));
     const forbiddenRetained = await viewer.evaluate(async path => (await fetch("/api" + path)).status,
       root + "/workflow-runs/" + retained.id + "/capacity-inspection");
     assert.equal(forbiddenRetained, 404);
     await capacity.getByRole("button", { name: /^Inspect Retained uncertain workflow/ }).click();
-    const inspection = owner.getByRole("dialog", { name: "Inspect workflow place", exact: true });
+    const inspection = capacity.getByRole("region", { name: "Inspect workflow place", exact: true });
     await inspection.getByText("Charge awaiting confirmation", { exact: false }).waitFor();
     await inspection.getByText(/This topic was deleted/).waitFor();
     assert.equal(await inspection.getByRole("link", { name: "Open workflow topic", exact: true }).count(), 0);
@@ -399,10 +401,12 @@ print(json.dumps({"id": run["id"]}))
     const retainedInspection = await call(root + "/workflow-runs/" + retained.id + "/capacity-inspection", undefined, "GET");
     assert.equal(retainedInspection.nodes[0].children[0].accounting_state, "uncertain");
     assert.equal(retainedInspection.run.status, "outcome_unknown");
-    await inspection.getByRole("button", { name: "Close inspect workflow place", exact: true }).click();
-    await capacity.locator("summary").filter({ hasText: "Released places" }).click();
+    await inspection.getByRole("button", { name: "‹ All runs", exact: true }).click();
+    // The released run leaves In use and is listed under Released.
+    assert.equal(await capacity.getByRole("button", { name: /^Inspect Retained uncertain workflow/ }).count(), 0);
+    await capacity.getByRole("navigation", { name: "Kind of run" }).getByRole("button", { name: /^Released/ }).click();
     await capacity.getByRole("button", { name: /^Inspect Retained uncertain workflow/ }).waitFor();
-    await capacity.getByRole("button", { name: "Close organization workflows", exact: true }).click();
+    await capacity.getByRole("button", { name: "Close dialog", exact: true }).click();
     assert.equal(calls.length, 1, "inspection and release must not replay the uncertain provider call");
     for (const page of pages) assert.equal(await page.evaluate((secret) => JSON.stringify({ ...localStorage, ...sessionStorage }).includes(secret), key), false);
     assert.deepEqual(errors, []);

@@ -255,11 +255,11 @@ export function WorkflowRunDetail({ organizationId, topicId, runId, userId, canW
 }
 
 export function WorkflowRuns({ organizationId, topicId, userId, canWrite, canManage, version, attempt, onAttempt, definitionBusy, onAuthLost,
-  autoStartKey, onAutoStarted, toolbarTarget, onActivity, onUncap, hidePlay }: Access & {
+  autoStartKey, onAutoStarted, toolbarTarget, menuTarget = null, onActivity, onUncap, hidePlay }: Access & {
   organizationId: string; topicId: string; version: WorkflowVersion | null; definitionBusy: boolean;
   attempt?: WorkflowExecutionAttempt; onAttempt: (value?: WorkflowExecutionAttempt) => void; onAuthLost: () => void;
   autoStartKey?: string | null; onAutoStarted?: () => void;
-  toolbarTarget: HTMLDivElement | null; onActivity: (records: TopicActivity[]) => void;
+  toolbarTarget: HTMLDivElement | null; menuTarget?: HTMLElement | null; onActivity: (records: TopicActivity[]) => void;
   onUncap?: (definition: WorkflowDefinition) => void;
   hidePlay?: boolean;
 }) {
@@ -392,7 +392,7 @@ export function WorkflowRuns({ organizationId, topicId, userId, canWrite, canMan
     if (command === "uncap" && latest && terminalWorkflow(latest) && onUncap) void rerun(latest, true);
   });
   return <section className="org-workflow-runs" aria-label="Workflow activity controls">
-    <WorkflowCapacity {...{ organizationId, userId, canManage, onAuthLost }} />
+    <WorkflowCapacity {...{ organizationId, userId, canManage, onAuthLost, menuTarget }} />
     {!connected && <p role="status">{configuration ? "Reconnecting workflow progress…" : "Loading workflow configuration…"}</p>}
     {configuration && !configuration.worker_running && <p role="status">Workflow reconciler unavailable. Existing requests remain durable.</p>}
     {error && <p role="alert" className="org-error">{error}</p>}
