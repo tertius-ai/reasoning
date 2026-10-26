@@ -38,6 +38,9 @@ export type DirectConversation = {
 export type Hierarchy = { projects: Project[]; channels: Channel[]; topics: Topic[]; topic_state: TopicState[];
   direct_conversations?: DirectConversation[] };
 export type Member = Account & { role: Role };
+/** A later topic message added to a running model reply, and the step of that reply which read it. */
+export type ReplyAddition = { message_id: string; run_id: string; added_by: string; moved: boolean; cancelled_runs: string[];
+  created_at: number; read_at: number | null; read_step: number | null };
 export type Message = { id: string; sequence: number; topic_id: string; author_id: string; content: string; client_id: string; created_at: number;
   reactions?: import("./ChatFeedback").Feedback;
   /** The message of the same topic that this one answers. */
@@ -47,7 +50,9 @@ export type Message = { id: string; sequence: number; topic_id: string; author_i
   author_kind?: "human" | "assistant" | "bot"; bot_name?: string; assistant_model?: string | null; inference_run_id?: string | null;
   /** Project file revisions this reply's own run saved. */
   files?: import("./ReplyFiles").ReplyFile[];
-  workflow_run_id?: string; usage?: MessageUsage | null };
+  workflow_run_id?: string; usage?: MessageUsage | null;
+  /** Set when this message was added to a running model reply. */
+  addition?: ReplyAddition };
 export type ImpactProfile = { model: string; input_kwh_per_million: number; output_kwh_per_million: number;
   location: string; grid_grams_co2e_per_kwh: number | null; source: string };
 export type MessageUsage = { prompt_tokens: number | null; completion_tokens: number | null; actual_microusd: number | null;
@@ -156,6 +161,8 @@ export type ModelRun = {
   accounting_state: "reserved" | "settled" | "uncertain" | "released"; actual_microusd: number | null;
   reserved_microusd: number; prompt_tokens: number | null; completion_tokens: number | null;
   provider_generation_id: string | null;
+  /** Messages added to this reply while it runs; only a thread's root reply carries them. */
+  additions?: ReplyAddition[];
 };
 
 export const usd = (microusd: number) => "$" + (microusd / 1_000_000).toFixed(6);

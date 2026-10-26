@@ -320,6 +320,11 @@ class Message(Input):
     content: Annotated[str, Field(min_length=1, max_length=16000, pattern=r"\S")]
     client_id: Annotated[str, Field(min_length=1, max_length=128)]
     reply_to: Annotated[str | None, Field(pattern=r"^[a-f0-9]{32}$")] = None
+    adds_to: Annotated[str | None, Field(pattern=r"^[a-f0-9]{32}$")] = None
+
+
+class Addition(Input):
+    message_id: Annotated[str, Field(pattern=r"^[a-f0-9]{32}$")]
 
 
 class ModelFavorite(Input):
@@ -794,7 +799,7 @@ def create_app(config: Config, *, provider: OpenRouter | None = None, mail_provi
 
     @app.post("/api/organizations/{organization_id}/topics/{topic_id}/messages", status_code=201)
     def post_message(organization_id: str, topic_id: str, body: Message, user: User):
-        return store.post_message(user, organization_id, topic_id, body.content, body.client_id, body.reply_to)
+        return store.post_message(user, organization_id, topic_id, body.content, body.client_id, body.reply_to, body.adds_to)
 
     @app.get("/api/organizations/{organization_id}/topics/{topic_id}/message-updates")
     def message_updates(organization_id: str, topic_id: str, user: User,
@@ -938,6 +943,14 @@ def create_app(config: Config, *, provider: OpenRouter | None = None, mail_provi
     @app.post("/api/organizations/{organization_id}/inference-runs/{run_id}/cancel")
     def cancel_model(organization_id: str, run_id: str, body: Input, user: User):
         return inference.cancel(user, organization_id, run_id)
+
+    @app.post("/api/organizations/{organization_id}/inference-runs/{run_id}/additions")
+    def add_to_model_reply(organization_id: str, run_id: str, body: Addition, user: User):
+        return inference.add_message(user, organization_id, run_id, body.message_id)
+
+    @app.delete("/api/organizations/{organization_id}/inference-runs/{run_id}/additions/{message_id}")
+    def remove_from_model_reply(organization_id: str, run_id: str, message_id: str, user: User):
+        return inference.remove_addition(user, organization_id, run_id, message_id)
 
     @app.put("/api/organizations/{organization_id}/inference-runs/{run_id}/cost", status_code=204)
     def reconcile_cost(organization_id: str, run_id: str, body: ReconciledCost, user: User):

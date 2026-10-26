@@ -1,0 +1,137 @@
+// Copyright Benjamin Antieau and Deven Manam. SPDX-License-Identifier: Apache-2.0
+import assert from "node:assert/strict";
+import { realpath } from "node:fs/promises";
+import { fileURLToPath } from "node:url";
+import { test } from "node:test";
+import { chromium } from "playwright";
+import { createServer } from "vite";
+
+test("thread mode adds to a running reply, Esc returns to the usual box, and a posted message moves in", { timeout: 60000 }, async () => {
+  const root = fileURLToPath(new URL("../", import.meta.url));
+  const server = await createServer({ root, server: { host: "127.0.0.1", port: 0,
+    fs: { allow: [root, await realpath(root + "node_modules")] } } });
+  await server.listen(); const browser = await chromium.launch({ headless: true });
+  try {
+    const page = await browser.newPage({ viewport: { width: 1100, height: 900 } }), errors = [], writes = [];
+    const user = "a".repeat(32), org = "b".repeat(32), topic = "c".repeat(32);
+    const hierarchy = { projects: [{ id: "project", name: "Testing", visibility: "organization" }],
+      channels: [{ id: "channel", name: "research", project_id: "project" }],
+      topics: [{ id: topic, name: "Motives", channel_id: "channel", kind: "beta", default_model: "fixture/reasoner", knowledge_tools: [] }], topic_state: [] };
+    const model = { id: "fixture/reasoner", name: "Reasoner", supports_tools: true, supports_reasoning: true,
+      reasoning_efforts: ["high"], supported_parameters: [], input_modalities: [], output_modalities: [] };
+    const base = { requested_by: user, model: model.id, created_at: 1_800_000_000, cancel_requested: 0, message_id: null, output_text: "",
+      accounting_state: "reserved", actual_microusd: null, reserved_microusd: 10 };
+    const message = (id, sequence, content) => ({ id, sequence, created_at: base.created_at + sequence * 60, content,
+      author_kind: "human", author_id: user, topic_id: topic });
+    let messages = [message("question", 1, "Which steps prove DM(k, C) from the literature?"),
+      message("later", 2, "Skip French-language sources."), message("started", 3, "Also the étale realization.")];
+    let additions = [];
+    const runs = () => [
+      { ...base, id: "working", status: "running", context_through_sequence: 1, additions,
+        activity: [{ sequence: 1, phase: "tool_requested", tool: "arxiv_search" }] },
+      { ...base, id: "own-later", context_through_sequence: 2, ...(additions.some(item => item.message_id === "later")
+        ? { status: "cancelled", error_code: "moved_into_reply", accounting_state: "released" } : { status: "queued" }) },
+      { ...base, id: "own-started", status: "running", context_through_sequence: 3 },
+    ];
+    const addition = (messageId, moved) => ({ message_id: messageId, run_id: "working", added_by: user, moved,
+      cancelled_runs: moved ? ["own-later"] : [], created_at: base.created_at + 600, read_at: null, read_step: null });
+    page.on("pageerror", error => errors.push(error.message));
+    await page.route("**/api/**", async route => {
+      const request = route.request(), path = new URL(request.url()).pathname, body = request.postDataJSON();
+      if (request.method() !== "GET") writes.push({ method: request.method(), path, body });
+      let data = [];
+      if (path === "/api/health") data = { initialized: true };
+      else if (path === "/api/auth/me") data = { id: user, name: "Elden", email: "elden@example.org" };
+      else if (path === "/api/organizations") data = [{ id: org, name: "Testing", role: "owner" }];
+      else if (path === "/api/auth/model-favorites") data = { user_id: user, models: [] };
+      else if (path.endsWith("/hierarchy")) data = hierarchy;
+      else if (path.endsWith("/members")) data = [{ id: user, name: "Elden", role: "owner" }];
+      else if (path.endsWith("/presence")) data = { humans: [], bots: [] };
+      else if (path.endsWith("/inference-configuration")) data = { allowed_models: [model.id], tools: [] };
+      else if (path.endsWith("/model-prices")) data = { models: [model], allowed_models: [model.id] };
+      else if (path.endsWith("/research-instructions")) data = { system_prompt: "Research safely.", prompt_version: "fixture" };
+      else if (path.endsWith("/research-settings")) data = { tools: ["history"], web_search_configured: false, current_date: "2026-10-26" };
+      else if (path.endsWith("/compute-configuration")) data = { images: [], policy: { allowed_images: [] } };
+      else if (path.endsWith("/navigation-usage")) data = { projects: {}, channels: {}, topics: {} };
+      else if (path.endsWith("/messages") && request.method() === "POST") {
+        const posted = { ...message("sent-" + messages.length, messages.length + 1, body.content) };
+        if (body.adds_to) { posted.addition = addition(posted.id, false); additions = [...additions, posted.addition]; }
+        messages = [...messages, posted]; data = posted;
+      } else if (path.endsWith("/messages")) data = messages;
+      else if (path.endsWith("/message-updates")) data = { after: 0, messages: [] };
+      else if (path.includes("/reactions/")) data = { counts: { up: 0, down: 0, upside_down: 0 }, mine: [] };
+      else if (path.endsWith("/inference-runs/working/additions")) { data = addition(body.message_id, true); additions = [...additions, data]; }
+      else if (path.endsWith("/inference-runs")) data = runs();
+      else if (path.endsWith("/bot-runs")) data = [];
+      else if (path.endsWith("/agents")) data = [];
+      else if (path.endsWith("/goal")) data = null;
+      await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(data) });
+    });
+    await page.goto(server.resolvedUrls.local[0] + "organization.html");
+    const card = page.locator('[data-run-id="working"]');
+    const line = card.locator(".org-thread-line");
+    await line.waitFor();
+    assert.equal(await line.textContent(), "Add to this reply");
+
+    // The thread line puts the usual box into thread mode: a tinted bar, the plus inside, no model row.
+    await line.click();
+    const bar = page.locator(".org-adding-bar");
+    await bar.getByText(/Adding to reasoner's reply to the .* question/).waitFor();
+    const box = page.locator(".org-composer-box.org-composer-adding");
+    assert.equal(await box.getByRole("button", { name: "Attach picture or PDF", exact: true }).count(), 1, "the plus sits inside the box");
+    assert.equal(await page.getByRole("button", { name: "Model details", exact: true }).isVisible(), false, "the model row hides");
+    assert.equal(await page.getByLabel("Message", { exact: true }).getAttribute("placeholder"), "Add to reasoner's reply…");
+    assert.equal(await line.getAttribute("aria-pressed"), "true");
+
+    // Esc returns to the usual box and keeps the text.
+    const box1 = page.getByLabel("Message", { exact: true });
+    await box1.fill("Is there a version over finite fields?");
+    assert.equal(await bar.isVisible(), true, "typing keeps thread mode");
+    await box.getByRole("button", { name: "Send", exact: true }).waitFor();
+    assert.equal(await box.getByRole("button", { name: "Stop current work", exact: true }).count(), 0, "return replaces Stop");
+    await page.screenshot({ path: process.env.REPLY_ADDITIONS_SHOTS ? process.env.REPLY_ADDITIONS_SHOTS + "/thread-mode.png" : undefined });
+    await box1.press("Escape");
+    assert.equal(await bar.count(), 0);
+    await page.getByRole("button", { name: "Model details", exact: true }).waitFor();
+    assert.equal(await box1.inputValue(), "Is there a version over finite fields?");
+    assert.equal(await page.locator(".org-composer-box.org-composer-adding").count(), 0);
+    await page.screenshot({ path: process.env.REPLY_ADDITIONS_SHOTS ? process.env.REPLY_ADDITIONS_SHOTS + "/after-escape.png" : undefined });
+    await box1.fill("");
+
+    // ↩ on the question being answered enters thread mode; sending adds the message and requests no reply of its own.
+    const question = page.locator('[data-message-id="question"]');
+    await question.hover();
+    await question.getByRole("button", { name: "Add to reasoner's reply", exact: true }).click();
+    await bar.waitFor();
+    await box1.fill("Cite exact theorem numbers.");
+    await box1.press("Enter");
+    await page.getByText("Added to reasoner's reply · waiting for its next step").waitFor();
+    const sent = writes.find(write => write.method === "POST" && write.path.endsWith("/messages"));
+    assert.equal(sent.body.adds_to, "working");
+    assert.equal(writes.filter(write => write.method === "POST" && write.path.endsWith("/inference-runs")).length, 0);
+    assert.equal(await bar.count(), 0, "after sending, the box returns to new questions");
+    await card.getByRole("button", { name: "1 addition · 0 read · 1 waiting", exact: true }).waitFor();
+
+    // A posted message whose own reply has not started moves in from its menu; a started one cannot.
+    const started = page.locator('[data-message-id="started"]');
+    await started.hover();
+    await started.getByRole("button", { name: "Message actions", exact: true }).click();
+    const blocked = page.getByRole("menuitem", { name: /Move into reasoner's thread/ });
+    assert.equal(await blocked.isDisabled(), true);
+    assert.match(await blocked.textContent(), /Its own reply has started/);
+    await page.keyboard.press("Escape");
+    const later = page.locator('[data-message-id="later"]');
+    await later.hover();
+    await later.getByRole("button", { name: "Message actions", exact: true }).click();
+    await page.getByRole("menuitem", { name: "Move into reasoner's thread", exact: true }).click();
+    await later.getByText("Moved into reasoner's reply · waiting for its next step; its own reply was cancelled before it started").waitFor();
+    assert.deepEqual(writes.at(-1), { method: "POST", path: `/api/organizations/${org}/inference-runs/working/additions`,
+      body: { message_id: "later" } });
+    await card.getByRole("button", { name: "2 additions · 0 read · 2 waiting", exact: true }).waitFor();
+    await page.locator('[data-run-id="own-later"]').waitFor({ state: "detached" });
+    await page.screenshot({ path: process.env.REPLY_ADDITIONS_SHOTS ? process.env.REPLY_ADDITIONS_SHOTS + "/moved.png" : undefined });
+    assert.deepEqual(errors, []);
+  } finally {
+    await browser.close(); await server.close();
+  }
+});

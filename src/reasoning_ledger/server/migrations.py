@@ -666,3 +666,7 @@ MIGRATIONS += (FEEDBACK_REPORTS_SCHEMA,)
 from .bot_direct_schema import SCHEMA as BOT_DIRECT_SCHEMA  # noqa: E402
 
 MIGRATIONS += (BOT_DIRECT_SCHEMA,)
+
+from .inference_additions_schema import SCHEMA as INFERENCE_ADDITIONS_SCHEMA  # noqa: E402
+
+MIGRATIONS += (INFERENCE_ADDITIONS_SCHEMA,)

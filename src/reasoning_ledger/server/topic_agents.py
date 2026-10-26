@@ -652,6 +652,9 @@ class TopicAgents:
                     prompt_override=snapshot,
                 )
                 snapshot = {**snapshot, **refreshed}
+                from .inference_additions import included
+
+                included(db, self.inference, row["organization_id"], root, through)
             messages += [
                 {"role": "assistant", "content": row["output_text"]},
                 {
