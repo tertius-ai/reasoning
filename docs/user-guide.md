@@ -20,6 +20,24 @@ a reload, the dot stays until you open the notes once; otherwise the button
 lists recent changes. A development server without a release identity never
 offers a new version.
 
+## Bug reports and ideas
+
+The bug button at the right of your name in the sidebar footer sends a bug or
+an idea to your organization's owners and administrators. **Include
+diagnostics** attaches the current view, release, browser, window size and this
+tab's recent failed requests and page errors; **Preview** shows exactly what
+will be sent.
+
+Owners and administrators read reports under **Administration › Feedback**.
+Reports are grouped into **Open** and **Resolved**; Resolved starts collapsed,
+and **All**, **Bugs** and **Ideas** filter both groups. Each report shows its
+first line until expanded. An expanded report shows the full message, the
+reporter, the diagnostics, **Resolve** (or **Reopen**), and **Copy report**,
+which copies the report as Markdown for an issue tracker: the diagnostics are
+folded into a `<details>` block and times are in UTC. The copy includes the
+reporter's name and the view, which names projects and topics, so review it
+before pasting it anywhere public.
+
 ## Conversations
 
 - Alpha topics: human discussion, with explicit bot mentions.
