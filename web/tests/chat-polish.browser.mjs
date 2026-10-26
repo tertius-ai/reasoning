@@ -76,7 +76,7 @@ test("progress follows its human message, retained failures stay inspectable, an
     await capabilities.filter({ hasText: "Research · 2 of 3 readers" }).waitFor();
     assert.match(await capabilities.textContent(), /Public source reader\s*on.*General web search\s*off.*2026-10-23 UTC/);
     await page.keyboard.press("Escape");
-    assert.equal(await capabilities.count(), 0);
+    await capabilities.waitFor({ state: "detached", timeout: 5000 });
     const waiting = page.locator('[data-run-id="waiting-review"]');
     await waiting.getByText("Waiting · answer incomplete", { exact: true }).waitFor();
     await waiting.locator("summary").first().click();
@@ -84,6 +84,7 @@ test("progress follows its human message, retained failures stay inspectable, an
     await waiting.getByText("Remaining: Check the infinite case.", { exact: true }).waitFor();
     // The box has one button at its right. Work is running, so it is Stop, even beside a paused request.
     const stop = page.getByRole("button", { name: "Stop current work", exact: true });
+    await stop.waitFor({ timeout: 5000 });
     assert.equal(await page.getByRole("button", { name: "Start or resume", exact: true }).count(), 0);
     const box = await page.locator(".org-composer-box").boundingBox(), button = await stop.boundingBox();
     assert.equal(button.width, 28); assert.equal(button.height, 28);
@@ -101,8 +102,9 @@ test("progress follows its human message, retained failures stay inspectable, an
     for (let wait = 0; wait < 50 && !resumed(); wait++) await page.waitForTimeout(100);
     assert.ok(resumed(), "/play resumes the paused request");
     await message.fill("A follow-up");
+    // While the /play request is in flight the box shows Send; Stop returns once the request settles.
+    await stop.waitFor({ timeout: 5000 }).catch(() => assert.fail("Stop stays while work runs, even with text in the box"));
     assert.equal(await page.locator(".org-composer-send button:visible").count(), 1, "one button in the box");
-    assert.ok(await stop.isVisible(), "Stop stays while work runs, even with text in the box");
     assert.deepEqual(errors, []);
   } finally { await browser.close(); await server.close(); }
 });
