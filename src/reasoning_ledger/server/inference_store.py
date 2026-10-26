@@ -477,8 +477,8 @@ class InferenceStore:
                 "SELECT sequence,event_json FROM llm_events WHERE organization_id=? AND run_id=? "
                 "AND json_extract(event_json,'$.phase') IN "
                 "('round','tool_requested','tool_completed','compacting','compaction_failed','compaction_skipped',"
-                "'answer_ready','reasoning_summary','delegated') "
-                "ORDER BY sequence DESC LIMIT 20",
+                "'answer_ready','reasoning_summary','delegated','additions_read') "
+                "ORDER BY sequence DESC LIMIT 40",
                 (row["organization_id"], row["id"]),
             ):
                 body = json.loads(event["event_json"])
@@ -492,6 +492,7 @@ class InferenceStore:
                     "answer_ready",
                     "reasoning_summary",
                     "delegated",
+                    "additions_read",
                 }:
                     activity.append(
                         {
@@ -500,6 +501,8 @@ class InferenceStore:
                             "tool": body.get("name"),
                             "round": body.get("round"),
                             "summary": body.get("summary"),
+                            **({"message_ids": body.get("message_ids", []), "step": body.get("step")}
+                               if body["phase"] == "additions_read" else {}),
                         }
                     )
         return {

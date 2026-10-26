@@ -569,6 +569,26 @@ a.org-reference:hover, a.org-reference:focus-visible { text-decoration: underlin
 .org-addition-receipt > span:first-child { color: var(--teal); }
 .org-addition-receipt.org-addition-waiting { color: color-mix(in srgb, var(--blue) 75%, var(--foreground)); }
 .org-app .org-addition-receipt button { min-height: 20px; padding: 0 6px; font-size: 11px; }
+/* A running reply's timeline: its steps, and each added message where the reply read it. */
+.org-reply-timeline { margin: 6px 0 2px 2px; padding: 0 0 0 12px; list-style: none; border-left: 1px solid var(--border); font-size: 12px; }
+.org-reply-timeline li { position: relative; padding: 2px 0; }
+.org-reply-timeline li::before { content: ""; position: absolute; left: -16px; top: 8px; width: 7px; height: 7px; border-radius: 50%;
+  background: var(--border); }
+.org-timeline-step { color: var(--muted); }
+.org-timeline-step[data-current] { color: color-mix(in srgb, var(--blue) 75%, var(--foreground)); }
+.org-timeline-step[data-current]::before { background: var(--blue); }
+.org-timeline-addition { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 8px; color: var(--foreground); }
+.org-timeline-addition::before { background: var(--teal) !important; }
+.org-timeline-addition[data-waiting]::before { background: transparent !important; border: 1.5px solid var(--blue); }
+.org-timeline-text { flex: 1 1 14rem; min-width: 0; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+.org-timeline-addition small { color: var(--teal); font-size: 11px; }
+.org-timeline-addition[data-waiting] small { color: color-mix(in srgb, var(--blue) 75%, var(--foreground)); }
+.org-app .org-timeline-addition button { min-height: 20px; padding: 0 6px; font-size: 11px; }
+.org-reply-additions { margin: 6px 0 0; font-size: 12px; color: var(--muted); }
+.org-reply-additions summary { cursor: pointer; }
+.org-reply-additions ol { margin: 4px 0 0; padding-left: 18px; }
+.org-reply-additions li { display: flex; flex-wrap: wrap; gap: 4px 8px; padding: 2px 0; color: var(--foreground); }
+.org-reply-additions li small { color: var(--muted); font-size: 11px; }
 .chat-menu-reason { display: block; max-width: 240px; margin-top: 2px; color: var(--muted); font-size: 11px; white-space: normal; }
 /* The whole thread over a dimmed conversation. */
 .org-thread-dialog { width: min(560px, calc(100vw - 32px)); max-height: min(80vh, 720px); padding: 12px 14px; border: 1px solid var(--border-strong);

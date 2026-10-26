@@ -17,7 +17,7 @@ import { ComputeConversation } from "./ComputeConversation";
 import { DirectConversation, DirectMessageMarks, DirectMessagePicker, NewDirectMessageButton, directPath, directUnread, directUnreadTotal, peopleInbox } from "./DirectMessages";
 import { KnowledgeLinks, KnowledgeView } from "./KnowledgeLinks";
 import { ReplyBar, ReplyPointer, ThreadDialog } from "./MessageReplies";
-import { additionReceipt, modelName, moveBlocked, moveTarget, replyThreads, threadAnswering } from "./ReplyAdditions";
+import { additionReceipt, modelName, moveBlocked, moveTarget, replyThreads, shownInReply, threadAnswering } from "./ReplyAdditions";
 import { MentionMirror, MentionSelf, MentionTag, chatTones, mentionFromHref, mentionInitials, speakerKey, speakerTone, toneClass } from "./mentions";
 import { LazyView } from "./LazyView";
 import { WorkflowConversation } from "./WorkflowConversation";
@@ -1187,10 +1187,23 @@ function Conversation({ organizationId, topic, members, user, canWrite, canManag
     }
   };
   const workflowRunKey = topic.kind === "gamma" ? workflowActivity.map(entry => entry.id).join(",") : "";
+  const undoNow = useRef({ undoAddition, messages });
+  undoNow.current = { undoAddition, messages };
+  const undoFromReply = useCallback((addition: ReplyAddition) => {
+    const message = undoNow.current.messages.find(item => item.id === addition.message_id);
+    if (message) void undoNow.current.undoAddition(message, addition);
+  }, []);
   const messageActivity: TopicActivity[] = useMemo(() => {
   const workflowRuns = new Set(workflowRunKey.split(","));
-  const visibleMessages = messages.filter(message => topic.kind !== "gamma" || !message.workflow_run_id
-    || !workflowRuns.has("workflow:" + message.workflow_run_id));
+  // Later messages added to a reply appear in that reply's timeline, then under its answer, instead of in the transcript.
+  const { threads } = runsNow.current;
+  const folded = new Set(messages.flatMap(message => message.additions?.map(addition => addition.message_id) ?? []));
+  const inReply = (message: Message) => {
+    const addition = threads.flatMap(thread => thread.additions).find(item => item.message_id === message.id) ?? message.addition;
+    return topic.kind === "beta" && shownInReply(addition, Boolean(threads.find(thread => thread.root.id === addition?.run_id)?.active), folded);
+  };
+  const visibleMessages = messages.filter(message => (topic.kind !== "gamma" || !message.workflow_run_id
+    || !workflowRuns.has("workflow:" + message.workflow_run_id)) && !inReply(message));
   const groups = topic.kind === "alpha" ? alphaMessageGroups(visibleMessages) : visibleMessages.map(message => [message]);
   const byId = new Map(messages.map(message => [message.id, message]));
   const markUnread = (message: Message) => {
@@ -1222,6 +1235,11 @@ function Conversation({ organizationId, topic, members, user, canWrite, canManag
           <time dateTime={new Date(message.created_at * 1000).toISOString()} title={new Date(message.created_at * 1000).toLocaleString()}>{topic.kind === "alpha" ? new Date(message.created_at * 1000).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" }) : new Date(message.created_at * 1000).toLocaleString()}</time></header>
         <MessageMarkdown markdown={normalizeMathDelimiters(mentionMarkdown(message.content, mentionPeople))} />
         {!!message.files?.length && <ReplyFiles topicId={topic.id} files={message.files} />}
+        {!!message.additions?.length && <details className="org-reply-additions">
+          <summary>Took {message.additions.length} later {message.additions.length === 1 ? "message" : "messages"} into account</summary>
+          <ol>{message.additions.map(addition => <li key={addition.message_id}><span>{addition.content}</span>
+            <small>{addition.read_step ? `read at step ${addition.read_step}` : "read when it resumed"}</small></li>)}</ol>
+        </details>}
         {message.author_kind === "assistant" && <MessageUsageDetails usage={message.usage} />}
         {addition && <p className={"org-addition-receipt" + (addition.read_at === null && additionThread?.active ? " org-addition-waiting" : "")}
           role="status"><span aria-hidden="true">↳</span>{additionReceipt(addition, additionThread?.root.model ?? "the model", Boolean(additionThread?.active))}
@@ -1295,7 +1313,7 @@ function Conversation({ organizationId, topic, members, user, canWrite, canManag
       {topic.kind === "beta" && <BetaConversation organizationId={organizationId} topicId={topic.id} userId={user.id}
         canWrite={canWrite} canManage={canManage} online={online} toolbarTarget={composerButton} hidePlay={Boolean(draft.text.trim())}
         attempt={modelAttempt} onAttempt={onModelAttempt} onAuthLost={onAuthLost} onActivity={setBetaActivity} wake={messages.at(-1)?.sequence}
-        onRuns={setBetaRuns} addingTo={adding?.root.id} onAddTo={onAddTo}
+        onRuns={setBetaRuns} addingTo={adding?.root.id} onAddTo={onAddTo} onUndoAddition={undoFromReply}
         transcript={transcript} onReplyPending={refreshMessages} />}
       <BotConversation organizationId={organizationId} topicId={topic.id} names={botNames} userId={user.id}
         canWrite={canWrite} canManage={canManage} onActivity={setBotActivity} onAuthLost={onAuthLost} wake={messages.at(-1)?.sequence} />

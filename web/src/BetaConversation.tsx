@@ -8,9 +8,9 @@ import { OutputActions } from "./ChatFeedback";
 import { createPortal } from "react-dom";
 import { TransportControls, dispatchTopicCommand, useComputeActivity, useTopicCommand } from "./TopicCommands";
 import { useBotActivity } from "./BotPlayback";
-import { additionsSummary, replyThreads, threadRoot } from "./ReplyAdditions";
+import { replyThreads, replyTimeline, threadRoot } from "./ReplyAdditions";
 import {
-  ApiError, ModelAttempt, ModelRun, PendingModelAttempt, UNDESCRIBED_ERROR,
+  ApiError, ModelAttempt, ModelRun, PendingModelAttempt, ReplyAddition, UNDESCRIBED_ERROR,
   aborted, decimalBudget, errorMessage, organizationPath, request, sharedRequest, topicPath, usd,
 } from "./organization-api";
 
@@ -133,7 +133,7 @@ export const replacedByReply = (run: ModelRun, transcript?: LoadedTranscript) =>
 /** A queued request whose agent conversation is paused: it does not start until someone resumes it. */
 export const pausedRun = (run: ModelRun) => run.status === "queued" && run.agent?.thread_status === "paused";
 
-export function BetaConversation({ organizationId, topicId, userId, canWrite, canManage, online, attempt, onAttempt, onAuthLost, onActivity, toolbarTarget, hidePlay, wake, transcript, onReplyPending, onRuns, addingTo, onAddTo }: {
+export function BetaConversation({ organizationId, topicId, userId, canWrite, canManage, online, attempt, onAttempt, onAuthLost, onActivity, toolbarTarget, hidePlay, wake, transcript, onReplyPending, onRuns, addingTo, onAddTo, onUndoAddition }: {
   organizationId: string; topicId: string; userId: string; canWrite: boolean; canManage: boolean;
   online: boolean; attempt?: PendingModelAttempt; onAttempt: (attempt?: PendingModelAttempt) => void; onAuthLost: () => void;
   onActivity: (entries: TopicActivity[]) => void;
@@ -148,6 +148,8 @@ export function BetaConversation({ organizationId, topicId, userId, canWrite, ca
   onRuns?: (runs: ModelRun[]) => void;
   /** The root run the message box is adding to, and how its thread line starts adding. */
   addingTo?: string; onAddTo?: (rootRun: string) => void;
+  /** Undo one of your unread additions from the reply's timeline. */
+  onUndoAddition?: (addition: ReplyAddition) => void;
 }) {
   const [runs, setRuns] = useState<ModelRun[]>([]), [reconciled, setReconciled] = useState<ReadonlySet<string>>(new Set());
   const [threads, setThreads] = useState<{ root_run: string; status: string; reason?: string | null; requested_by: string; tasks: number }[]>([]);
@@ -288,11 +290,13 @@ export function BetaConversation({ organizationId, topicId, userId, canWrite, ca
       onReconciled={() => setReconciled(current => new Set(current).add(run.id))}
       canReact={canWrite}
       thread={canWrite && onAddTo && hosts.has(run.id) ? {
-        summary: additionsSummary(hosts.get(run.id)!.additions), selected: addingTo === hosts.get(run.id)!.root.id,
-        onAdd: () => onAddTo(hosts.get(run.id)!.root.id),
+        summary: addingTo === hosts.get(run.id)!.root.id ? "Adding to this reply" : "Add to this reply",
+        selected: addingTo === hosts.get(run.id)!.root.id, onAdd: () => onAddTo(hosts.get(run.id)!.root.id),
       } : undefined}
+      timeline={hosts.has(run.id) ? { additions: hosts.get(run.id)!.additions, userId,
+        onUndo: canWrite ? onUndoAddition : undefined } : undefined}
       onUpdated={() => setRefresh(value => value + 1)} onAuthLost={onAuthLost} />,
-  }))); }, [runs, reconciled, transcript, busy, online, connected, canWrite, canManage, userId, root, organizationId, topicId, onActivity, onAuthLost, addingTo, onAddTo]);
+  }))); }, [runs, reconciled, transcript, busy, online, connected, canWrite, canManage, userId, root, organizationId, topicId, onActivity, onAuthLost, addingTo, onAddTo, onUndoAddition]);
   return <section className="org-beta" aria-label="Agent activity">
     {toolbarTarget && createPortal(<TransportControls {...{ canPlay, canStop, hidePlay }}
       playTitle={attempt?.unconfirmed ? "Retry the unconfirmed reply request"
@@ -310,6 +314,25 @@ export function BetaConversation({ organizationId, topicId, userId, canWrite, ca
   </section>;
 }
 
+/**
+ * A running reply's steps, with each later message where the reply read it and unread ones waiting for the next step.
+ * A reply without additions keeps the one-line progress instead.
+ */
+export function ReplyTimeline({ run, active, additions, userId, onUndo }: {
+  run: ModelRun; active: boolean; additions: ReplyAddition[]; userId: string; onUndo?: (addition: ReplyAddition) => void;
+}) {
+  return <ol className="org-reply-timeline" aria-label="Reply steps and additions">{replyTimeline(run, additions, active).map(entry =>
+    entry.kind === "step"
+      ? <li key={entry.key} className="org-timeline-step" data-current={entry.current || undefined}
+        role={entry.current ? "status" : undefined} aria-label={entry.current ? "Research progress" : undefined}>{entry.label}{entry.current ? "…" : ""}</li>
+      : <li key={entry.key} className="org-timeline-addition" data-waiting={entry.waiting || undefined}>
+        <span className="org-timeline-text">{entry.addition.content ?? "Added message"}</span>
+        <small>{entry.waiting ? "next step" : entry.addition.read_step ? `read at step ${entry.addition.read_step}` : "read when it resumed"}</small>
+        {entry.waiting && onUndo && entry.addition.added_by === userId
+          && <button type="button" onClick={() => onUndo(entry.addition)}>Undo</button>}
+      </li>)}</ol>;
+}
+
 export function RunProgress({ run }: { run: ModelRun }) {
   if (!["queued", "running"].includes(run.status)) return null;
   if (pausedRun(run)) return <p role="status" className="org-paused" aria-label="Research progress">Paused · starts only when resumed</p>;
@@ -319,10 +342,12 @@ export function RunProgress({ run }: { run: ModelRun }) {
   return <p role="status" className="org-working" aria-label="Research progress">{progress}…</p>;
 }
 
-function BetaRunCard({ root, organizationId, topicId, run, canManage, canControl, canReact, awaiting, thread, onReconciled, onUpdated, onAuthLost }: {
+function BetaRunCard({ root, organizationId, topicId, run, canManage, canControl, canReact, awaiting, thread, timeline, onReconciled, onUpdated, onAuthLost }: {
   root: string; organizationId: string; topicId: string; run: ModelRun; canManage: boolean; canReact: boolean;
-  /** The thread line of a running reply: its additions, and a button that adds the next message to it. */
+  /** The thread line of a running reply: a button that adds the next message to it. */
   thread?: { summary: string; selected: boolean; onAdd: () => void };
+  /** A running reply's additions, shown in its timeline where they were read. */
+  timeline?: { additions: ReplyAddition[]; userId: string; onUndo?: (addition: ReplyAddition) => void };
   /** The requester or an administrator may resume or cancel a paused request. */
   canControl: boolean; onReconciled: () => void;
   /** Finished, with its reply message not yet shown: the output stays expanded until the message replaces it. */
@@ -344,11 +369,12 @@ function BetaRunCard({ root, organizationId, topicId, run, canManage, canControl
       {!active && run.error_code && <span title={run.diagnostics?.message}>{run.diagnostics?.http_status ? `HTTP ${run.diagnostics.http_status}` : run.error_code.replaceAll("_", " ")}</span>}
       {run.actual_microusd != null && <small>{usd(run.actual_microusd)}</small>}
     </summary>
+    {timeline?.additions.length && replyTimeline(run, timeline.additions, active).length
+      ? <ReplyTimeline run={run} active={active} {...timeline} /> : <RunProgress run={run} />}
     {thread && <button type="button" className={"org-thread-line" + (thread.selected ? " org-thread-line-selected" : "")}
       aria-pressed={thread.selected} title="Add your next message to this reply" onClick={thread.onAdd}>
       <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round"
-        strokeLinejoin="round" aria-hidden="true"><path d="m9 6 6 6-6 6" /></svg>{thread.summary}</button>}
-    <RunProgress run={run} />
+        strokeLinejoin="round" aria-hidden="true"><path d="M12 5v14M5 12h14" /></svg>{thread.summary}</button>}
     {paused && <div className="org-run-paused">
       <p className="org-help">This request was paused before it started, for example by Stop (■). {run.reserved_microusd ? `Its internal hold of ${usd(run.reserved_microusd)} is not a charge.` : ""}</p>
       {canControl && <span><button type="button" disabled={busy} onClick={() => control(topicPath(organizationId, topicId) + "/agents/" + run.agent!.root_run + "/control", { status: "active" })}>Resume</button>

@@ -37,13 +37,6 @@ export function moveBlocked(runs: ModelRun[], message: Message, userId: string):
 
 export const modelName = (model: string) => model.split("/").at(-1) ?? model;
 
-/** The thread line under a running reply: what was added and what it has read. */
-export function additionsSummary(additions: ReplyAddition[]): string {
-  if (!additions.length) return "Add to this reply";
-  const read = additions.filter(addition => addition.read_at !== null).length;
-  return `${additions.length} addition${additions.length === 1 ? "" : "s"} · ${read} read · ${additions.length - read} waiting`;
-}
-
 /** The receipt under an added message. */
 export function additionReceipt(addition: ReplyAddition, model: string, active: boolean): string {
   const name = modelName(model);
@@ -54,3 +47,60 @@ export function additionReceipt(addition: ReplyAddition, model: string, active: 
   }
   return active ? `${lead} · waiting for its next step${cancelled}` : `${lead} · it finished before reading this${cancelled}`;
 }
+
+/**
+ * An added message shows in its reply's timeline while the reply runs, and folded under the answer that read it.
+ * Anywhere else (a reply that finished before reading it, or failed without an answer) it stays in the transcript.
+ */
+export const shownInReply = (addition: ReplyAddition | undefined, active: boolean, folded: ReadonlySet<string>) =>
+  Boolean(addition && (active || folded.has(addition.message_id)));
+
+export type TimelineEntry =
+  | { kind: "step"; key: string; label: string; current: boolean }
+  | { kind: "addition"; key: string; addition: ReplyAddition; waiting: boolean };
+
+const tool = (name: string) => name.replaceAll("_", " ");
+
+/**
+ * A reply's steps in order, each with the tools it used, and every addition where the reply read it: an addition is
+ * read just before the provider call that starts a step. Unread additions follow the last step while the reply runs.
+ */
+export function replyTimeline(run: ModelRun, additions: ReplyAddition[], active: boolean): TimelineEntry[] {
+  const entries: TimelineEntry[] = [], byId = new Map(additions.map(addition => [addition.message_id, addition]));
+  let step: { round: number; tools: string[]; writing: boolean; using?: string } | null = null;
+  const close = () => {
+    if (!step) return;
+    const tools = [...new Set(step.tools)].map(tool).join(", ");
+    entries.push({ kind: "step", key: "step-" + step.round, current: false,
+      label: `Step ${step.round}` + (tools ? ` · used ${tools}` : "") + (step.writing ? " · writing the answer" : "")
+        + (step.using ? ` · using ${tool(step.using)}` : "") });
+    step = null;
+  };
+  for (const event of run.activity ?? []) {
+    if (event.phase === "round") { close(); step = { round: event.round ?? entries.length + 1, tools: [], writing: false }; }
+    else if (event.phase === "tool_requested" && step && event.tool) step.using = event.tool;
+    else if (event.phase === "tool_completed" && step && event.tool) { step.tools.push(event.tool); step.using = undefined; }
+    else if (event.phase === "answer_ready" && step) step.writing = true;
+    else if (event.phase === "additions_read") {
+      close();
+      for (const id of event.message_ids ?? []) {
+        const addition = byId.get(id);
+        if (addition) entries.push({ kind: "addition", key: "addition-" + id, addition, waiting: false });
+      }
+    } else if (["compacting", "compaction_failed", "compaction_skipped", "delegated"].includes(event.phase)) {
+      close();
+      entries.push({ kind: "step", key: "event-" + event.sequence, current: false,
+        label: event.summary ?? (event.phase === "delegated" ? "Delegated work" : "Summarizing earlier messages") });
+    }
+  }
+  close();
+  const last = entries.map(entry => entry.kind).lastIndexOf("step");
+  if (active && last >= 0) entries[last] = { ...entries[last], current: true } as TimelineEntry;
+  if (active) {
+    for (const addition of additions.filter(item => item.read_at === null)) {
+      entries.push({ kind: "addition", key: "addition-" + addition.message_id, addition, waiting: true });
+    }
+  }
+  return entries;
+}
+

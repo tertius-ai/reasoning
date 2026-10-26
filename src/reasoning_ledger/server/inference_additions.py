@@ -164,8 +164,18 @@ def view(row) -> dict:
 
 
 def for_run(db, org: str, run_id: str) -> list[dict]:
-    return [view(row) for row in db.execute(
-        "SELECT * FROM inference_additions WHERE organization_id=? AND run_id=? ORDER BY created_at,message_id", (org, run_id))]
+    """A reply thread's additions with their text, so the reply's card can show them where they were read."""
+    return [{**view(row), "content": row["content"]} for row in db.execute(
+        "SELECT a.*,m.content FROM inference_additions a JOIN messages m ON m.organization_id=a.organization_id "
+        "AND m.id=a.message_id WHERE a.organization_id=? AND a.run_id=? ORDER BY m.sequence", (org, run_id))]
+
+
+def read_by_reply(db, run) -> list[dict]:
+    """The additions a reply's thread read, for its posted answer."""
+    from .topic_agents import TopicAgents
+
+    return [addition for addition in for_run(db, run["organization_id"], TopicAgents.root(db, run))
+            if addition["read_at"] is not None]
 
 
 def for_message(db, org: str, message_id: str) -> dict | None:

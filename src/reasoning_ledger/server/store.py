@@ -1193,6 +1193,15 @@ class Store:
                              "FROM llm_runs WHERE organization_id=? AND id=?",
                              (result["organization_id"], result["inference_run_id"])).fetchone()
             result["usage"] = footprint(run) if run is not None else None
+            reply = db.execute("SELECT id,organization_id,request_id FROM llm_runs WHERE organization_id=? AND id=?",
+                               (result["organization_id"], result["inference_run_id"])).fetchone()
+            if reply is not None:
+                from .inference_additions import read_by_reply
+
+                # The later messages this answer took into account, folded under it in the transcript.
+                additions = read_by_reply(db, reply)
+                if additions:
+                    result["additions"] = additions
             assignment = db.execute("SELECT snapshot_json FROM research_contexts WHERE request_id="
                                     "(SELECT request_id FROM llm_runs WHERE id=?)", (result["inference_run_id"],)).fetchone()
             if assignment:

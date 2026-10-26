@@ -951,8 +951,9 @@ generation, on a bounded schedule and without replaying the request; see
 [inference accounting](inference.md). Administrators can record a verified
 provider cost for a run that stays uncertain. Unsent composer text
 is never included in a model request. A later message can join a running
-reply instead of starting its own, from the reply's thread line, ↩ on its
-question, or a posted message's actions menu; see [inference](inference.md).
+reply instead of starting its own, from **Add to this reply** under the reply's
+timeline, ↩ on its question, or a posted message's actions menu; see
+[inference](inference.md).
 The account menu's **My bots** provides personal bot connections bounded by the
 member's current permissions. **Follow my access** resolves all owner-visible
 topics dynamically, including newly created private topics. Explicit-only grants

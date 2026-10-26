@@ -33,9 +33,12 @@ Sending a human message captures context through that committed message and
 requests the model selected beside Send.
 
 A later message can join a reply that is still running instead of starting
-its own. A running reply's card shows a thread line (**Add to this reply**, or
-the count of added messages read and waiting); clicking it, or ↩ on the question
-it answers, puts the message box into thread mode. The box then shows an
+its own. Once a running reply has additions, its card shows a timeline instead
+of its one-line progress: each step with the tools it used, the current step,
+and every added message where the reply read it (just before the step whose
+provider call first carried it), with unread additions after the last step
+marked **next step**. **Add to this reply** below it, or ↩ on the question it
+answers, puts the message box into thread mode. The box then shows an
 **Adding to … reply** bar, the attachment plus inside the box, and no model or
 effort controls, because an addition uses the running reply's model and effort.
 Esc or × returns to the usual box and keeps the text. Thread mode sends
@@ -47,8 +50,12 @@ can also move into the latest running reply to an earlier question from its
 **Message actions** menu, but only while that message's own reply is still
 queued; moving cancels that reply before it starts, releasing its reservation.
 Only the author adds or moves a message, and only a message posted after the
-question. **Undo** removes an addition the reply has not read; undoing a move
-requests the message's own reply again.
+question. **Undo**, on an unread addition in the timeline, removes it and
+returns the message to the transcript; undoing a move requests the message's own
+reply again. An added message appears in the reply's timeline instead of the
+transcript while the reply runs. Once the answer is posted, it lists the
+additions its reply read under **Took N later messages into account**, folded,
+with the step at which each was read.
 
 A reply and its agent continuations form one thread named by the reply's root
 run, and additions belong to that thread. Before each provider call of a
@@ -58,8 +65,11 @@ of source-message records, so every later call keeps them, and records the
 `additions_read` event with the call's step. A continuation that recompiles the
 topic after delegated work already carries those messages and records them read
 at step 0. Additions never replay or restart a provider call. An addition the
-thread did not read before it finished stays unread, and its message shows that
-it is not in the answer. Attached files of an added message reach the reply as
+thread did not read before it finished stays unread and returns to the
+transcript, where its message shows that it is not in the answer; so does an
+addition read by a reply that failed without an answer. A run's activity
+includes its `additions_read` events with their message IDs and step, and its
+additions include each added message's text, in transcript order. Attached files of an added message reach the reply as
 their links only. Chat, goal turns, and independent
 reviews do not impose an application output-token cap by default. Provider
 output/context capacity still applies. Reservations use an 8,192-output-token

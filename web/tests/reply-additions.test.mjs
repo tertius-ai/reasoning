@@ -31,9 +31,7 @@ test("a later message moves into the latest running reply, unless its own reply 
   assert.match(additions.moveBlocked([run("own", "running", 5)], { sequence: 5 }, "me"), /has started/);
 });
 
-test("the thread line and receipts say what was added and what the reply has read", () => {
-  assert.equal(additions.additionsSummary([]), "Add to this reply");
-  assert.equal(additions.additionsSummary([added("a", 3), added("b")]), "2 additions · 1 read · 1 waiting");
+test("receipts say where an addition went and whether the reply has read it", () => {
   assert.equal(additions.additionReceipt(added("a"), "moonshotai/kimi-k3", true), "Added to kimi-k3's reply · waiting for its next step");
   assert.equal(additions.additionReceipt(added("a", 8), "moonshotai/kimi-k3", true), "Added to kimi-k3's reply · read at step 8");
   assert.equal(additions.additionReceipt(added("a", 0), "moonshotai/kimi-k3", false), "Added to kimi-k3's reply · read when the reply resumed");
@@ -41,3 +39,32 @@ test("the thread line and receipts say what was added and what the reply has rea
   assert.equal(additions.additionReceipt(added("a", null, { moved: true, cancelled_runs: ["own"] }), "moonshotai/kimi-k3", true),
     "Moved into kimi-k3's reply · waiting for its next step; its own reply was cancelled before it started");
 });
+
+const event = (sequence, phase, extra = {}) => ({ sequence, phase, ...extra });
+
+test("the timeline groups each step's tools and places additions where the reply read them", () => {
+  const activity = [event(1, "round", { round: 1 }), event(2, "tool_requested", { tool: "arxiv_search" }),
+    event(3, "tool_completed", { tool: "arxiv_search" }), event(4, "additions_read", { step: 2, message_ids: ["a"] }),
+    event(5, "round", { round: 2 }), event(6, "tool_completed", { tool: "arxiv_read" }), event(7, "tool_completed", { tool: "arxiv_read" }),
+    event(8, "round", { round: 3 }), event(9, "tool_requested", { tool: "web_fetch" })];
+  const list = [added("a", 2, { content: "Skip French sources." }), added("b", null, { content: "Also cover p-adic regulators." })];
+  const entries = additions.replyTimeline(run("root", "running", 4, { activity }), list, true);
+  assert.deepEqual(entries.map(entry => entry.kind === "step" ? entry.label : `${entry.waiting ? "waiting" : "read"}:${entry.addition.content}`), [
+    "Step 1 · used arxiv search", "read:Skip French sources.", "Step 2 · used arxiv read", "Step 3 · using web fetch",
+    "waiting:Also cover p-adic regulators.",
+  ]);
+  assert.deepEqual(entries.filter(entry => entry.kind === "step").map(entry => entry.current), [false, false, true]);
+  const finished = additions.replyTimeline(run("root", "succeeded", 4, { activity }), list, false);
+  assert.equal(finished.some(entry => entry.kind === "addition" && entry.waiting), false, "a finished reply lists no waiting additions");
+  assert.equal(finished.some(entry => entry.kind === "step" && entry.current), false);
+});
+
+test("an added message leaves the transcript only while its reply runs or once an answer lists it", () => {
+  const folded = new Set(["a"]);
+  assert.equal(additions.shownInReply(undefined, true, folded), false);
+  assert.equal(additions.shownInReply(added("b"), true, folded), true, "shown in the running reply's timeline");
+  assert.equal(additions.shownInReply(added("a", 2), false, folded), true, "folded under the answer that read it");
+  assert.equal(additions.shownInReply(added("c", 2), false, folded), false, "a reply that failed after reading it has no answer");
+  assert.equal(additions.shownInReply(added("d"), false, folded), false, "a reply that finished before reading it");
+});
+
