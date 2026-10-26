@@ -89,7 +89,8 @@ export function OrganizationShell() {
       request<{ initialized: boolean }>("/health", { signal: controller.signal })
         .then(health => { if (!controller.signal.aborted) setInitialized(health.initialized); }).catch(failure),
       request<Account>("/auth/me", { signal: controller.signal })
-        .then(account => { if (!controller.signal.aborted && !resetToken) setUser(account); }).catch(failure),
+        // A signed-in account opens the workspace at once; slower startup reads such as health never hold it back.
+        .then(account => { if (!controller.signal.aborted && !resetToken) { setUser(account); setLoading(false); } }).catch(failure),
     ]).finally(() => { if (!controller.signal.aborted) setLoading(false); });
     return () => { controller.abort(); window.removeEventListener("hashchange", readLinks); };
   }, []);
