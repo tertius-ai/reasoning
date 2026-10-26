@@ -210,9 +210,17 @@ compaction calls within its time and inference cost budgets. Output limits apply
 per provider call; summary output does not reduce the final answer's ceiling.
 Memory preserves goals, definitions, notation, hypotheses, claim status,
 unresolved questions, decisions, citations, artifacts and next steps.
-Every memory item must cite an actual original source message. Revisions
-are immutable, source digests are retained, and original conversation records
-remain readable. Invalid compaction fails the turn without discarding sources.
+Every memory item must cite an actual original source message. A summary
+wrapped in a code fence or prose is read as its JSON object, omitted fields are
+empty, and items without an actual source or over 4,000 characters are dropped,
+never shortened; a summary that keeps no item is rejected. Revisions are
+immutable, source digests are retained, and original conversation records remain
+readable. A rejected summary keeps the memory saved by earlier batches and does
+not fail the turn: the turn answers from that memory and the recent messages,
+the model is told which earlier messages are missing so it can recover them
+with history tools, and the reply ends with a note that earlier messages were
+not summarized. The same batch is not summarized again in that topic for six
+hours, so later turns answer the same way without paying for it again.
 The expandable **System prompt** message at the top of every beta topic shows
 versioned instructions for new turns using the chat's Markdown and mathematics
 styles. Opening it suspends automatic scrolling while it is being read.

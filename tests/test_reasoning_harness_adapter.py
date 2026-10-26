@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 
 from reasoning_ledger.agents import PreparedTool, RunBudget
-from reasoning_ledger.agents.research_memory import COMPACTION_PROMPT, MEMORY_FIELDS
+from reasoning_ledger.agents.research_memory import COMPACTION_PROMPT, MEMORY_FIELDS, memory_from_reply
 from reasoning_ledger.harnesses import (
     ExecutionTargetCapabilities,
     ExecutionTargetKind,
@@ -481,3 +481,18 @@ def test_reasoning_adapter_interrupts_an_active_provider_boundary(tmp_path):
     assert events[-2].kind is HarnessEventKind.CHECKPOINT_CREATED
     assert events[-1].kind is HarnessEventKind.TURN_INTERRUPTED
     assert validate_harness_trace(adapter.capabilities, tuple(events), result).valid is True
+
+
+def test_compaction_replies_close_to_the_contract_keep_only_cited_items():
+    source, sources = "a" * 32, {"a" * 32}
+    item = {"text": "V is finite-dimensional.", "sources": [source, "invented"]}
+    reply = "Memory follows.\n```json\n" + json.dumps({"definitions": [item], "claims": [{"text": "x" * 4001, "sources": [source]}],
+                                                       "extra": [item]}) + "\n```"
+    memory = memory_from_reply(reply, sources)
+    assert set(memory) == set(MEMORY_FIELDS)
+    assert memory["definitions"] == [{"text": "V is finite-dimensional.", "sources": [source]}]
+    assert memory["claims"] == [], "an over-long item is dropped, never shortened"
+    for refused in ("no JSON here", "[1, 2]", json.dumps({"goals": [{"text": "uncited", "sources": ["invented"]}]}),
+                    json.dumps({field: [] for field in MEMORY_FIELDS})):
+        with pytest.raises(ValueError):
+            memory_from_reply(refused, sources)

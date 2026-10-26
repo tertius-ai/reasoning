@@ -8,7 +8,8 @@ import time
 
 from ..agents.contracts import AgentEventKind, AgentRunSpec, PreparedAgentRun, PromptBinding, RunBudget, ToolBinding
 from ..agents.native import ReasoningNativeExecutor
-from .research_context import COMPACTION_PROMPT, ResearchContext, encoded, token_bound, validate_memory
+from ..agents.research_memory import memory_from_reply
+from .research_context import COMPACTION_PROMPT, ResearchContext, encoded, token_bound
 from .research_goals import ResearchGoals
 from .research_provider import ResearchCompletion
 from .research_tools import ResearchTools
@@ -17,6 +18,10 @@ from .store import StoreError
 
 class TurnSuspended(BaseException):
     """Deterministic scheduler handoff, bypassing provider retry/error handlers."""
+
+
+# A batch whose summary was rejected is not summarized again within this many seconds; turns answer without it.
+COMPACTION_RETRY_SECONDS = 6 * 3600
 
 
 def execution_error(result, finish_reason):
@@ -52,12 +57,18 @@ class ResearchAgent:
         self.client.cancelled = self._stopped
 
     def _compact(self, messages, metadata):
+        """Summarize the messages before the recent tail, batch by batch, and recompile the context.
+
+        Returns the context, its snapshot and, when a batch's summary was rejected, that batch's range. Earlier batches
+        keep their saved memory; the rejected batch and later ones stay out of the context.
+        """
         through = metadata["compact_through_sequence"]
         with self.store.transaction() as db:
             old = self.context.memory(db, self.row["organization_id"], self.row["topic_id"], metadata["through_sequence"],
                                       metadata.get("message_edit_sequence", 0))
         memory = json.loads(old["body_json"]) if old else None
         after = old["through_sequence"] if old else 0
+        failed = None
         batch_limit = max(1024, min(24_000, self.quote.context_length // 4))
         for batch in self.context.batches(self.row["organization_id"], self.row["topic_id"], after, through, batch_limit,
                                          edit_cutoff=metadata.get("message_edit_sequence", 0)):
@@ -81,10 +92,13 @@ class ResearchAgent:
                 sources |= {source for items in memory.values() for item in items for source in item["sources"]}
             raw = result["choices"][0]["message"].get("content") or ""
             try:
-                memory = validate_memory(json.loads(raw), sources)
+                memory = memory_from_reply(raw, sources)
             except (ValueError, TypeError):
-                raise StoreError(409, "compaction failed validation; original transcript is preserved") from None
+                failed = {"after": after, "through": batch[-1]["sequence"]}
+                self._event("compaction_failed", {**failed, "summary": "Couldn't summarize earlier messages; answering from recent ones"})
+                break
             self.context.save_memory(self.row, batch[-1]["sequence"], memory, sorted(sources))
+            after = batch[-1]["sequence"]
         with self.store.transaction() as db:
             compiled, snapshot = self.context.compile(
                 db,
@@ -100,7 +114,21 @@ class ResearchAgent:
                     "prompt_profile": metadata.get("prompt_profile", "workbench"),
                 },
             )
-        return compiled, snapshot
+        return compiled, snapshot, failed
+
+    def _compaction_failed_recently(self, after):
+        """Whether a turn of this topic rejected the summary of the batch starting after `after` within the retry window."""
+        with self.store.transaction() as db:
+            rows = db.execute(
+                "SELECT e.event_json FROM llm_events e JOIN llm_runs r ON r.organization_id=e.organization_id AND r.id=e.run_id "
+                "JOIN llm_requests q ON q.id=r.request_id "
+                "WHERE r.organization_id=? AND q.topic_id=? AND e.created_at>=? AND e.event_json LIKE ? "
+                "ORDER BY e.sequence DESC LIMIT 20",
+                (self.row["organization_id"], self.row["topic_id"], int(time.time()) - COMPACTION_RETRY_SECONDS,
+                 '%"compaction_failed"%'),
+            ).fetchall()
+        return any(json.loads(row[0]).get("phase") == "compaction_failed" and json.loads(row[0]).get("after") == after
+                   for row in rows)
 
     def _remaining_output(self):
         maximum = json.loads(self.row["parameters_json"])["max_completion_tokens"]
@@ -179,14 +207,21 @@ class ResearchAgent:
             self.tools = ResearchTools(self.inference, self.row, compute=self.compute, workflows=self.workflows)
             spans.mark("tool_permissions")
             compacted = bool(metadata and metadata["compact_through_sequence"] > metadata["memory_through_sequence"])
+            missing = None
+            if compacted and self._compaction_failed_recently(metadata["memory_through_sequence"]):
+                compacted, missing = False, metadata["compact_through_sequence"]
+                self._event("compaction_skipped", {"after": metadata["memory_through_sequence"], "through": missing,
+                    "summary": "Earlier messages stay unsummarized after a recent failure; answering from recent ones"})
             if compacted:
                 # Completion purpose is pinned for the summarizer's individual call receipt.
                 previous = self.client.complete
                 self.client.complete = lambda payload, timeout: self._compaction_complete(payload, timeout)
                 try:
-                    messages, metadata = self._compact(messages, metadata)
+                    messages, metadata, failed = self._compact(messages, metadata)
                 finally:
                     self.client.complete = previous
+                if failed:
+                    missing = metadata["compact_through_sequence"]
                 # Only revisions actually delivered by the refreshed context count as read.
                 from ..service import RevisionObservations
 
@@ -200,6 +235,10 @@ class ResearchAgent:
                         "UPDATE research_contexts SET snapshot_json=? WHERE request_id=?", (encoded(metadata), self.row["request_id"])
                     )
                 spans.mark("snapshot_write")
+            if missing is not None:
+                # Say what the context omits, so the model recovers those messages instead of assuming they are absent.
+                messages = [*messages[:-1], {"role": "system", "content": f"Messages up to sequence {missing} could not be "
+                            "summarized and are not in this context. Recover any that matter with the history tools."}, messages[-1]]
             available = self.tools.available() if self.quote.supports_tools and metadata is not None \
                 and not metadata.get("workflow_context_sha256") else []
             prepared_tools = self.tools.registry.prepared(available)
