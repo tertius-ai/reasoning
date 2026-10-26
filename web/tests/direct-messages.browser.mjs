@@ -89,11 +89,13 @@ test("a member messages a colleague from People, who finds, reads and replies, t
     await owner.getByRole("button", { name: "Administration" }).click();
     const administration = owner.getByRole("dialog");
     await administration.getByRole("button", { name: "Feedback", exact: true }).click();
-    const report = administration.getByRole("listitem").filter({ hasText: "The reply pointer stays highlighted." });
-    await visible(report);
-    assert.match(await report.innerText(), /Researcher/);
+    // Reports are grouped by status and collapsed to their first line; expanding one shows its reporter and actions.
+    await administration.getByRole("list", { name: "Open reports" }).getByRole("button", { name: /The reply pointer stays highlighted/ }).click();
+    const report = administration.getByRole("listitem").filter({ hasText: "Researcher ·" });
+    await visible(report.getByRole("button", { name: "Copy report", exact: true }));
     await report.getByRole("button", { name: "Resolve", exact: true }).click();
-    await visible(report.getByRole("button", { name: "Reopen", exact: true }));
+    await administration.getByRole("button", { name: /^Resolved/ }).click();
+    await visible(administration.getByRole("list", { name: "Resolved reports" }).getByRole("button", { name: "Reopen", exact: true }));
     await administration.getByRole("button", { name: "Close dialog" }).click();
 
     // The owner clicks the member's name in People and sends a private message.
