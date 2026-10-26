@@ -15,7 +15,7 @@ from .research_profiles import SYSTEM_PROMPT as SYSTEM_PROMPT
 from .research_profiles import instructions, topic_instructions
 from .store import StoreError, _row
 
-HARNESS_VERSION = "reasoning-native-topic-agents-v6"
+HARNESS_VERSION = "reasoning-native-topic-agents-v7"
 
 
 def encoded(value) -> str:
@@ -38,6 +38,18 @@ def source_message(row, db=None, edit_cutoff=None) -> dict:
         if historical:
             content = historical[0]
     return {"id": row["id"], "sequence": row["sequence"], "sender": sender, "kind": row["sender_kind"], "text": content}
+
+
+def unwrapped_reply(text: str) -> str:
+    """A reply that imitates one source message record carries only its ``text``."""
+    try:
+        value = json.loads(text)
+    except ValueError:
+        return text
+    if isinstance(value, dict) and isinstance(value.get("text"), str) and len(value) > 1 \
+            and set(value) <= {"id", "sequence", "sender", "kind", "text"}:
+        return value["text"]
+    return text
 
 
 def validate_memory(value: object, sources: set[str]) -> dict:
@@ -279,17 +291,22 @@ class ResearchContext:
                 break
             full = False
             for row in rows:
-                message = {
-                    "role": "assistant" if row["sender_kind"] == "assistant" else "user",
-                    "content": encoded(source_message(row, db, edit_cutoff)),
-                }
-                size = token_bound(message)
+                record = source_message(row, db, edit_cutoff)
+                if row["sender_kind"] == "assistant":
+                    # Earlier replies are plain prose; record-shaped assistant turns teach models to answer
+                    # as records. A preceding note keeps their identity and model attribution.
+                    metadata = {key: value for key, value in record.items() if key != "text"}
+                    messages = [{"role": "system", "content": "Next assistant turn (reference data): " + encoded(metadata)},
+                                {"role": "assistant", "content": record["text"]}]
+                else:
+                    messages = [{"role": "user", "content": encoded(record)}]
+                size = sum(token_bound(message) for message in messages)
                 if used + size > target and recent:
                     full = True
                     break
                 if used + size > window - 512:
                     raise StoreError(400, "the latest message exceeds this model's context capacity")
-                recent.append((row["sequence"], message))
+                recent.extend((row["sequence"], message) for message in reversed(messages))
                 used += size
             if full:
                 break
@@ -321,7 +338,8 @@ class ResearchContext:
                 {
                     "role": "user",
                     "content": "Respond to the latest source message. Continue the active goal if present; "
-                    "use goal_checkpoint to record evidence and completion.",
+                    "use goal_checkpoint to record evidence and completion. Source messages are JSON records for "
+                    "reference; reply in plain Markdown, never as such a record.",
                 }
             ]
         )

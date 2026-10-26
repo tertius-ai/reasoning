@@ -793,3 +793,35 @@ def test_native_tool_round_retains_streamed_opaque_reasoning(installation):
     assert assistant["reasoning_details"] == [
         {"index": 0, "type": "reasoning.encrypted", "id": "opaque-1", "data": "exact-continuation", "format": "fixture-v1"}
     ]
+
+
+def test_earlier_replies_reach_the_model_as_plain_text_and_record_replies_are_unwrapped(installation):
+    from reasoning_ledger.server.research_answers import retained_answer
+
+    state, owner, topics, _, _ = source_run(installation)
+    org, topic, user = owner["organization_id"], topics[1]["id"], owner["user_id"]
+    question = state.store.post_message(user, org, topic, "Is this thing on?", "plain-question")
+    with state.store.transaction(write=True) as db:
+        reply = state.store._post_message(db, user, org, topic, "Yes, still on.", "plain-reply", sender_kind="assistant")
+        db.execute("UPDATE messages SET author_kind='assistant',assistant_model='openai/gpt-6.1-sol' WHERE id=?", (reply["id"],))
+    follow = state.store.post_message(user, org, topic, "Good.", "plain-follow")
+    with state.store.transaction() as db:
+        messages = ResearchContext(state.store).compile(db, org, topic, follow["sequence"], QUOTES, user=user)[0]
+    turn = messages.index({"role": "assistant", "content": "Yes, still on."})
+    note = messages[turn - 1]
+    assert note["role"] == "system" and note["content"].startswith("Next assistant turn (reference data): ")
+    assert json.loads(note["content"].split(": ", 1)[1]) == {
+        "id": reply["id"], "sequence": reply["sequence"], "sender": "openai/gpt-6.1-sol", "kind": "assistant"}
+    assert not any(message["role"] == "assistant" and message["content"].lstrip().startswith("{") for message in messages)
+    records = [json.loads(message["content"]) for message in messages if message["role"] == "user" and message["content"].startswith("{")]
+    assert [record["id"] for record in records if record["text"] == "Is this thing on?"] == [question["id"]]
+    assert "never as such a record" in messages[-1]["content"]
+
+    record = json.dumps({"id": "a1b2c3d4e5f6478899aabbccddee01", "kind": "assistant", "sender": "openai/gpt-6.1-sol",
+                         "sequence": 667, "text": "Yes, still on!"})
+    with state.store.transaction() as db:
+        row = {"organization_id": org, "id": "f" * 32, "status": "succeeded", "error_code": None}
+        assert retained_answer(db, {**row, "output_text": record}, "succeeded", None) == "Yes, still on!"
+        # Ordinary JSON answers and objects beyond the record fields stay exactly as written.
+        for text in ('{"text": "only a text field"}', '{"text": "t", "verdict": "proved"}', "[1, 2]", "Plain *Markdown*."):
+            assert retained_answer(db, {**row, "output_text": text}, "succeeded", None) == text

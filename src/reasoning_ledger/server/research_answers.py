@@ -2,6 +2,8 @@
 
 import json
 
+from .research_context import unwrapped_reply
+
 
 def answer_state(db, row, *, status=None, error=None):
     latest = {}
@@ -24,7 +26,7 @@ def answer_state(db, row, *, status=None, error=None):
 def retained_answer(db, row, status, error):
     state = answer_state(db, row, status=status, error=error)
     checkpoint = state["checkpoint"]
-    text = row["output_text"]
+    text = unwrapped_reply(row["output_text"])
     if not text.strip() and not checkpoint:
         return ""
     if checkpoint and (not text.strip() or status != "succeeded" or state["status"] == "waiting"):

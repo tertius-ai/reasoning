@@ -180,7 +180,11 @@ Context is layered, not a fixed last-N-message buffer:
 - Relevant exact ledger statements/revisions, recent independent reviews,
   durable tasks, and a bounded project-file index.
 - A token-budgeted recent dialogue tail; original messages and receipts remain
-  available through scoped recovery tools.
+  available through scoped recovery tools. Human and bot messages are JSON
+  records with their ID, sequence and sender. Earlier model replies are plain
+  assistant turns, each preceded by a system note with its ID, sequence and
+  model. The final instruction asks for a plain Markdown reply. A reply that is
+  exactly one such record is posted as its `text`.
 
 In `/tools`, **Default knowledge scope** selects the account's linked working
 set, the current topic, or authorized project knowledge. The default working set
