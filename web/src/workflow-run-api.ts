@@ -8,12 +8,15 @@ export type WorkflowNodeAttempt = {
   error_code: string | null; inputs_digest: string | null; compute_job_id: string | null; inference_run_id: string | null;
   bot_run_id?: string | null;
   approved_by: string | null; approval_decision: "approve" | "reject" | null;
+  /** What the child did, known even while its charge is uncertain. */
+  outcome?: string; cost_unknown?: boolean;
 };
 export type WorkflowRunSummary = {
   sequence: number; id: string; organization_id: string; topic_id: string; workflow_id: string; definition_version: number; definition_digest: string;
   requested_by: string; client_id: string; created_at: number; status: WorkflowRunStatus; revision: number;
   cancel_requested: number; restore_fenced: number; capacity_released?: number; finished_at: number | null; name?: string; has_output_caps?: number;
   comparison?: { question: string; models: string[] } | null;
+  outcome?: string; cost_unknown?: boolean;
 };
 export type WorkflowRun = WorkflowRunSummary & {
   definition: WorkflowDefinition; definition_digest: string; node_order: string[]; images: Record<string, unknown>;
@@ -36,6 +39,9 @@ export type WorkflowActionReceipt = {
 
 export const workflowRunPath = (organizationId: string, runId: string) =>
   organizationPath(organizationId) + "/workflow-runs/" + encodeURIComponent(runId);
+/** A known outcome with an uncertain charge reads by what happened, then "cost unknown". */
+export const workflowStatusLabel = (value: { status: string; outcome?: string; cost_unknown?: boolean }) =>
+  (value.outcome ?? value.status).replaceAll("_", " ") + (value.cost_unknown ? " · cost unknown" : "");
 export const terminalWorkflow = (run: WorkflowRunSummary) => ["succeeded", "failed", "cancelled"].includes(run.status);
 export const canControlWorkflow = (run: WorkflowRunSummary, userId: string, canWrite: boolean, canManage: boolean) =>
   canWrite && !run.restore_fenced && (run.requested_by === userId || canManage);

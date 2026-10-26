@@ -37,6 +37,27 @@ test("collapsed and expanded comparison cards retain the entire question and mod
   }
 });
 
+test("a cancelled comparison with an uncertain charge reads cancelled, cost unknown, from the first paint", () => {
+  const question = "Which models agree?";
+  const card = renderToStaticMarkup(React.createElement(components.WorkflowActivityCard, {
+    run: { status: "outcome_unknown", outcome: "cancelled", cost_unknown: true, created_at: 1700000000,
+      comparison: { question, models: ["moonshotai/kimi-k3", "openai/gpt-6-astra"] } },
+    initiallyOpen: false,
+  }, null));
+  assert.match(card, /data-status="cancelled"/); assert.match(card, /cancelled · cost unknown/);
+  assert.doesNotMatch(card, /outcome unknown/);
+  const node = { organization_id: org, run_id: runId, node_id: "model_1", attempt: 1, kind: "llm", status: "outcome_unknown",
+    outcome: "cancelled", cost_unknown: true, created_at: 1, finished_at: null, error_code: "cancelled", inputs_digest: null,
+    compute_job_id: null, inference_run_id: "f".repeat(32), approved_by: null, approval_decision: null };
+  const answer = renderToStaticMarkup(React.createElement(components.ComparisonAnswer, {
+    organizationId: org, topicId: topic, node, model: "moonshotai/kimi-k3", canWrite: false, onAuthLost: () => {},
+  }));
+  assert.match(answer, /data-status="cancelled"/); assert.match(answer, /<span>cancelled · cost unknown<\/span>/);
+  assert.doesNotMatch(answer, /outcome_unknown|outcome unknown/);
+  assert.equal(api.workflowStatusLabel({ status: "outcome_unknown" }), "outcome unknown");
+  assert.equal(api.workflowStatusLabel({ status: "outcome_unknown", outcome: "failed", cost_unknown: true }), "failed · cost unknown");
+});
+
 async function withFetch(work) {
   const oldFetch = globalThis.fetch, oldDocument = Object.getOwnPropertyDescriptor(globalThis, "document");
   Object.defineProperty(globalThis, "document", { configurable: true, value: { cookie: "reasoning_csrf=workflow-csrf" } });

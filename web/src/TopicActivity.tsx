@@ -22,14 +22,14 @@ export function orderedActivity(records: TopicActivity[]) {
     return time || sequence || kind || a.id.localeCompare(b.id);
   });
 }
-export function ActivityCard({ title, status, createdAt, initiallyOpen, children }: {
-  title: string; status: string; createdAt: number; initiallyOpen: boolean; children: React.ReactNode;
+export function ActivityCard({ title, status, label, createdAt, initiallyOpen, children }: {
+  title: string; status: string; label?: string; createdAt: number; initiallyOpen: boolean; children: React.ReactNode;
 }) {
   const [open, setOpen] = useState(initiallyOpen);
   return <details className="org-message org-run-message" data-status={status} open={open} onToggle={event => {
     if (event.target === event.currentTarget) setOpen(event.currentTarget.open);
   }}>
-    <summary><strong>{title}</strong><span>{status.replaceAll("_", " ")}</span>
+    <summary><strong>{title}</strong><span>{label ?? status.replaceAll("_", " ")}</span>
       <time dateTime={new Date(createdAt * 1000).toISOString()}>{new Date(createdAt * 1000).toLocaleString()}</time></summary>
     {open && children}
   </details>;

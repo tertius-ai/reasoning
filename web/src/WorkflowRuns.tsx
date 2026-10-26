@@ -20,7 +20,7 @@ import { BotRunTiming } from "./BotRunTiming";
 import {
   WorkflowActionSpec, WorkflowExecutionAttempt, WorkflowNodeAttempt, WorkflowRun, WorkflowRunSummary,
   canApproveWorkflow, canControlWorkflow, captureWorkflowAction, captureWorkflowStart,
-  deliverWorkflowExecution, terminalWorkflow, workflowRunPath,
+  deliverWorkflowExecution, terminalWorkflow, workflowRunPath, workflowStatusLabel,
 } from "./workflow-run-api";
 
 type Inputs = { run_id: string; node_id: string; attempt: number; inputs: Record<string, unknown>; inputs_digest: string };
@@ -35,19 +35,19 @@ export function WorkflowActivityCard({ run, initiallyOpen, children }: {
   run: WorkflowRunSummary; initiallyOpen: boolean; children: React.ReactNode;
 }) {
   const [open, setOpen] = useState(initiallyOpen);
-  if (!run.comparison) return <ActivityCard title={run.name ?? "Workflow"} status={run.status}
+  if (!run.comparison) return <ActivityCard title={run.name ?? "Workflow"} status={run.outcome ?? run.status} label={workflowStatusLabel(run)}
     createdAt={run.created_at} initiallyOpen={initiallyOpen}>{children}</ActivityCard>;
-  return <details className="org-message org-run-message org-comparison-message" data-status={run.status}
+  return <details className="org-message org-run-message org-comparison-message" data-status={run.outcome ?? run.status}
     open={open} onToggle={event => { if (event.target === event.currentTarget) setOpen(event.currentTarget.open); }}>
     <summary><strong className="org-comparison-question">{run.comparison.question}</strong>
       <span className="org-comparison-meta"><span className="org-comparison-models">{run.comparison.models.join(" · ")}</span>
         <time dateTime={new Date(run.created_at * 1000).toISOString()}>{new Date(run.created_at * 1000).toLocaleString()}</time></span>
-      {!terminalWorkflow(run) && <span role="status">{run.status.replaceAll("_", " ")}</span>}
+      {!terminalWorkflow(run) && <span role="status">{workflowStatusLabel(run)}</span>}
     </summary>{open && children}
   </details>;
 }
 
-function ComparisonAnswer({ organizationId, topicId, node, model, canWrite, onAuthLost }: {
+export function ComparisonAnswer({ organizationId, topicId, node, model, canWrite, onAuthLost }: {
   organizationId: string; topicId: string; node: WorkflowNodeAttempt; model: string; canWrite: boolean; onAuthLost: () => void;
 }) {
   const [open, setOpen] = useState(true), [run, setRun] = useState<ModelRun | null>(null), [error, setError] = useState("");
@@ -70,14 +70,17 @@ function ComparisonAnswer({ organizationId, topicId, node, model, canWrite, onAu
     };
     void poll(); return () => { controller.abort(); clearTimeout(timer); };
   }, [organizationId, node.inference_run_id, node.bot_run_id, onAuthLost]);
-  const status = botRun?.status ?? run?.status ?? node.status;
+  // The run's node already carries its child's outcome, so the first paint needs no child fetch.
+  const status = botRun?.status ?? run?.status ?? node.outcome ?? node.status;
+  const costUnknown = run ? run.accounting_state === "uncertain" : !!node.cost_unknown;
   const output = botRun?.output_text ?? run?.output_text;
   const failed = ["failed", "cancelled", "interrupted", "outcome_unknown"].includes(status);
   useEffect(() => { if (failed) setOpen(false); }, [failed]);
   return <details className="org-comparison-answer" data-status={status} open={open} onToggle={(event) => {
     if (event.target === event.currentTarget) setOpen(event.currentTarget.open);
   }}>
-    <summary><span className="org-comparison-swatch" /><strong>{node.bot_run_id ? `${botRun?.bot_name ?? "Bot"} · ${botRun?.model ?? model.split("/").slice(2).join("/")}` : model}</strong>{status !== "succeeded" && <span>{status}</span>}
+    <summary><span className="org-comparison-swatch" /><strong>{node.bot_run_id ? `${botRun?.bot_name ?? "Bot"} · ${botRun?.model ?? model.split("/").slice(2).join("/")}` : model}</strong>
+      {(status !== "succeeded" || costUnknown) && <span>{[status !== "succeeded" && status.replaceAll("_", " "), costUnknown && "cost unknown"].filter(Boolean).join(" · ")}</span>}
       {run?.diagnostics?.http_status && <span>HTTP {run.diagnostics.http_status}</span>}
       {failed && run?.actual_microusd != null && <small>{usd(run.actual_microusd)}</small>}
     </summary>
@@ -111,16 +114,17 @@ export function WorkflowRunView({ run, userId, canWrite, canManage, locked, onAc
   run: WorkflowRun; locked: boolean; onAction: (action: WorkflowActionSpec) => void; onInspect: (node: WorkflowNodeAttempt) => void;
 }) {
   return <>
-    <p aria-label="Workflow run status">{run.status} · revision {run.revision}</p>
+    <p aria-label="Workflow run status">{workflowStatusLabel(run)} · revision {run.revision}</p>
     <p>{run.definition.name} · version {run.definition_version} · <code>{run.definition_digest}</code></p>
     {!!run.restore_fenced && <p role="status">Restored history only. New actions and dispatch are fenced; create a deliberate new run after recovery.</p>}
     {!!run.cancel_requested && !terminalWorkflow(run) && <p role="status">Cancellation requested. Active or uncertain children must settle before this run can finish.</p>}
     {!!run.capacity_released && <p role="status">Admission slot released. Original child outcomes and held charges remain unresolved.</p>}
-    {run.status === "outcome_unknown" && <p role="status">Child outcome unknown; reservations remain held. An administrator must verify provider usage or physical worker cleanup before reconciliation.</p>}
+    {run.status === "outcome_unknown" && run.outcome && run.outcome !== "outcome_unknown" && <p role="status">Child outcomes are known, but a model charge is uncertain; reservations remain held. An administrator must verify provider usage before reconciliation.</p>}
+    {run.status === "outcome_unknown" && (!run.outcome || run.outcome === "outcome_unknown") && <p role="status">Child outcome unknown; reservations remain held. An administrator must verify provider usage or physical worker cleanup before reconciliation.</p>}
     <ol className="org-workflow-nodes">{run.node_order.map((id) => run.nodes.find((node) => node.node_id === id)).filter((node): node is WorkflowNodeAttempt => !!node).map((node) => {
       const spec = run.definition.nodes.find((value) => value.id === node.node_id)!;
       return <li key={node.node_id}>
-        <header><strong>{node.node_id}</strong><span>{node.kind} · {node.status} · attempt {node.attempt}</span></header>
+        <header><strong>{node.node_id}</strong><span>{node.kind} · {workflowStatusLabel(node)} · attempt {node.attempt}</span></header>
         {node.error_code && <p className="org-error">{node.error_code}</p>}
         {node.kind === "approval" && <p>{String(spec.parameters.message)} <small>Requires {String(spec.parameters.required_role)} ·
           {node.approved_by ? ` ${node.approval_decision} by ${node.approved_by}` : " no decision recorded"}</small></p>}

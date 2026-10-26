@@ -476,6 +476,11 @@ def test_uncertain_inference_is_not_replayed_before_reconciliation(installation)
     env.runs.advance(run["id"])
     view = env.view(run)
     assert view["status"] == "outcome_unknown"
+    # The interrupted call's outcome is known; only its charge is uncertain.
+    assert view["outcome"] == "failed" and view["cost_unknown"]
+    assert view["nodes"][0]["outcome"] == "interrupted" and view["nodes"][0]["cost_unknown"]
+    listed = env.runs.list(env.user, env.org, env.topic)[0]
+    assert listed["status"] == "outcome_unknown" and listed["outcome"] == "failed" and listed["cost_unknown"]
     with pytest.raises(StoreError):
         env.runs.retry(env.user, env.org, run["id"], view["revision"], "retry-unknown-001")
     for _ in range(3):
@@ -484,7 +489,7 @@ def test_uncertain_inference_is_not_replayed_before_reconciliation(installation)
     env.inference.reconcile(env.user, env.org, child["id"], 200)
     env.runs.advance(run["id"])
     view = env.view(run)
-    assert view["status"] == "failed"
+    assert view["status"] == view["outcome"] == "failed" and not view["cost_unknown"]
     env.runs.retry(env.user, env.org, run["id"], view["revision"], "retry-settled-001")
     action = env.runs.advance(run["id"])
     assert action["attempt"] == 2
@@ -510,7 +515,7 @@ def test_stopped_comparison_settles_from_the_provider_record_without_replay(inst
     ledger.finish_call(call, status="cancelled", provider_generation_id="gen-stopped-comparison", error_code="cancel_requested")
     env.inference.finish(child, "cancelled", error="cancel_requested", accounting_unknown=True)
     env.runs.advance(run["id"])
-    assert env.view(run)["status"] == "outcome_unknown"
+    assert env.view(run)["status"] == "outcome_unknown" and env.view(run)["cost_unknown"]
     requests = []
 
     def generation(request):
@@ -523,11 +528,29 @@ def test_stopped_comparison_settles_from_the_provider_record_without_replay(inst
     assert [request.method for request in requests] == ["GET"]
     env.runs.advance(run["id"])
     view = env.view(run)
-    assert view["status"] == "cancelled" and view["finished_at"] is not None
-    assert nodes(view)["reason"]["status"] == "cancelled"
+    assert view["status"] == "cancelled" and view["finished_at"] is not None and not view["cost_unknown"]
+    assert nodes(view)["reason"]["status"] == "cancelled" and not nodes(view)["reason"]["cost_unknown"]
     assert env.inference.run(env.user, env.org, child["id"])["actual_microusd"] == 40
     assert env.inference.balance(env.user, env.org)["uncertain_microusd"] == 0
     assert env.inference.claim() is None
+
+
+def test_cancelled_call_with_uncertain_charge_reads_cancelled_with_cost_unknown(installation):
+    env = installation
+    run = env.start([llm_node()])
+    action = env.runs.advance(run["id"])
+    env.runs.advance(run["id"], quote_action=action, quotes=[QUOTE])
+    child = env.inference.claim()
+    env.runs.cancel(env.user, env.org, run["id"], "cancel-uncertain-001")
+    env.runs.advance(run["id"])
+    view = env.view(run)
+    assert view["status"] == view["outcome"] == "running" and not view["cost_unknown"]
+    env.inference.finish(child, "cancelled", error="cancelled")
+    env.runs.advance(run["id"])
+    view = env.view(run)
+    assert view["status"] == "outcome_unknown" and view["outcome"] == "cancelled" and view["cost_unknown"]
+    assert view["nodes"][0]["status"] == "outcome_unknown"
+    assert view["nodes"][0]["outcome"] == "cancelled" and view["nodes"][0]["cost_unknown"]
 
 
 def test_restore_fences_workflow_and_queued_child(installation, tmp_path):
