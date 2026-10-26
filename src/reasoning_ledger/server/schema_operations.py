@@ -96,27 +96,26 @@ def sqlite_migration(db, statement):
 
 
 def _nullable_bot_run_column(db, column):
-    # As for compute jobs: rebuild from the installation's own schema, keeping every later column, index and guard.
-    # One rebuild drops NOT NULL from all three columns, so the statements for the other two find nothing left to do;
-    # a rebuild re-parses the whole schema, and migrations are replayed to build reference schemas.
+    # Removing NOT NULL changes no stored row, so SQLite's documented simpler procedure applies: rewrite the table's
+    # own definition and bump the schema version, without copying the table. One edit covers all three columns, and
+    # the statements for the other two find nothing left to do; backups replay every migration to build reference
+    # schemas, so a full rebuild here would slow each of them.
     columns = [statement.split()[5] for statement in BOT_DIRECT_RUNS]
     schema = db.execute("SELECT sql FROM sqlite_schema WHERE type='table' AND name='bot_runs'").fetchone()[0]
-    rebuilt, count = re.subn(r'^CREATE TABLE (?:"bot_runs"|bot_runs)(?=\s)', 'CREATE TABLE bot_runs_rebuild', schema, count=1)
-    if count != 1 or column not in columns or any(f"{name} TEXT" not in rebuilt for name in columns):
+    named = re.match(r'CREATE TABLE (?:"bot_runs"|bot_runs)\s', schema)
+    if column not in columns or not named or any(f"{name} TEXT" not in schema for name in columns):
         raise ValueError("bot run schema does not match its direct conversation migration")
-    if f"{column} TEXT NOT NULL" not in rebuilt:
+    if f"{column} TEXT NOT NULL" not in schema:
         return
-    indexes = [row[0] for row in db.execute(
-        "SELECT sql FROM sqlite_schema WHERE tbl_name='bot_runs' AND type IN ('index','trigger') AND sql IS NOT NULL ORDER BY name"
-    )]
     for name in columns:
-        rebuilt = rebuilt.replace(f"{name} TEXT NOT NULL", f"{name} TEXT", 1)
-    db.execute(rebuilt)
-    db.execute("INSERT INTO bot_runs_rebuild SELECT * FROM bot_runs")
-    db.execute("DROP TABLE bot_runs")
-    db.execute("ALTER TABLE bot_runs_rebuild RENAME TO bot_runs")
-    for sql in indexes:
-        db.execute(sql)
+        schema = schema.replace(f"{name} TEXT NOT NULL", f"{name} TEXT", 1)
+    version = db.execute("PRAGMA schema_version").fetchone()[0]
+    db.execute("PRAGMA writable_schema=ON")
+    try:
+        db.execute("UPDATE sqlite_schema SET sql=? WHERE type='table' AND name='bot_runs'", (schema,))
+        db.execute(f"PRAGMA schema_version={version + 1}")
+    finally:
+        db.execute("PRAGMA writable_schema=OFF")
 
 
 def _project_compute(db):
