@@ -300,8 +300,10 @@ private-project, and live-topic access checks.
 Type `/` for topic commands, or toggle keyboard help with `?` outside text fields. `/ledger`,
 `/files`, `/goal`, `/context`, `/tools`, `/proposals`, and `/reviews` open research
 surfaces without permanent composer buttons. Play (▶) resumes stopped agent
-threads or retries the exact retained submission; stop (■) stops their
-continuation at a safe checkpoint. Unattached responses use the existing
+threads or retries the exact retained submission. The **Stop** button in a
+running reply's card header, or `/stop`, stops its continuation at a safe
+checkpoint; the message box button never stops work, so a message typed while a
+reply runs is sent as usual. Unattached responses use the existing
 cancellation path. Charges and uncertain outcomes remain retained, and commands
 never authorize replaying an unknown effect. Inapplicable playback buttons are
 disabled. Live round activity has a subtle pulse, disabled with reduced motion.

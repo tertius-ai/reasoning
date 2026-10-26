@@ -101,7 +101,8 @@ conversation shows **Reply request not confirmed**: the message is saved, and
 the request may or may not have started. **Retry same request** resends it
 without creating a second request if the first was accepted. **Dismiss pending
 retry** only clears that retry from this browser; it does not stop an accepted
-reply or its charges. Use **Stop current work** to cancel running work.
+reply or its charges. Each running reply, bot reply, computation, and workflow has a **Stop** button
+in its card header; the message box button always sends.
 
 ## Direct messages
 

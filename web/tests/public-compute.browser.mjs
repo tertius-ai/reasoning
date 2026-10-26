@@ -185,8 +185,9 @@ test("rendered compute policy, enrollment, shared replay/output, cancellation an
     await member.evaluate(id => window.dispatchEvent(new CustomEvent("reasoning-topic-command", { detail: { topicId: id, command: "compute" } })), topic.id);
     await member.getByRole("button", { name: "Submit computation", exact: true }).click();
     await until(async () => (await call(root + "/topics/" + topic.id + "/compute-jobs", undefined, "GET")).length === 2, "new explicit request");
-    await until(() => member.getByRole("button", { name: "Stop current work", exact: true }).isEnabled(), "cassette stop enabled for queued computation");
-    await member.getByRole("button", { name: "Stop current work", exact: true }).click();
+    const stopComputation = member.getByRole("button", { name: "Stop this computation", exact: true });
+    await until(() => stopComputation.isEnabled(), "the queued computation's card stop is enabled");
+    await stopComputation.click();
     await until(async () => (await call(root + "/topics/" + topic.id + "/compute-jobs", undefined, "GET"))[0].status === "cancelled", "queued cancellation");
     await stop(); await start(); await viewer.reload();
     await viewer.getByRole("heading", { name: "γ-Shared computation" }).waitFor();

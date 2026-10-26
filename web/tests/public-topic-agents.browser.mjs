@@ -364,9 +364,11 @@ test("ordinary beta conversation delegates, streams roles and integrates without
     const queuedBot = await call(root + "/topics/" + topic.id + "/bot-runs", {
       model: `bot/${connectedBot.id}/default`, client_id: "playback-queued", through_sequence: trace.messages[0].sequence,
     });
-    const stopButton = page.getByRole("button", { name: "Stop current work", exact: true });
+    // Each bot reply has Stop in its own card header; the message box never stops work.
+    const stopButton = page.getByRole("button", { name: "Stop this bot reply", exact: true });
     await until(() => stopButton.isEnabled()); await stopButton.click();
     await until(async () => (await call(root + "/bot-runs/" + queuedBot.id, undefined, "GET")).status === "cancelled");
+    assert.equal(await page.getByRole("button", { name: "Stop current work", exact: true }).count(), 0);
     assert.equal(await page.getByRole("button", { name: /Cancel bot|Stop bot|Pause agents/ }).count(), 0);
     await page.goto(url + `/organization.html?organization=${session.organization_id}&topic=${gamma.id}`);
     const gammaMessage = await call(root + "/topics/" + gamma.id + "/messages", { content: "A synthetic local invocation", client_id: "bot-stop-question" });

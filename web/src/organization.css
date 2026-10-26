@@ -337,7 +337,6 @@ a.org-reference:hover, a.org-reference:focus-visible { text-decoration: underlin
 .org-composer-box:focus-within { border-color: var(--blue); }
 /* The box's one button: return (grey while the box is empty), or Stop while work runs. */
 .org-composer-send { display: flex; flex: none; }
-.org-composer-send:has([data-stopping]) > .org-send-play { display: none; }
 .org-app .org-composer-button { display: inline-grid; place-items: center; width: 28px; height: 28px; min-width: 28px; min-height: 28px; padding: 0; border: 0;
   border-radius: 8px; background: var(--surface-raised); color: var(--foreground); }
 .org-app .org-composer-button:hover { background: color-mix(in srgb, var(--surface-raised) 82%, var(--foreground)); }
@@ -552,7 +551,6 @@ a.org-reference:hover, a.org-reference:focus-visible { text-decoration: underlin
 .org-composer-controls[hidden] { display: none; }
 /* Adding a message to a running reply sends with the usual return button rather than Stop. */
 .org-composer-adding .org-composer-send:has(> .org-send-play) > .org-composer-transport { display: none; }
-.org-composer-adding .org-composer-send:has([data-stopping]) > .org-send-play { display: inline-grid; }
 .org-adding-bar { display: flex; align-items: center; gap: 8px; margin: 0 -7px 7px -6px; padding: 6px 10px 6px 12px;
   background: color-mix(in srgb, var(--blue) 14%, transparent); color: color-mix(in srgb, var(--blue) 80%, var(--foreground)); font-size: 12px; }
 .org-adding-bar-text { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -636,6 +634,12 @@ a.org-reference:hover, a.org-reference:focus-visible { text-decoration: underlin
 .org-comparison-answer[data-status="outcome_unknown"] > summary > span:last-child { color: var(--red); }
 .org-run-compact > summary { display: flex; align-items: center; gap: 9px; cursor: pointer; }
 .org-run-compact > summary strong { overflow-wrap: anywhere; }
+/* Stop for a running card's own work, at the end of its header. */
+.org-app .org-card-stop { display: inline-flex; align-items: center; gap: 6px; flex: none; margin-left: auto; min-height: 22px; padding: 0 10px;
+  border: 1px solid var(--border-strong); border-radius: 999px; background: transparent; color: var(--foreground); font-size: 12px; cursor: pointer; }
+.org-app .org-card-stop:hover:not(:disabled) { background: color-mix(in srgb, var(--foreground) 8%, transparent); }
+.org-run-message > summary > time + .org-card-stop { margin-left: 0; }
+.org-card-stop-square { width: 8px; height: 8px; border-radius: 2px; background: currentColor; }
 .org-run-compact > summary small { margin-left: auto; }
 .org-round-activity { list-style: none; margin: 8px 0; padding: 0; color: var(--muted); font-size: 11px; }
 .org-beta:empty { display: none; }

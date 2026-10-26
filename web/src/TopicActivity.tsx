@@ -22,15 +22,27 @@ export function orderedActivity(records: TopicActivity[]) {
     return time || sequence || kind || a.id.localeCompare(b.id);
   });
 }
-export function ActivityCard({ title, status, label, createdAt, initiallyOpen, children }: {
-  title: string; status: string; label?: string; createdAt: number; initiallyOpen: boolean; children: React.ReactNode;
+/**
+ * The Stop pill in the header of a card whose work is running. Clicking it stops that work only and never opens or
+ * closes the card.
+ */
+export function CardStop({ label, disabled, onStop }: { label: string; disabled?: boolean; onStop: () => void }) {
+  return <button type="button" className="org-card-stop" aria-label={label} title={label} disabled={disabled}
+    onClick={event => { event.preventDefault(); event.stopPropagation(); onStop(); }}>
+    <span className="org-card-stop-square" aria-hidden="true" />Stop</button>;
+}
+
+export function ActivityCard({ title, status, label, createdAt, initiallyOpen, action, children }: {
+  title: string; status: string; label?: string; createdAt: number; initiallyOpen: boolean;
+  /** A control in the card header, such as Stop while its work runs. */
+  action?: React.ReactNode; children: React.ReactNode;
 }) {
   const [open, setOpen] = useState(initiallyOpen);
   return <details className="org-message org-run-message" data-status={status} open={open} onToggle={event => {
     if (event.target === event.currentTarget) setOpen(event.currentTarget.open);
   }}>
     <summary><strong>{title}</strong><span>{label ?? status.replaceAll("_", " ")}</span>
-      <time dateTime={new Date(createdAt * 1000).toISOString()}>{new Date(createdAt * 1000).toLocaleString()}</time></summary>
+      <time dateTime={new Date(createdAt * 1000).toISOString()}>{new Date(createdAt * 1000).toLocaleString()}</time>{action}</summary>
     {open && children}
   </details>;
 }

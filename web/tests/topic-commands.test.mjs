@@ -5,11 +5,12 @@ import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { createServer } from "vite";
 
-let server, commands, beta;
+let server, commands, beta, activity;
 before(async () => {
   server = await createServer({ appType: "custom", logLevel: "silent", server: { middlewareMode: true } });
   commands = await server.ssrLoadModule("/src/TopicCommands.tsx");
   beta = await server.ssrLoadModule("/src/BetaConversation.tsx");
+  activity = await server.ssrLoadModule("/src/TopicActivity.tsx");
 });
 after(async () => { await server?.close(); });
 
@@ -32,17 +33,27 @@ test("keyboard help exposes send, mentions, slash commands and topic restriction
   assert.match(html, /aria-label="Keyboard shortcuts and commands"/);
 });
 
-test("the composer's one button stops running work, otherwise starts or resumes, and gives way to send while composing", () => {
+test("the composer's one button only starts or resumes, and gives way to send while composing; it never stops", () => {
   const render = changes => renderToStaticMarkup(React.createElement(commands.TransportControls, {
-    canPlay: false, canStop: false, onPlay() {}, onStop() {}, ...changes,
+    canPlay: false, onPlay() {}, ...changes,
   }));
   assert.match(render({}), /aria-label="Start or resume"[^>]*disabled=""/);
-  assert.doesNotMatch(render({}), /Stop current work/);
   assert.doesNotMatch(render({ canPlay: true }), /disabled=""/);
-  assert.match(render({ canStop: true }), /aria-label="Stop current work"/); assert.doesNotMatch(render({ canStop: true }), /Start or resume/);
-  assert.match(render({ hidePlay: true, canStop: true }), /Stop current work/, "Stop stays while work runs, even while composing");
   assert.equal(render({ hidePlay: true }), "", "with text in the box the composer's send button takes the place");
-  assert.doesNotMatch(render({}), /Pause agents|Stop agents|Cancel response/);
+  assert.doesNotMatch(render({}) + render({ canPlay: true }), /Stop|Pause agents|Cancel response/);
+});
+
+test("a card's Stop stops only its own work and never toggles the card", () => {
+  let stopped = 0;
+  const html = renderToStaticMarkup(React.createElement(activity.ActivityCard, {
+    title: "Workflow", status: "running", createdAt: 1, initiallyOpen: false,
+    action: React.createElement(activity.CardStop, { label: "Stop this workflow", onStop: () => { stopped += 1; } }),
+  }, null));
+  assert.match(html, /<summary>.*<button type="button" class="org-card-stop" aria-label="Stop this workflow"[^>]*>.*Stop<\/button><\/summary>/);
+  const button = activity.CardStop({ label: "Stop", onStop: () => { stopped += 1; } });
+  const event = { prevented: false, propagation: true, preventDefault() { this.prevented = true; }, stopPropagation() { this.propagation = false; } };
+  button.props.onClick(event);
+  assert.deepEqual([stopped, event.prevented, event.propagation], [1, true, false]);
 });
 
 test("working indicator uses only live recorded round activity", () => {

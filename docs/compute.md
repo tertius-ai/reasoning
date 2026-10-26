@@ -332,8 +332,8 @@ are rejected. A positive quota and an allowed image are required for admission.
 ### Shared web and desktop controls
 
 Open a beta or gamma topic and choose `/compute` in its slash-command palette.
-The topic's stop (■) control requests cancellation of active standalone
-computations; remote cleanup and accounting must still settle. An owner/admin
+The **Stop** button in a running computation's card header, or `/stop`,
+requests cancellation of active standalone computations; remote cleanup and accounting must still settle. An owner/admin
 first allows operator-approved images and sets a positive CPU-time quota in
 **Administration → Compute**. Installation approval and organization
 permission are separate: the browser cannot add image digests to the host catalog.

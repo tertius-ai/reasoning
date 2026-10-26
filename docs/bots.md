@@ -319,7 +319,8 @@ heartbeat lines. During an outage the panel has a yellow outline and shows
 `Bot offline`, the first offline time, and the retry countdown. `doctor`,
 `status`, and single-step runs retain their machine-readable output.
 
-The shared beta/gamma stop (■) control also covers bot-provided inference,
+The **Stop** button in a running bot reply's card header, or `/stop`, covers
+bot-provided inference,
 whether selected as the reply model or invoked by mention. Only the requester,
 bot owner, or an organization administrator with current topic write access may
 stop it. A queued invocation becomes cancelled before it can be claimed. A

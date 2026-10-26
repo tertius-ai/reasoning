@@ -15,6 +15,8 @@
 .org-bot-approval pre { margin: 0 0 6px; white-space: pre-wrap; overflow-wrap: anywhere; font: 11.5px/1.5 var(--font-mono); }
 .org-bot-approval > span { display: flex; gap: 6px; }
 .org-bot-waiting { display: block; color: var(--amber); font-size: 11px; }
+.org-app .org-bot-waiting-cancel { min-height: 18px; margin-left: 6px; padding: 0 6px; font-size: 11px; }
+.org-bot-working .org-message > header { display: flex; align-items: center; gap: 8px; }
 .org-bot-offline { margin: 0 max(16px, calc((100% - 900px) / 2)) 6px; padding: 6px 10px; border: 1px solid color-mix(in srgb, var(--amber) 35%, transparent);
   border-radius: var(--radius-control); background: color-mix(in srgb, var(--amber) 7%, var(--surface)); font-size: 12px; }
 .org-bot-models { display: grid; gap: 2px; }

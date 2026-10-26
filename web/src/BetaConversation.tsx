@@ -2,7 +2,7 @@ import { PollBackoff, recordTiming, startPolling } from "./polling";
 import { LIVE_SAFETY_POLL_MS, subscribeTopicEvents } from "./topicEvents";
 import React, { useEffect, useRef, useState } from "react";
 import { MessageUsageDetails } from "./MessageUsageDetails";
-import { TopicActivity } from "./TopicActivity";
+import { CardStop, TopicActivity } from "./TopicActivity";
 import { submitModelAttempt } from "./BotConversation";
 import { OutputActions } from "./ChatFeedback";
 import { createPortal } from "react-dom";
@@ -270,6 +270,22 @@ export function BetaConversation({ organizationId, topicId, userId, canWrite, ca
     finally { if (alive.current) setBusy(false); }
   };
   useTopicCommand(topicId, command => { if (command === "play" || command === "stop") void transport(command === "play"); });
+  // Stop on a reply's card stops that reply only: its agent thread pauses, resumably, or its own running request is cancelled.
+  const stopReply = async (rootRun: string) => {
+    setBusy(true); setError("");
+    try {
+      const thread = controllable.find(item => item.root_run === rootRun && item.status === "active");
+      if (thread) {
+        await request(topicPath(organizationId, topicId) + "/agents/" + rootRun + "/control", { method: "POST", body: { status: "paused" } });
+      } else {
+        for (const run of activeRuns.filter(item => threadRoot(item) === rootRun)) {
+          await request(root + "/inference-runs/" + run.id + "/cancel", { method: "POST", body: {} });
+        }
+      }
+      if (alive.current) setRefresh(value => value + 1);
+    } catch (cause) { if (alive.current) failed(cause); }
+    finally { if (alive.current) setBusy(false); }
+  };
   // A finished run gives way to its reply message only once the transcript shows it, so the output never disappears.
   // A reply cancelled because its message moved into another reply leaves no card: the message shows where it went.
   const visibleRuns = runs.filter((run) => (run.context_through_sequence !== 0 || run.agent) && run.error_code !== "moved_into_reply"
@@ -284,6 +300,11 @@ export function BetaConversation({ organizationId, topicId, userId, canWrite, ca
     const thread = running.find(item => item.root.id === threadRoot(run));
     if (thread && ![...hosts.values()].includes(thread)) hosts.set(run.id, thread);
   }
+  // Each running reply you may stop shows Stop once, on its first visible running card.
+  const stoppable = new Map<string, string>();
+  for (const run of visibleRuns) {
+    if (activeRuns.includes(run) && !pausedRun(run) && ![...stoppable.values()].includes(threadRoot(run))) stoppable.set(run.id, threadRoot(run));
+  }
   const replyPending = runs.some(run => awaitingReply(run, transcript));
   useEffect(() => { if (replyPending) onReplyPending?.(); }, [replyPending, onReplyPending]);
   useEffect(() => { onActivity(visibleRuns.map(run => ({ id: "run:" + run.id, created_at: run.created_at ?? run.started_at ?? 0,
@@ -297,13 +318,14 @@ export function BetaConversation({ organizationId, topicId, userId, canWrite, ca
         selected: addingTo === hosts.get(run.id)!.root.id, onAdd: () => onAddTo(hosts.get(run.id)!.root.id),
       } : undefined}
       timeline={{ additions: hosts.get(run.id)?.additions ?? [], userId, names, onUndo: canWrite ? onUndoAddition : undefined }}
+      onStop={stoppable.has(run.id) && online ? () => void stopReply(stoppable.get(run.id)!) : undefined} stopping={busy}
       onUpdated={() => setRefresh(value => value + 1)} onAuthLost={onAuthLost} />,
-  }))); }, [runs, reconciled, transcript, busy, online, connected, canWrite, canManage, userId, root, organizationId, topicId, onActivity, onAuthLost, addingTo, onAddTo, onUndoAddition, names]);
+  }))); }, [runs, reconciled, transcript, busy, online, connected, canWrite, canManage, userId, root, organizationId, topicId, onActivity, onAuthLost, addingTo, onAddTo, onUndoAddition, names, threads]);
   return <section className="org-beta" aria-label="Agent activity">
-    {toolbarTarget && createPortal(<TransportControls {...{ canPlay, canStop, hidePlay }}
+    {toolbarTarget && createPortal(<TransportControls {...{ canPlay, hidePlay }}
       playTitle={attempt?.unconfirmed ? "Retry the unconfirmed reply request"
         : pausedReason ? "Resume retained request — " + runFailureMessage(pausedReason) : undefined}
-      onPlay={() => dispatchTopicCommand(topicId, "play")} onStop={() => dispatchTopicCommand(topicId, "stop")} />, toolbarTarget)}
+      onPlay={() => dispatchTopicCommand(topicId, "play")} />, toolbarTarget)}
     {attempt && <PendingReplyRequest attempt={attempt} busy={busy} retrying={retrying} retryBlocked={retryBlocked}
       onRetry={() => void retry()} onDismiss={() => {
         if (window.confirm("Dismiss the pending retry? This clears only the retry kept in this browser. Your saved message stays, "
@@ -325,8 +347,10 @@ export function RunProgress({ run }: { run: ModelRun }) {
   return <p role="status" className="org-working" aria-label="Research progress">{progress}…</p>;
 }
 
-function BetaRunCard({ root, organizationId, topicId, run, canManage, canControl, canReact, awaiting, thread, timeline, onReconciled, onUpdated, onAuthLost }: {
+function BetaRunCard({ root, organizationId, topicId, run, canManage, canControl, canReact, awaiting, thread, timeline, onStop, stopping, onReconciled, onUpdated, onAuthLost }: {
   root: string; organizationId: string; topicId: string; run: ModelRun; canManage: boolean; canReact: boolean;
+  /** Stops this reply, shown in the header while it runs. */
+  onStop?: () => void; stopping?: boolean;
   /** The thread line of a running reply: a button that adds the next message to it. */
   thread?: { summary: string; selected: boolean; onAdd: () => void };
   /** A running reply's timeline: its steps, and the additions of its thread where they were read. */
@@ -352,6 +376,7 @@ function BetaRunCard({ root, organizationId, topicId, run, canManage, canControl
       {!active && run.error_code && <span title={run.diagnostics?.message}>{run.diagnostics?.http_status ? `HTTP ${run.diagnostics.http_status}` : run.error_code.replaceAll("_", " ")}</span>}
       {run.actual_microusd != null && <small>{usd(run.actual_microusd)}</small>}
       {active && !paused && run.status === "running" && workingFor(run) && <small className="org-run-elapsed">working · {workingFor(run)}</small>}
+      {active && onStop && !run.cancel_requested && <CardStop label="Stop this reply" disabled={stopping} onStop={onStop} />}
     </summary>
     {active && !paused && timeline && replyTimeline(run.activity ?? [], timeline.additions, true).length
       ? <ReplyTimeline activity={run.activity ?? []} active {...timeline} /> : <RunProgress run={run} />}
