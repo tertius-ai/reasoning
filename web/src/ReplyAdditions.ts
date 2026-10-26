@@ -55,52 +55,67 @@ export function additionReceipt(addition: ReplyAddition, model: string, active: 
 export const shownInReply = (addition: ReplyAddition | undefined, active: boolean, folded: ReadonlySet<string>) =>
   Boolean(addition && (active || folded.has(addition.message_id)));
 
+type Activity = NonNullable<ModelRun["activity"]>;
+export type StepIcon = "think" | "search" | "read" | "write" | "compute" | "answer" | "summary" | "delegate";
 export type TimelineEntry =
-  | { kind: "step"; key: string; label: string; current: boolean }
-  | { kind: "addition"; key: string; addition: ReplyAddition; waiting: boolean };
+  | { kind: "step"; key: string; label: string; icon: StepIcon; current: boolean }
+  | { kind: "addition"; key: string; addition: ReplyAddition; waiting: boolean; nextStep?: number };
 
-const tool = (name: string) => name.replaceAll("_", " ");
+const iconFor = (detail: string): StepIcon => detail.startsWith("searched") ? "search"
+  : detail.startsWith("read") || detail.startsWith("fetched") ? "read"
+    : detail.startsWith("saved") || detail.startsWith("updated") ? "write"
+      : detail.startsWith("submitted") || detail.startsWith("checked") ? "compute" : "think";
 
 /**
- * A reply's steps in order, each with the tools it used, and every addition where the reply read it: an addition is
- * read just before the provider call that starts a step. Unread additions follow the last step while the reply runs.
+ * A reply's steps in order, each described by what its tool calls did, and every addition where the reply read it:
+ * an addition is read just before the provider call that starts a step. While the reply runs, unread additions follow
+ * the last step, waiting for the next one. `unplaced` also lists read additions whose read event is not among these
+ * steps (read by another run of the thread), for the folded record under an answer.
  */
-export function replyTimeline(run: ModelRun, additions: ReplyAddition[], active: boolean): TimelineEntry[] {
+export function replyTimeline(activity: Activity, additions: ReplyAddition[], active: boolean, unplaced = false): TimelineEntry[] {
   const entries: TimelineEntry[] = [], byId = new Map(additions.map(addition => [addition.message_id, addition]));
-  let step: { round: number; tools: string[]; writing: boolean; using?: string } | null = null;
+  const placed = new Set<string>();
+  let step: { round: number; done: string[]; using?: string; writing: boolean } | null = null, rounds = 0;
   const close = () => {
     if (!step) return;
-    const tools = [...new Set(step.tools)].map(tool).join(", ");
-    entries.push({ kind: "step", key: "step-" + step.round, current: false,
-      label: `Step ${step.round}` + (tools ? ` · used ${tools}` : "") + (step.writing ? " · writing the answer" : "")
-        + (step.using ? ` · using ${tool(step.using)}` : "") });
+    const shown = [...new Set(step.done)], parts = [`Step ${step.round}`];
+    if (shown.length) parts.push(shown.slice(0, 2).join("; ") + (shown.length > 2 ? ` +${shown.length - 2} more` : ""));
+    if (step.using) parts.push(step.using);
+    if (step.writing) parts.push("writing the answer");
+    entries.push({ kind: "step", key: "step-" + step.round, current: false, label: parts.join(" · "),
+      icon: step.writing && !step.using ? "answer" : iconFor(step.using ?? shown[0] ?? "") });
     step = null;
   };
-  for (const event of run.activity ?? []) {
-    if (event.phase === "round") { close(); step = { round: event.round ?? entries.length + 1, tools: [], writing: false }; }
-    else if (event.phase === "tool_requested" && step && event.tool) step.using = event.tool;
-    else if (event.phase === "tool_completed" && step && event.tool) { step.tools.push(event.tool); step.using = undefined; }
-    else if (event.phase === "answer_ready" && step) step.writing = true;
+  for (const event of activity) {
+    if (event.phase === "round") { close(); rounds = event.round ?? rounds + 1; step = { round: rounds, done: [], writing: false }; }
+    else if (event.phase === "tool_requested" && step) step.using = event.detail ?? (event.tool ?? "").replaceAll("_", " ");
+    else if (event.phase === "tool_completed" && step) {
+      step.done.push(event.detail ?? `used ${(event.tool ?? "").replaceAll("_", " ")}`); step.using = undefined;
+    } else if (event.phase === "answer_ready" && step) step.writing = true;
     else if (event.phase === "additions_read") {
       close();
       for (const id of event.message_ids ?? []) {
         const addition = byId.get(id);
-        if (addition) entries.push({ kind: "addition", key: "addition-" + id, addition, waiting: false });
+        if (addition) { entries.push({ kind: "addition", key: "addition-" + id, addition, waiting: false }); placed.add(id); }
       }
     } else if (["compacting", "compaction_failed", "compaction_skipped", "delegated"].includes(event.phase)) {
       close();
-      entries.push({ kind: "step", key: "event-" + event.sequence, current: false,
+      entries.push({ kind: "step", key: "event-" + event.sequence, current: false, icon: event.phase === "delegated" ? "delegate" : "summary",
         label: event.summary ?? (event.phase === "delegated" ? "Delegated work" : "Summarizing earlier messages") });
     }
   }
   close();
   const last = entries.map(entry => entry.kind).lastIndexOf("step");
   if (active && last >= 0) entries[last] = { ...entries[last], current: true } as TimelineEntry;
+  if (unplaced) {
+    for (const addition of additions.filter(item => item.read_at !== null && !placed.has(item.message_id))) {
+      entries.push({ kind: "addition", key: "addition-" + addition.message_id, addition, waiting: false });
+    }
+  }
   if (active) {
     for (const addition of additions.filter(item => item.read_at === null)) {
-      entries.push({ kind: "addition", key: "addition-" + addition.message_id, addition, waiting: true });
+      entries.push({ kind: "addition", key: "addition-" + addition.message_id, addition, waiting: true, nextStep: rounds + 1 });
     }
   }
   return entries;
 }
-

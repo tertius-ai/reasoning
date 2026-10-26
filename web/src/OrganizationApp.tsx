@@ -27,6 +27,7 @@ import { WorkflowExecutionAttempt } from "./workflow-run-api";
 import { ComputeAttempt } from "./compute-api";
 import { MessageUsageDetails } from "./MessageUsageDetails";
 import { ReplyFiles } from "./ReplyFiles";
+import { ReplyTimeline } from "./ReplyTimeline";
 import { normalizeMathDelimiters } from "./markdownMath";
 import { catalogModel, modelOptionGroups } from "./modelRecommendations";
 import { EffortPicker, ModelPicker, compactTokens } from "./ModelBrowser";
@@ -609,6 +610,14 @@ export const BetaModelMenu = React.memo(function BetaModelMenu({ configuration, 
 });
 
 /** People shown in the panel: online people, people with bots, and anyone in `keep` (direct-conversation partners). */
+/** The folded line under a model answer: how many steps its reply took and how many later messages it read. */
+export function replyRecordSummary(message: Pick<Message, "steps" | "additions">): string {
+  const steps = message.steps?.filter(step => step.phase === "round").length ?? 0, added = message.additions?.length ?? 0;
+  return [steps ? `${steps} ${steps === 1 ? "step" : "steps"}` : "",
+    added ? `took ${added} later ${added === 1 ? "message" : "messages"} into account` : ""].filter(Boolean).join(" · ")
+    .replace(/^./, letter => letter.toUpperCase());
+}
+
 export function peopleWithBots(presence: Presence | null, keep: ReadonlySet<string> = new Set()) {
   return (presence?.humans ?? []).map(person => ({ ...person,
     bots: (presence?.bots ?? []).filter(bot => bot.owner_user_id === person.id),
@@ -1187,6 +1196,7 @@ function Conversation({ organizationId, topic, members, user, canWrite, canManag
     }
   };
   const workflowRunKey = topic.kind === "gamma" ? workflowActivity.map(entry => entry.id).join(",") : "";
+  const memberNames = useMemo(() => Object.fromEntries(members.map(member => [member.id, member.name])), [members]);
   const undoNow = useRef({ undoAddition, messages });
   undoNow.current = { undoAddition, messages };
   const undoFromReply = useCallback((addition: ReplyAddition) => {
@@ -1235,10 +1245,10 @@ function Conversation({ organizationId, topic, members, user, canWrite, canManag
           <time dateTime={new Date(message.created_at * 1000).toISOString()} title={new Date(message.created_at * 1000).toLocaleString()}>{topic.kind === "alpha" ? new Date(message.created_at * 1000).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" }) : new Date(message.created_at * 1000).toLocaleString()}</time></header>
         <MessageMarkdown markdown={normalizeMathDelimiters(mentionMarkdown(message.content, mentionPeople))} />
         {!!message.files?.length && <ReplyFiles topicId={topic.id} files={message.files} />}
-        {!!message.additions?.length && <details className="org-reply-additions">
-          <summary>Took {message.additions.length} later {message.additions.length === 1 ? "message" : "messages"} into account</summary>
-          <ol>{message.additions.map(addition => <li key={addition.message_id}><span>{addition.content}</span>
-            <small>{addition.read_step ? `read at step ${addition.read_step}` : "read when it resumed"}</small></li>)}</ol>
+        {(!!message.steps?.some(step => step.phase === "round") || !!message.additions?.length) && <details className="org-reply-record">
+          <summary>{replyRecordSummary(message)}</summary>
+          <ReplyTimeline activity={message.steps ?? []} additions={message.additions ?? []} active={false} userId={user.id}
+            names={memberNames} unplaced label="Steps and later messages of this reply" />
         </details>}
         {message.author_kind === "assistant" && <MessageUsageDetails usage={message.usage} />}
         {addition && <p className={"org-addition-receipt" + (addition.read_at === null && additionThread?.active ? " org-addition-waiting" : "")}
@@ -1313,7 +1323,7 @@ function Conversation({ organizationId, topic, members, user, canWrite, canManag
       {topic.kind === "beta" && <BetaConversation organizationId={organizationId} topicId={topic.id} userId={user.id}
         canWrite={canWrite} canManage={canManage} online={online} toolbarTarget={composerButton} hidePlay={Boolean(draft.text.trim())}
         attempt={modelAttempt} onAttempt={onModelAttempt} onAuthLost={onAuthLost} onActivity={setBetaActivity} wake={messages.at(-1)?.sequence}
-        onRuns={setBetaRuns} addingTo={adding?.root.id} onAddTo={onAddTo} onUndoAddition={undoFromReply}
+        onRuns={setBetaRuns} addingTo={adding?.root.id} onAddTo={onAddTo} onUndoAddition={undoFromReply} names={memberNames}
         transcript={transcript} onReplyPending={refreshMessages} />}
       <BotConversation organizationId={organizationId} topicId={topic.id} names={botNames} userId={user.id}
         canWrite={canWrite} canManage={canManage} onActivity={setBotActivity} onAuthLost={onAuthLost} wake={messages.at(-1)?.sequence} />

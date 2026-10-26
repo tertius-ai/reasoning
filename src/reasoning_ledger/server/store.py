@@ -1197,11 +1197,15 @@ class Store:
                                (result["organization_id"], result["inference_run_id"])).fetchone()
             if reply is not None:
                 from .inference_additions import read_by_reply
+                from .reply_steps import run_activity
 
-                # The later messages this answer took into account, folded under it in the transcript.
+                # The reply's steps and the later messages it took into account, folded under the answer.
                 additions = read_by_reply(db, reply)
                 if additions:
                     result["additions"] = additions
+                steps = run_activity(db, reply["organization_id"], reply["id"])
+                if steps:
+                    result["steps"] = steps
             assignment = db.execute("SELECT snapshot_json FROM research_contexts WHERE request_id="
                                     "(SELECT request_id FROM llm_runs WHERE id=?)", (result["inference_run_id"],)).fetchone()
             if assignment:

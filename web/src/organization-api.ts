@@ -56,7 +56,9 @@ export type Message = { id: string; sequence: number; topic_id: string; author_i
   /** Set when this message was added to a running model reply. */
   addition?: ReplyAddition;
   /** On a model answer: the later messages its reply read and took into account. */
-  additions?: ReplyAddition[] };
+  additions?: ReplyAddition[];
+  /** On a model answer: its reply's recorded steps, for the folded timeline under it. */
+  steps?: ModelRun["activity"] };
 export type ImpactProfile = { model: string; input_kwh_per_million: number; output_kwh_per_million: number;
   location: string; grid_grams_co2e_per_kwh: number | null; source: string };
 export type MessageUsage = { prompt_tokens: number | null; completion_tokens: number | null; actual_microusd: number | null;
@@ -156,7 +158,9 @@ export type ModelRun = {
   created_at?: number; started_at?: number | null;
   activity?: { sequence: number; phase: string; tool?: string; round?: number; summary?: string;
     /** For `additions_read`: the added messages read before provider call `step`. */
-    message_ids?: string[]; step?: number | null }[];
+    message_ids?: string[]; step?: number | null;
+    /** For tool events: what the call did, in a short phrase ("searched arXiv for “x” · 4 results"). */
+    detail?: string }[];
   answer_state?: { status: "working" | "waiting" | "partial" | "response_ready"; reason?: string | null;
     checkpoint?: { summary: string; remaining?: string; sources?: string[] } | null } | null;
   diagnostics?: ProviderDiagnostics | null;

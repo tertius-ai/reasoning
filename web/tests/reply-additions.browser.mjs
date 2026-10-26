@@ -28,7 +28,8 @@ test("thread mode adds to a running reply's timeline, Esc returns to the usual b
     let additions = [];
     const runs = () => [
       { ...base, id: "working", status: "running", context_through_sequence: 1, additions,
-        activity: [{ sequence: 1, phase: "round", round: 1 }, { sequence: 2, phase: "tool_requested", tool: "arxiv_search" }] },
+        activity: [{ sequence: 1, phase: "round", round: 1 },
+          { sequence: 2, phase: "tool_requested", tool: "arxiv_search", detail: "searched arXiv for “DM(k, C)”" }] },
       { ...base, id: "own-later", context_through_sequence: 2, ...(additions.some(item => item.message_id === "later")
         ? { status: "cancelled", error_code: "moved_into_reply", accounting_state: "released" } : { status: "queued" }) },
       { ...base, id: "own-started", status: "running", context_through_sequence: 3 },
@@ -116,8 +117,11 @@ test("thread mode adds to a running reply's timeline, Esc returns to the usual b
     // The addition appears in the reply's timeline after its current step, not as a separate transcript message.
     const timeline = card.getByLabel("Reply steps and additions");
     const waiting = timeline.locator(".org-timeline-addition", { hasText: "Cite exact theorem numbers." });
-    await waiting.getByText("next step").waitFor();
-    assert.deepEqual(await timeline.locator("li").allInnerTexts(), ["Step 1 · using arxiv search…", "Cite exact theorem numbers.\nnext step\nUndo"]);
+    await waiting.getByText("at step 2").waitFor();
+    assert.deepEqual((await timeline.locator("li").allInnerTexts()).map(text => text.replace(/\s+/g, " ").trim()),
+      ["Step 1 · searched arXiv for “DM(k, C)”…", "You · Cite exact theorem numbers. at step 2 Undo"]);
+    assert.equal(await waiting.locator("q").innerText(), "Cite exact theorem numbers.", "the addition is quoted");
+    assert.match(await card.locator("summary").innerText(), /working · \d+ (s|min)/);
     const sent = writes.find(write => write.method === "POST" && write.path.endsWith("/messages"));
     assert.equal(sent.body.adds_to, "working");
     assert.equal(await page.locator('[data-message-id="sent-3"]').count(), 0, "not in the transcript");
@@ -144,7 +148,7 @@ test("thread mode adds to a running reply's timeline, Esc returns to the usual b
     await later.hover();
     await later.getByRole("button", { name: "Message actions", exact: true }).click();
     await page.getByRole("menuitem", { name: "Move into reasoner's thread", exact: true }).click();
-    await timeline.locator(".org-timeline-addition", { hasText: "Skip French-language sources." }).getByText("next step").waitFor();
+    await timeline.locator(".org-timeline-addition", { hasText: "Skip French-language sources." }).getByText("at step 2").waitFor();
     await later.waitFor({ state: "detached" });
     assert.deepEqual(writes.at(-1), { method: "POST", path: `/api/organizations/${org}/inference-runs/working/additions`,
       body: { message_id: "later" } });

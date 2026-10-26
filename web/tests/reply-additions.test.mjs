@@ -42,21 +42,29 @@ test("receipts say where an addition went and whether the reply has read it", ()
 
 const event = (sequence, phase, extra = {}) => ({ sequence, phase, ...extra });
 
-test("the timeline groups each step's tools and places additions where the reply read them", () => {
-  const activity = [event(1, "round", { round: 1 }), event(2, "tool_requested", { tool: "arxiv_search" }),
-    event(3, "tool_completed", { tool: "arxiv_search" }), event(4, "additions_read", { step: 2, message_ids: ["a"] }),
-    event(5, "round", { round: 2 }), event(6, "tool_completed", { tool: "arxiv_read" }), event(7, "tool_completed", { tool: "arxiv_read" }),
-    event(8, "round", { round: 3 }), event(9, "tool_requested", { tool: "web_fetch" })];
+test("the timeline describes each step and places additions where the reply read them", () => {
+  const activity = [event(1, "round", { round: 1 }),
+    event(2, "tool_requested", { tool: "arxiv_search", detail: "searched arXiv for “regulators”" }),
+    event(3, "tool_completed", { tool: "arxiv_search", detail: "searched arXiv for “regulators” · 4 results" }),
+    event(4, "additions_read", { step: 2, message_ids: ["a"] }),
+    event(5, "round", { round: 2 }), event(6, "tool_completed", { tool: "arxiv_read", detail: "read “Higher regulators”" }),
+    event(7, "tool_completed", { tool: "arxiv_read", detail: "read “Beilinson 1985”" }),
+    event(8, "tool_completed", { tool: "web_fetch", detail: "fetched arxiv.org" }),
+    event(9, "round", { round: 3 }), event(10, "tool_requested", { tool: "web_fetch", detail: "fetched ncatlab.org" }),
+    event(11, "answer_ready")];
   const list = [added("a", 2, { content: "Skip French sources." }), added("b", null, { content: "Also cover p-adic regulators." })];
-  const entries = additions.replyTimeline(run("root", "running", 4, { activity }), list, true);
-  assert.deepEqual(entries.map(entry => entry.kind === "step" ? entry.label : `${entry.waiting ? "waiting" : "read"}:${entry.addition.content}`), [
-    "Step 1 · used arxiv search", "read:Skip French sources.", "Step 2 · used arxiv read", "Step 3 · using web fetch",
-    "waiting:Also cover p-adic regulators.",
+  const entries = additions.replyTimeline(activity, list, true);
+  assert.deepEqual(entries.map(entry => entry.kind === "step" ? `${entry.icon}:${entry.label}` : `${entry.waiting ? `waiting@${entry.nextStep}` : "read"}:${entry.addition.content}`), [
+    "search:Step 1 · searched arXiv for “regulators” · 4 results", "read:Skip French sources.",
+    "read:Step 2 · read “Higher regulators”; read “Beilinson 1985” +1 more",
+    "read:Step 3 · fetched ncatlab.org · writing the answer", "waiting@4:Also cover p-adic regulators.",
   ]);
   assert.deepEqual(entries.filter(entry => entry.kind === "step").map(entry => entry.current), [false, false, true]);
-  const finished = additions.replyTimeline(run("root", "succeeded", 4, { activity }), list, false);
+  const finished = additions.replyTimeline(activity, list, false);
   assert.equal(finished.some(entry => entry.kind === "addition" && entry.waiting), false, "a finished reply lists no waiting additions");
   assert.equal(finished.some(entry => entry.kind === "step" && entry.current), false);
+  const record = additions.replyTimeline([event(1, "round", { round: 1 })], [added("c", 1, { content: "Read by another run." })], false, true);
+  assert.equal(record.at(-1).addition.content, "Read by another run.", "the folded record also lists additions read by other runs");
 });
 
 test("an added message leaves the transcript only while its reply runs or once an answer lists it", () => {

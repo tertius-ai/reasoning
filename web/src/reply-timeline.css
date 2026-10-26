@@ -1,0 +1,30 @@
+/* A reply's timeline: steps joined by a rail, with later messages where the reply read them. */
+.org-reply-timeline { margin: 6px 0 2px 2px; padding: 0; list-style: none; font-size: 12.5px; line-height: 1.45; }
+.org-reply-timeline li { position: relative; display: flex; align-items: flex-start; gap: 8px; padding: 3px 0; }
+.org-reply-timeline li + li::after { content: ""; position: absolute; left: 9px; top: -6px; height: 9px; border-left: 1px solid var(--border); }
+.org-timeline-icon { flex: none; display: inline-grid; place-items: center; width: 19px; height: 19px; border-radius: 50%;
+  background: color-mix(in srgb, var(--foreground) 6%, transparent); color: var(--muted); }
+.org-timeline-step { color: var(--muted); }
+.org-timeline-step > span:last-child { padding-top: 1px; }
+.org-timeline-step[data-current] { color: color-mix(in srgb, var(--blue) 80%, var(--foreground)); }
+.org-timeline-icon[data-current] { background: color-mix(in srgb, var(--blue) 16%, transparent); }
+.org-timeline-spinner { width: 9px; height: 9px; border: 1.6px solid color-mix(in srgb, var(--blue) 30%, transparent);
+  border-top-color: var(--blue); border-radius: 50%; animation: org-timeline-spin 0.9s linear infinite; }
+@keyframes org-timeline-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .org-timeline-spinner { animation: none; } }
+.org-timeline-addition { flex-wrap: wrap; color: var(--foreground); }
+.org-timeline-addition .org-timeline-icon { background: color-mix(in srgb, var(--blue) 16%, transparent); color: var(--blue); }
+.org-timeline-addition[data-waiting] .org-timeline-icon { background: color-mix(in srgb, var(--amber) 18%, transparent); color: var(--amber); }
+.org-timeline-quote { flex: 1 1 14rem; min-width: 0; padding-top: 1px; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical;
+  overflow: hidden; }
+.org-timeline-quote strong { font-weight: 600; }
+.org-timeline-quote q { quotes: "“" "”"; }
+.org-timeline-chip { flex: none; margin-top: 1px; padding: 0 7px; border-radius: 999px; font-size: 11px; line-height: 18px;
+  background: color-mix(in srgb, var(--teal) 18%, transparent); color: color-mix(in srgb, var(--teal) 80%, var(--foreground)); }
+.org-timeline-addition[data-waiting] .org-timeline-chip { background: color-mix(in srgb, var(--amber) 20%, transparent);
+  color: color-mix(in srgb, var(--amber) 75%, var(--foreground)); }
+.org-app .org-timeline-addition button { min-height: 20px; padding: 0 7px; font-size: 11px; }
+.org-run-elapsed { color: var(--muted); font-size: 11px; }
+.org-reply-record { margin: 6px 0 0; font-size: 12px; color: var(--muted); }
+.org-reply-record > summary { cursor: pointer; }
+.org-reply-record > .org-reply-timeline { margin-top: 4px; }
