@@ -116,7 +116,13 @@ class ResearchFixture:
             memory["definitions"] = [
                 {"text": "V is a vector space over Q; its dimension is not established.", "sources": [sources["source_messages"][0]["id"]]}
             ]
-            content = json.dumps(memory) if self.mode != "bad_compaction" else "unsupported ungrounded summary"
+            if self.mode == "fenced_compaction":
+                # Near-valid output: fenced, with one item citing an invented message ID and a field left out.
+                memory["claims"] = [{"text": "An invented consensus.", "sources": ["not-a-message"]}]
+                memory.pop("next_steps")
+                content = "Here is the memory:\n```json\n" + json.dumps(memory) + "\n```"
+            else:
+                content = json.dumps(memory) if self.mode != "bad_compaction" else "unsupported ungrounded summary"
             delta, finish = {"content": content}, "stop"
         elif (self.turn == 0 and self.mode in {
             "tools", "uncertain", "goal", "credit_later", "invalid_arguments", "invalid_arguments_once", "gemini_nullable",
@@ -655,19 +661,56 @@ def test_compaction_preserves_sources_prices_and_captured_instructions(installat
     assert fixture.requests[-1]['max_completion_tokens'] == 512  # compaction preserves the answer's per-call limit
 
 
-def test_bad_compaction_never_discards_the_original_transcript(installation):
+def long_topic(installation):
     _, state, _, owner, topics = prepare(installation)
     org, topic = owner["organization_id"], topics[1]["id"]
     for number in range(70):
         state.store.post_message(owner["user_id"], org, topic, "A precise original hypothesis. " * 60, "memory-source-" + str(number))
     quote = Quote(MODELS[0], "0.000001", "0.000002", "0", 200000, 8192, supports_tools=True)
+    return state, owner, org, topic, quote
+
+
+def test_bad_compaction_answers_from_recent_messages_and_is_not_retried_every_turn(installation):
+    state, owner, org, topic, quote = long_topic(installation)
     state.enqueue(owner["user_id"], org, topic, "bad-memory", state.parameters([MODELS[0]], 256, 50, None), [quote])
     run = state.claim()
-    ResearchAgent(state, ResearchFixture("bad_compaction").provider, run, quote).execute()
-    assert state.run(owner["user_id"], org, run["id"])["status"] == "failed"
+    fixture = ResearchFixture("bad_compaction")
+    ResearchAgent(state, fixture.provider, run, quote).execute()
+    result = state.run(owner["user_id"], org, run["id"])
+    assert result["status"] == "succeeded", "a rejected summary does not fail the turn"
+    compactions = [body for body in fixture.requests if "Compact mathematical research" in body["messages"][0]["content"]]
+    assert len(compactions) == 1
+    answer = fixture.requests[-1]["messages"]
+    assert any(message["role"] == "system" and "could not be summarized" in message["content"] for message in answer)
     with state.store.transaction() as db:
         assert db.execute("SELECT count(*) FROM research_memories WHERE topic_id=?", (topic,)).fetchone()[0] == 0
-        assert db.execute("SELECT count(*) FROM messages WHERE topic_id=?", (topic,)).fetchone()[0] == 71
+        assert db.execute("SELECT count(*) FROM messages WHERE topic_id=? AND sender_kind='human'", (topic,)).fetchone()[0] == 71
+        reply = db.execute("SELECT content FROM messages WHERE inference_run_id=?", (run["id"],)).fetchone()[0]
+    assert reply.endswith("drew only on recent messages and history lookups.*")
+
+    state.store.post_message(owner["user_id"], org, topic, "Is this thing on?", "after-bad-memory")
+    state.enqueue(owner["user_id"], org, topic, "after-bad-memory-run", state.parameters([MODELS[0]], 256, 50, None), [quote])
+    second = state.claim()
+    retry = ResearchFixture("bad_compaction")
+    ResearchAgent(state, retry.provider, second, quote).execute()
+    assert state.run(owner["user_id"], org, second["id"])["status"] == "succeeded"
+    assert not any("Compact mathematical research" in body["messages"][0]["content"] for body in retry.requests), \
+        "the same failed batch is not summarized again within the retry window"
+    assert any(event["phase"] == "compaction_skipped" for event in state.run(owner["user_id"], org, second["id"])["activity"])
+
+
+def test_near_valid_compaction_keeps_only_cited_items(installation):
+    state, owner, org, topic, quote = long_topic(installation)
+    state.enqueue(owner["user_id"], org, topic, "fenced-memory", state.parameters([MODELS[0]], 256, 50, None), [quote])
+    run = state.claim()
+    ResearchAgent(state, ResearchFixture("fenced_compaction").provider, run, quote).execute()
+    assert state.run(owner["user_id"], org, run["id"])["status"] == "succeeded"
+    with state.store.transaction() as db:
+        memories = [json.loads(row[0]) for row in db.execute("SELECT body_json FROM research_memories WHERE topic_id=?", (topic,))]
+        reply = db.execute("SELECT content FROM messages WHERE inference_run_id=?", (run["id"],)).fetchone()[0]
+    assert memories and all(memory["claims"] == [] and memory["next_steps"] == [] for memory in memories)
+    assert all(memory["definitions"][0]["text"].startswith("V is a vector space") for memory in memories)
+    assert "couldn't be summarized" not in reply
 
 
 def test_goal_dispatch_and_explicit_completion_use_the_same_agent_loop(installation):
