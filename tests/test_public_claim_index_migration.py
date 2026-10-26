@@ -66,7 +66,14 @@ def released_operation():
     later = ("    if statement == REACTION_EMOJI_DROP:\n        _reaction_check(db, \"\")\n        return\n"
              "    if statement == REACTION_EMOJI_ADD:\n"
              "        _reaction_check(db, statement[statement.index(\" CHECK(\"):])\n        return\n")
-    assert branch in source and later in source
+    # Nor did direct conversations with your own bot (bot_direct_schema).
+    bot_direct = ("    if statement == BOT_DIRECT_COLUMN and any(row[1] == \"direct_conversation_id\" "
+                  "for row in db.execute(\"PRAGMA table_info(bot_runs)\")):\n        return\n",
+                  "    if statement in BOT_DIRECT_RUNS:\n        _nullable_bot_run_column(db, statement.split()[5])\n        return\n")
+    assert branch in source and later in source and all(part in source for part in bot_direct)
+    for part in bot_direct:
+        source = source.replace(part, "", 1)
+    source = source.replace("{PROJECT_ARTIFACTS, PROJECT_COMPUTE, *BOT_DIRECT_RUNS}", "{PROJECT_ARTIFACTS, PROJECT_COMPUTE}", 1)
     namespace = dict(vars(schema_operations))
     exec(compile(source.replace(branch, "", 1).replace(later, "", 1), "<retained-schema-operation>", "exec"), namespace)
     operation = namespace["sqlite_migration"]

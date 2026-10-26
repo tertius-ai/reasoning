@@ -60,7 +60,8 @@ test("People replaces the bot status dot with durable exact-action approvals", {
     await dialog().getByRole("button", { name: "Close approval dialog" }).click();
     assert.equal(writes.length, 0, "closing the dialog neither decides nor discards requests");
     await page.reload(); await indicator().waitFor();
-    await page.locator(`[data-bot-id="${bot}"]`).getByRole("button", { name: "Math Bot", exact: true }).click();
+    // Your own bot's name opens your conversation with it; its mark opens the review.
+    await indicator().click();
     const execution = dialog().locator("article").filter({ hasText: "Run on the bot computer" });
     await execution.getByRole("button", { name: "Allow once", exact: true }).click();
     await page.getByRole("button", { name: "Review 2 pending requests from Math Bot", exact: true }).waitFor();
