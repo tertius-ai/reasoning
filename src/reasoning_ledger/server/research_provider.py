@@ -280,6 +280,8 @@ class ResearchCompletion:
                 code, free, diagnostics = "provider_protocol", not submitted, None
             else:
                 code, free, diagnostics = "provider_network", not submitted, None
+            # Nothing on an all-zero-price route can be charged.
+            free = free or self.quote.free
             if code == "provider_protocol" and diagnostics is None:
                 rule = (
                     "invalid_json"
