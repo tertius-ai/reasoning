@@ -55,8 +55,12 @@ test("a request the owner's sharing setting excludes explains why it was not run
     /Stopped: the bot owner(&#x27;|')s “Who can use this bot” setting no longer includes you\. The local outcome is unknown/);
 });
 
-test("stopped bot outcomes stay explicitly unknown without restart or per-run cancel buttons", () => {
-  const html = renderToStaticMarkup(React.createElement(conversation.BotRunStatus, { run: { status: "outcome_unknown", error_code: "stop_requested" } }));
-  assert.match(html, /local outcome is unknown/); assert.match(html, /before any new attempt/);
-  assert.doesNotMatch(html, /<button|org-working|terminated|free/);
+test("stopped bot outcomes stay explicitly unknown until the runner confirms, without restart or per-run cancel buttons", () => {
+  const status = (run) => renderToStaticMarkup(React.createElement(conversation.BotRunStatus, { run }));
+  for (const error_code of ["stop_requested", "cancelled"]) {
+    const html = status({ status: "outcome_unknown", error_code });
+    assert.match(html, /Stopping: waiting for the bot&#x27;s runner/); assert.match(html, /local outcome is unknown/);
+    assert.doesNotMatch(html, /<button|org-working|terminated|free/);
+    assert.match(status({ status: "cancelled", error_code }), /Stopped\./);
+  }
 });

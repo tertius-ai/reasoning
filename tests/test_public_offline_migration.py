@@ -1025,8 +1025,10 @@ def test_cancelled_bot_workflow_migrates_unchanged_and_cannot_replay(organizatio
         assert runtime.claim(bot["token"]) is None
         with pytest.raises(StoreError, match="lease is no longer active"):
             runtime.progress(bot["token"], claim["id"], claim["lease"], "thinking")
-        with pytest.raises(StoreError, match="differs from the retained outcome"):
-            runtime.finish(bot["token"], claim["id"], claim["lease"], "succeeded", "late answer")
+        # A late receipt only confirms the runner stopped; it settles the cancel and is never posted.
+        assert runtime.finish(bot["token"], claim["id"], claim["lease"], "succeeded", "late answer")["status"] == "cancelled"
+        with recovered.transaction() as db:
+            assert db.execute("SELECT COUNT(*) FROM messages WHERE content='late answer'").fetchone()[0] == 0
 
 
 def test_prepared_verification_needs_no_backup_key_and_never_advances_activation(source):
