@@ -25,6 +25,14 @@ SYSTEM_MESSAGE = {
 }
 
 
+def free_route(row) -> bool:
+    """Whether a run's captured quote lists only zero prices; a quote that cannot be read is not free."""
+    try:
+        return Quote(**json.loads(row.get("quote_json") or "null")).free
+    except (TypeError, ValueError):
+        return False
+
+
 class InferenceStore:
     def __init__(self, store: Store):
         self.store = store
@@ -757,7 +765,7 @@ class InferenceStore:
             if accounting_unknown:
                 usage = None
             accounting = "settled" if usage else "released" if no_charge else "uncertain"
-            if accounting == "uncertain" and row.get("quote_json") and Quote(**json.loads(row["quote_json"])).free:
+            if accounting == "uncertain" and free_route(row):
                 # Nothing on an all-zero-price route can be charged, so its cost is known.
                 accounting = "released"
             db.execute(
