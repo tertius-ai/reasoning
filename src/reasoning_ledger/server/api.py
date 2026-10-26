@@ -16,6 +16,7 @@ from pydantic import AnyHttpUrl, Field, SecretStr, ValidationError, field_valida
 from starlette.concurrency import run_in_threadpool
 from starlette.types import ASGIApp, Receive, Scope, Send
 
+from .account_api import install_routes as install_account_routes
 from .bot_api import install_routes as install_bot_routes
 from .bot_cloud_api import install_routes as install_cloud_bot_routes
 from .bot_store import BotStore
@@ -566,6 +567,13 @@ def create_app(config: Config, *, provider: OpenRouter | None = None, mail_provi
                 if optional:
                     return None
                 raise StoreError(401, "sign-in required")
+            if optional:
+                try:
+                    store.session(access)
+                except StoreError as exc:
+                    if exc.status == 401:
+                        return None
+                    raise
             csrf = None
             if request.method not in {"GET", "HEAD", "OPTIONS"}:
                 if request.headers.get("origin") != config.public_url:
@@ -573,7 +581,14 @@ def create_app(config: Config, *, provider: OpenRouter | None = None, mail_provi
                 csrf = request.headers.get("x-csrf-token")
                 if not csrf:
                     raise StoreError(403, "CSRF credential required")
-            session = store.session(access, csrf)
+            try:
+                session = store.session(access, csrf)
+            except StoreError as exc:
+                # A revoked browser cookie must not prevent a link holder from
+                # creating an account. Invalid bearer headers and CSRF still fail.
+                if optional and exc.status == 401:
+                    return None
+                raise
         return session["user_id"], access
 
     def authenticated(request: Request) -> str:
@@ -582,6 +597,8 @@ def create_app(config: Config, *, provider: OpenRouter | None = None, mail_provi
         return result[0]
 
     User = Annotated[str, Depends(authenticated)]
+    install_account_routes(app, store, mail, authenticated, credentials,
+                           session_cookie=session_cookie, csrf_cookie=csrf_cookie, secure=config.secure)
     install_research_routes(app, inference, compute, workflow_runs, authenticated, enabled=config.inference_enabled)
     install_workbench_routes(app, store, authenticated)
     install_work_routes(app, store, authenticated)

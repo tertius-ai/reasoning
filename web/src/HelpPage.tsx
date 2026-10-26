@@ -5,6 +5,10 @@ import { ServerStatus } from "./ServerStatus";
 
 export function HelpPage({ onClose }: { onClose: () => void }) {
   return <section className="org-help-page" aria-label="Reasoning help"><header><h1>Help</h1><button onClick={onClose}>Back to chat</button></header>
+    <h2>Accounts, invitations and passwords</h2>
+    <p>Use an invitation once to join, then sign in normally. A used, expired or replaced invitation explains the next step. If you already have an account, sign in to accept its invitation; reinviting does not reset a password.</p>
+    <p><strong>Forgot password?</strong> on the sign-in page requests a private recovery email. Its link expires after 30 minutes and works once. Choose a new password and sign in again; earlier sessions are signed out. If you are joining an organization, reopen your invitation after signing in. Contact your administrator if email is unavailable or does not arrive.</p>
+    <p><strong>Account menu → User information</strong> lets you change your password or sign out other sessions. Owners and administrators can use <strong>Administration → Users</strong> to search names and email addresses across members and invitations, filter invitation status, send recovery emails, and inspect recent user activity. A pending invitation is unused; the account may already exist. The Invitations tab creates and sends invitations. Email accepted by its provider does not confirm inbox delivery.</p>
     <h2>Conversations and agents</h2>
     <p>Alpha topics are human conversations. Beta topics use your selected OpenRouter model or connected bot for research. Gamma topics compare models and run workflows or computations.</p>
     <p>Ordinary beta questions get a conversational answer. Ledger records and independent review are optional ways to support substantial work. When useful, a coordinator can delegate narrow tasks to workers, critics, librarians, formalizers, and verifiers. A model review is not a formal proof or a human check.</p>

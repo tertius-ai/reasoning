@@ -651,6 +651,9 @@ def _fence_restored_state(root: Path) -> dict:
         if db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='email_verifications'").fetchone():
             db.execute("UPDATE email_verifications SET ciphertext=NULL,expires_at=?,state=CASE WHEN state='sending' "
                        "THEN 'unknown' WHEN state='queued' THEN 'cancelled' ELSE state END", (now,))
+        if db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='account_mail'").fetchone():
+            db.execute("UPDATE account_mail SET ciphertext=NULL,expires_at=?,consumed_at=?,state=CASE WHEN state='sending' "
+                       "THEN 'unknown' WHEN state='queued' THEN 'cancelled' ELSE state END", (now, now))
         counts["work_workers_revoked"] = db.execute("UPDATE work_workers SET revoked_at=? WHERE revoked_at IS NULL", (now,)).rowcount
         db.execute("UPDATE work_effects SET state='unknown' WHERE state='intent'")
         db.execute("UPDATE work_provider_calls SET state='failed',error_code='backup_restored',finished_at=? WHERE state='running'", (now,))

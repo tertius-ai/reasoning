@@ -887,3 +887,16 @@ a.org-reference:hover, a.org-reference:focus-visible { text-decoration: underlin
 /* "Mark unread from here": a red line with "New" above the first message you marked unread. */
 .org-unread-divider { display: flex; align-items: center; gap: 8px; margin: 6px 0; color: var(--red, #e5484d); font-size: 10.5px; letter-spacing: .06em; text-transform: uppercase; }
 .org-unread-divider::before, .org-unread-divider::after { content: ""; flex: 1; height: 1px; background: color-mix(in srgb, var(--red, #e5484d) 55%, transparent); }
+
+.org-users-search { display: flex; align-items: end; gap: 12px; flex-wrap: wrap; margin: 16px 0; }
+.org-users-search label:first-child { flex: 1 1 240px; }
+.org-users-search label { min-width: 0; }
+.org-user-administration .org-admin-list li { align-items: flex-start; flex-wrap: wrap; }
+.org-user-administration .org-admin-list .org-user-actions { flex: 0 1 340px; display: flex; justify-content: flex-end; gap: 8px; flex-wrap: wrap; }
+.org-user-audit { padding-left: 18px; font-size: 12px; color: var(--muted); overflow-wrap: anywhere; }
+.org-user-audit li { margin: 8px 0; }
+.org-account-security { border-top: 1px solid var(--border); margin-top: 20px; padding-top: 16px; }
+.org-account-security form { display: grid; gap: 12px; }
+@media (max-width: 600px) {
+  .org-user-administration .org-admin-list .org-user-actions { flex-basis: 100%; justify-content: flex-start; }
+}

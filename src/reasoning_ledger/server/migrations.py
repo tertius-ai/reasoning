@@ -666,3 +666,7 @@ MIGRATIONS += (FEEDBACK_REPORTS_SCHEMA,)
 from .bot_direct_schema import SCHEMA as BOT_DIRECT_SCHEMA  # noqa: E402
 
 MIGRATIONS += (BOT_DIRECT_SCHEMA,)
+
+from .account_recovery_schema import SCHEMA as ACCOUNT_RECOVERY_SCHEMA  # noqa: E402
+
+MIGRATIONS += (ACCOUNT_RECOVERY_SCHEMA,)

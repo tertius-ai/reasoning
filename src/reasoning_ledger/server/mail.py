@@ -20,6 +20,7 @@ from .store import Store, StoreError
 from .worker_poll import claim_work
 
 MAIL_ENDPOINT = "https://api.resend.com/emails"
+MAIL_TABLES = ("invitation_mail", "email_verifications", "account_mail")
 
 
 def mailbox(value: object) -> str:
@@ -102,12 +103,15 @@ class MailStore:
         from .email_verification import EmailVerification
 
         self.verification = EmailVerification(self)
+        from .account_recovery import AccountRecovery
+
+        self.recovery = AccountRecovery(self)
 
     def check_limits(self, db, now):
         count = sum(db.execute(f"SELECT COUNT(*) FROM {table} WHERE created_at>?", (now - 86400,)).fetchone()[0]
-                    for table in ("invitation_mail", "email_verifications"))
+                    for table in MAIL_TABLES)
         if count >= self.config.daily_limit:
-            raise StoreError(429, "installation invitation email daily limit reached")
+            raise StoreError(429, "installation email daily limit reached")
 
     @staticmethod
     def _delivery_slot(db, now):
@@ -157,7 +161,7 @@ class MailStore:
             now = int(time.time())
             with self.store.transaction() as db:
                 earliest = [db.execute(f"SELECT MIN(created_at) FROM {table} WHERE created_at>?", (now - 86400,)).fetchone()[0]
-                            for table in ("invitation_mail", "email_verifications")]
+                            for table in MAIL_TABLES]
             retry_after = max(1, min((value for value in earliest if value is not None), default=now - 86400) + 86400 - now)
         return {"results": results, "retry_after_seconds": retry_after}
 
@@ -240,6 +244,7 @@ class MailStore:
                 (int(time.time()),),
             )
             db.execute("UPDATE email_verifications SET state='unknown',error_code='worker_interrupted' WHERE state='sending'")
+            db.execute("UPDATE account_mail SET state='unknown',error_code='worker_interrupted',ciphertext=NULL WHERE state='sending'")
 
     def claim(self):
         if self.config is None:
@@ -249,6 +254,10 @@ class MailStore:
             now = int(time.time())
             if not self._delivery_slot(db, now):
                 return None
+            recovery = self.recovery.claim(db)
+            if recovery:
+                db.execute("INSERT INTO auth_attempts VALUES(?,?)", ("mail:delivery", now))
+                return recovery
             while row := db.execute(
                 "SELECT * FROM invitation_mail WHERE state='queued' ORDER BY created_at,invitation_id LIMIT 1"
             ).fetchone():
@@ -289,6 +298,8 @@ class MailStore:
             raise ValueError("invalid mail completion")
         if row.get("kind") == "verification":
             return self.verification.finish(row, "sent" if state == "accepted" else state, provider_id, error)
+        if row.get("kind") == "account":
+            return self.recovery.finish(row, "sent" if state == "accepted" else state, provider_id, error)
         with self.store.transaction(write=True) as db:
             updated = db.execute(
                 "UPDATE invitation_mail SET state=?,provider_id=?,error_code=?,finished_at=? "

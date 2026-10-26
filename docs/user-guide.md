@@ -11,6 +11,38 @@ a verified release manifest shows the commit as **development build** or
 **unknown** rather than a guess, and **with uncommitted changes** marks a release
 built from modified source. A failed check shows **Unavailable** with the reason.
 
+## Sign in, invitations and passwords
+
+Use your invitation to join once, then open the website normally to sign in.
+The invitation page checks the link before asking for a password. A used link
+offers sign-in and recovery; an expired or replaced link asks you to use the
+newest invitation or contact your inviter. If your email already has an account,
+sign in to accept the invitation. A new invitation does not reset your password.
+
+Choose **Forgot password?** on the sign-in page to request a private recovery
+email. Its link lasts 30 minutes and works once. Choose and confirm your new
+password, then sign in normally; your previous sessions are signed out. If you
+are joining an organization, reopen your invitation after signing in. The same
+message is shown for registered and unregistered addresses. Check spam, and
+contact your administrator if email is unavailable or does not arrive. If a
+password submission loses its response, try signing in with the new password
+before requesting another link.
+
+**Account menu → User information** lets you change your password using your
+current password, or **Sign out other sessions**. Both sign out your other
+browsers and devices while keeping this session signed in.
+
+Owners and administrators can open **Administration → Users** and search by
+name or email across members and invitations. **Show** filters membership and
+invitation states. A pending invitation is unused; it does not prove that the
+person has no account. Member rows provide **Send password reset**, which emails
+a recovery link for the recipient to choose a password. Invitation rows provide
+**New link and email** and **Revoke**. The **Invitations** tab creates invitations
+and sends batches. Email acceptance by the provider does not confirm inbox
+delivery. **Recent user administration activity** shows account, membership and
+invitation events. An administrator cannot view a user's password or private
+recovery link.
+
 An open tab keeps running the version it loaded. After the server is upgraded,
 the next update the tab receives highlights the **What's new** button (✦) in
 the top bar with a dot. It opens the changes merged since the tab's version and

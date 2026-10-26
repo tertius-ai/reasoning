@@ -226,12 +226,48 @@ locations and error types, never input values or unknown extra-field names.
   without setting cookies. Send `Authorization: Bearer <access_token>` on API
   requests. Do not put bearer credentials in URLs or logs.
 
-Sessions expire after seven days; only credential hashes are stored in SQLite.
+Sessions expire after seven days; only credential hashes are stored in the database.
 Cookie-authenticated writes require both `Origin` equal to `--public-url` and
 `X-CSRF-Token` matching the session's CSRF credential. Bearer requests do not need
 a CSRF token. An invalid Authorization header fails rather than falling back
 to a cookie. Any supplied foreign Origin is rejected, including on login.
 `POST /api/auth/logout` revokes the current session and clears its cookies.
+
+### Account recovery and session management
+
+The sign-in page provides **Forgot password?**. Sending recovery email requires
+configured account email.
+`GET /api/auth/password-reset` reports availability and email-worker readiness.
+`POST /api/auth/password-reset` accepts `email` and a stable `client_id` and returns
+the same HTTP 202 acknowledgement for existing and unknown accounts. Requests
+are limited to three per email and sixty per peer in fifteen minutes; exact
+retries reuse their short-lived request receipt. The installation email cap
+applies equally to known and unknown addresses. A full installation allowance
+keeps the public response generic without admitting an external email;
+administrator requests report the limit explicitly. Recovery creates no account
+and never returns a token or delivery state to an anonymous requester.
+
+Recovery credentials are random, stored as hashes, and delivered in an
+encrypted outbox message using the configured Resend account. Links use
+`/organization.html#reset=...`; the browser removes the fragment before API
+requests and handles replacement links in an already-open tab. Links expire
+after thirty minutes and can be used once. Requesting another link does not
+invalidate an earlier unconsumed link; changing the password invalidates them
+all. A challenge is bound to the account's email and current password hash.
+Uncertain external delivery remains unknown and is not replayed automatically.
+
+`POST /api/auth/password-reset/confirm` accepts `token` and `password`, atomically
+changes the password, verifies mailbox ownership, invalidates all outstanding
+recovery links, and revokes every session for that account. It clears this
+browser's cookies and requires a normal sign-in; it does not create a session.
+`POST /api/auth/password` requires an authenticated session, the current
+password and a new `password`; it keeps the requesting session and revokes the
+others. `POST /api/auth/sessions/revoke-others` signs out only the authenticated
+user's other sessions. These actions are available under **User information**.
+Password changes queue a security notification when email and its daily
+allowance are available; an admission-limited notification is recorded in the
+account audit history without blocking a completed password change. Database
+restoration invalidates recovery links and retires retained account email.
 
 Host administrators can recover an account without email:
 
@@ -241,7 +277,8 @@ uv run reasoning-server --data-dir "$HOME/.local/share/reasoning-server" \
 ```
 
 This prompts for the new password, revokes every session belonging to the account,
-and records an audit event in its organizations. It is not an HTTP endpoint.
+invalidates outstanding recovery links, and records an audit event in its
+organizations. It is not an HTTP endpoint.
 
 ## Organization administration
 
@@ -292,6 +329,25 @@ or overwrite an existing membership's role. The administration interface returns
 a shareable invitation URL with its credential in the fragment, not a query
 parameter. The browser consumes and removes that fragment before making API
 requests. Links can be shared manually, whether or not email is configured.
+`POST /api/invitations/inspect` checks a token without consuming it and reports
+pending, used, expired, revoked or invalid state. Only a pending link reveals
+its intended email and whether sign-in is required. Inspection has separate
+per-peer and per-link limits so it does not consume sign-in allowance. A revoked
+browser session does not prevent accepting an invitation for a new account;
+invalid bearer credentials and invalid CSRF remain errors.
+
+**Administration → Users** searches members and invitation history by name or
+email and filters invitation states. `GET {prefix}/user-administration` requires
+current administrator access and returns member/invitation metadata, email
+availability, organization-requested recovery delivery states, and the most
+recent fifty account, membership and invitation audit events. It contains no
+password hashes, session credentials, recovery tokens or encrypted messages.
+`POST {prefix}/members/{member_id}/password-reset` requires a stable `client_id`
+and sends a reset email to an existing human member. Both caller authority and
+target membership are rechecked before delivery. The recipient sets their own
+password. Membership removal and role changes retain owner/admin boundaries
+and last-owner protection. The separate Invitations tab provides single and
+batch invitation creation.
 
 ### Optional invitation email
 
@@ -451,8 +507,15 @@ Use the prefix `/api/organizations/{organization_id}` for organization resources
 | `/api/setup` | POST | One-time owner and organization creation |
 | `/api/auth/login`, `/api/auth/logout` | POST | Session creation and revocation |
 | `/api/auth/me` | GET | Current account, without password material |
+| `/api/auth/password-reset` | GET, POST | Recovery availability and private email request |
+| `/api/auth/password-reset/confirm` | POST | Single-use mailbox-proven password recovery |
+| `/api/auth/password` | POST | Authenticated password change with current-password proof |
+| `/api/auth/sessions/revoke-others` | POST | Revoke the authenticated account's other sessions |
 | `/api/organizations` | GET, POST | Memberships and organization creation |
 | `/api/invitations/accept` | POST | One-time invitation acceptance |
+| `/api/invitations/inspect` | POST | Inspect an invitation without accepting it |
+| `{prefix}/user-administration` | GET | Searchable user/invitation metadata, recovery delivery and scoped audit history |
+| `{prefix}/members/{member_id}/password-reset` | POST | Administrator-requested recovery email to a current human member |
 | `{prefix}/hierarchy` | GET | Projects, channels, typed topics, the member's topic state and direct-conversation summaries |
 | `{prefix}/projects`, `{prefix}/channels`, `{prefix}/topics` | POST | Hierarchy creation; beta topics accept an eligible `default_model`, `default_effort` and `knowledge_tools` |
 | `{prefix}/projects/{project_id}`, `{prefix}/channels/{channel_id}` | PATCH | Project-owner or organization-administrator rename |
@@ -844,14 +907,14 @@ explicitly stale; indices are not mathematical correctness guarantees.
 Ctrl/Command+Shift+P toggles people and bots. `/tex` in beta/gamma topics
 prepares an owner-approved local bot compilation request; see [media](media.md).
 The sidebar overlays the conversation on narrow screens. Administration provides
-members/roles, shared invitation links and optional email, bots, compute, and an
+searchable users/roles and invitation history, shared invitation links and optional email, bots, compute, and an
 Inference area combining OpenRouter keys with budget and routing policy. Existing keys
 are listed separately from a closed Add key form, whose fields always represent
 a new credential. Every key can use the current text-to-text catalog without
 an application model whitelist. Destructive
 membership/invitation/key changes require confirmation. Each Administration tab
-loads only its own data when opened (members; invitations and email settings;
-keys and budget; bots; compute). The research blog editor requests its published
+loads only its own data when opened (user administration; invitation creation and email settings;
+keys and budget; bots; compute; feedback). The research blog editor requests its published
 and draft lists at once and shows each as it arrives.
 Creating a beta topic selects its initial model, advertised effort and knowledge
 collections. The channel's `/bot-models` endpoint lists following-access bot

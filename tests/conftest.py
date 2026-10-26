@@ -121,6 +121,7 @@ DEPLOYMENT_TESTS = {
     "test_python_distribution.py",
     "test_source_release.py",
     "test_public_email_verification.py",
+    "test_public_account_recovery.py",
     "test_public_source_statements.py",
     "test_public_subtree_stop.py",
 }

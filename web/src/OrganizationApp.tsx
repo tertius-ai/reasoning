@@ -38,6 +38,8 @@ import { AttachmentButton, MarkdownMedia, MediaScope } from "./TopicMedia";
 import { ReturnIcon } from "./ComposerIcons";
 import { TexRequestDialog, texRequest } from "./TexRequestDialog";
 import { EmailVerification, VerifyEmailBanner } from "./EmailVerification";
+import { InvitationBanner } from "./InvitationJoin";
+import { AccountSecurity } from "./PasswordRecovery";
 import { BatchInvitations, InvitationDeliveryProgress } from "./BatchInvitations";
 import { ProviderKeyUsage } from "./ProviderKeyUsage";
 import { WhatsNew } from "./WhatsNew";
@@ -56,6 +58,7 @@ const KnowledgeBrowser = lazy(() => import("./KnowledgeBrowser").then(module => 
 import { FeedbackAdministration, FeedbackButton } from "./Feedback";
 import { NewestMessageButton, useUnseenMessages } from "./NewestMessage";
 import { DirectTitle, type MessageJump } from "./DirectDetails";
+const UserAdministration = lazy(() => import("./UserAdministration").then(module => ({ default: module.UserAdministration })));
 const BotAdministration = lazy(() => import("./BotAdministration").then(module => ({ default: module.BotAdministration })));
 const ComputeAdministration = lazy(() => import("./ComputeAdministration").then(module => ({ default: module.ComputeAdministration })));
 const OrganizationModelBrowser = lazy(() => import("./OrganizationUsage").then(module => ({ default: module.OrganizationModelBrowser })));
@@ -1323,8 +1326,7 @@ function Conversation({ organizationId, topic, members, user, canWrite, canManag
 }
 
 function Administration({ organization, onClose, onRefresh, onAuthLost }: { organization: Organization; onClose: () => void; onRefresh: () => void; onAuthLost: () => void }) {
-  const [tab, setTab] = useState<"members" | "invitations" | "ai" | "bots" | "compute" | "feedback">("members");
-  const [members, setMembers] = useState<Member[]>([]);
+  const [tab, setTab] = useState<"users" | "invitations" | "ai" | "bots" | "compute" | "feedback">("users");
   const [invitations, setInvitations] = useState<Invitation[]>([]);
   const [mail, setMail] = useState<InvitationMail>({ enabled: false, daily_limit: null, worker_running: false });
   const [sendEmail, setSendEmail] = useState(false);
@@ -1343,8 +1345,7 @@ function Administration({ organization, onClose, onRefresh, onAuthLost }: { orga
   const root = organizationPath(organization.id);
   // Each tab loads only what it shows; the bot and compute tabs load their own data.
   const reload = useCallback(async () => {
-    if (tab === "members") setMembers(await sharedRequest<Member[]>(root + "/members", { maxAge: 2000 }));
-    else if (tab === "invitations") await Promise.all([
+    if (tab === "invitations") await Promise.all([
       request<Invitation[]>(root + "/invitations").then(setInvitations), request<InvitationMail>(root + "/invitation-mail").then(setMail),
     ]);
     else if (tab === "ai") await Promise.all([
@@ -1371,19 +1372,14 @@ function Administration({ organization, onClose, onRefresh, onAuthLost }: { orga
     finally { setBusy(false); }
   };
   return <Dialog title={organization.name + " administration"} onClose={onClose}>
-    <nav className="org-admin-tabs" aria-label="Administration">{(["members", "invitations", "ai", "bots", "compute", "feedback"] as const).map((value) =>
+    <nav className="org-admin-tabs" aria-label="Administration">{(["users", "invitations", "ai", "bots", "compute", "feedback"] as const).map((value) =>
       <button key={value} aria-pressed={tab === value} onClick={() => { setTab(value); setError(""); }}>{value === "ai" ? "Inference" : value[0].toUpperCase() + value.slice(1)}</button>)}</nav>
     {error && <p role="alert" className="org-error">{error}</p>}
     {tab === "bots" && <LazyView label="Bot administration"><BotAdministration key={organization.id} organizationId={organization.id} /></LazyView>}
     {tab === "feedback" && <FeedbackAdministration key={organization.id} organizationId={organization.id} onAuthLost={onAuthLost} />}
     {tab === "compute" && <LazyView label="Compute administration"><ComputeAdministration key={organization.id} organizationId={organization.id} onAuthLost={onAuthLost} /></LazyView>}
-    {tab === "members" && <ul className="org-admin-list">{members.map((member) => <li key={member.id}><div><strong>{member.name}</strong><small>{member.email}</small></div>
-      {organization.role === "owner" || !["owner", "admin"].includes(member.role) ? <>
-        <select aria-label={"Role for " + member.name} value={member.role} disabled={busy} onChange={(event) => void action(() => request(root + "/members/" + member.id, { method: "PATCH", body: { role: event.target.value } }))}>
-          {(organization.role === "owner" ? ["owner", "admin", "member", "viewer"] : ["member", "viewer"]).map((value) => <option key={value}>{value}</option>)}
-        </select><button disabled={busy} onClick={() => { if (window.confirm(`Remove ${member.name} from ${organization.name}? Their account and message history remain.`)) void action(() => request(root + "/members/" + member.id, { method: "DELETE" })); }}>Remove</button>
-      </> : <span>{member.role}</span>}
-    </li>)}</ul>}
+    {tab === "users" && <LazyView label="User administration"><UserAdministration organization={organization}
+      onRefresh={onRefresh} onAuthLost={onAuthLost} /></LazyView>}
     {tab === "invitations" && <><BatchInvitations organizationId={organization.id} owner={organization.role === "owner"}
       mailEnabled={mail.enabled} workerRunning={mail.worker_running} invitations={invitations}
       onChanged={() => { void reload(); onRefresh(); }} /><form onSubmit={(event) => { event.preventDefault(); void action(async () => {
@@ -1398,7 +1394,7 @@ function Administration({ organization, onClose, onRefresh, onAuthLost }: { orga
     }); }}><label>Invite email<input type="email" required value={email} onChange={(event) => setEmail(event.target.value)} /></label>
       <label>Invitation role<select value={role} onChange={(event) => setRole(event.target.value)}><option>member</option><option>viewer</option>{organization.role === "owner" && <option>admin</option>}</select></label>
       {mail.enabled ? <><label className="org-invitation-email-toggle"><input type="checkbox" checked={sendEmail} onChange={(event) => setSendEmail(event.target.checked)} />Send invitation by email</label>
-        <small>Installation limit: {mail.daily_limit} email invitations per rolling day.{!mail.worker_running && " Email worker is not running; invitations will remain queued."}</small></>
+        <small>Installation limit: {mail.daily_limit} emails per rolling day, shared with verification and password recovery.{!mail.worker_running && " Email worker is not running; invitations will remain queued."}</small></>
         : <p className="org-help">Email is not configured. Create a link to share directly.</p>}
       <button className="org-primary" disabled={busy}>Create invitation</button></form>
       {link && <label className="org-invite-link">Invitation link<input value={link} readOnly onFocus={(event) => event.target.select()} />
@@ -1799,9 +1795,8 @@ export function OrganizationApp({ user, onAccount, onAuthenticated, onSignedOut,
       setVerificationToken(""); window.history.replaceState(null, "", window.location.pathname + window.location.search);
       void request<Account>("/auth/me").then(onAccount).catch(cause => setError(errorMessage(cause)));
     }} />}
-    {invitation && <div className="org-banner">You have an invitation. <button onClick={() => void request<Session>("/invitations/accept", { method: "POST", body: { token: invitation } })
-      .then(async (session) => { await authenticated(session); setRefresh((value) => value + 1); })
-      .catch((cause) => setError(errorMessage(cause)))}>Accept invitation</button><button onClick={() => setInvitation("")}>Dismiss</button></div>}
+    {invitation && <InvitationBanner key={invitation} token={invitation} email={user.email}
+      onAccepted={async session => { await authenticated(session); setRefresh(value => value + 1); }} onDismiss={() => setInvitation("")} />}
     <div className="org-body">
       {navOpen && <button className="org-nav-backdrop" aria-label="Close project navigation" onClick={() => setNavOpen(false)} />}
       <aside id="org-project-navigation" hidden={!navOpen} className={"org-sidebar " + (navOpen ? "org-sidebar-open" : "")}>
@@ -1860,7 +1855,8 @@ export function OrganizationApp({ user, onAccount, onAuthenticated, onSignedOut,
     </div>
     {information && <Dialog title={information === "user" ? "User information" : "Organization information"} onClose={() => setInformation(null)}>
       {information === "user" ? <><dl><dt>Name</dt><dd>{user.name}</dd><dt>Email</dt><dd>{user.email}</dd></dl>
-        <EmailVerification onVerified={() => { void request<Account>("/auth/me").then(onAccount).catch(cause => setError(errorMessage(cause))); }} /></>
+        <EmailVerification onVerified={() => { void request<Account>("/auth/me").then(onAccount).catch(cause => setError(errorMessage(cause))); }} />
+        <AccountSecurity onAuthLost={authLost} /></>
         : organization && <dl><dt>Name</dt><dd>{organization.name}</dd><dt>Your role</dt><dd>{organization.role}</dd></dl>}
     </Dialog>}
     {tool && organization && <Dialog title={tool === "bots" ? "My bots" : tool === "knowledge" ? "Shared knowledge" : tool === "prices" ? "Model capabilities" : "Usage and energy"} onClose={() => setTool(null)}>

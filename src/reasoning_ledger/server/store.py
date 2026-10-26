@@ -310,11 +310,14 @@ class Store:
 
     def reset_password(self, email: str, password: str) -> None:
         """Host-administrator recovery; never exposed over HTTP."""
+        from .account_recovery import invalidate_recovery
+
         encoded = password_hash(password)
         with self.transaction(write=True) as db:
             user = _row(db.execute("SELECT id FROM users WHERE email=? AND account_kind='human'", (email.lower(),)).fetchone())
             db.execute("UPDATE users SET password_hash=? WHERE id=?", (encoded, user["id"]))
             db.execute("DELETE FROM sessions WHERE user_id=?", (user["id"],))
+            invalidate_recovery(db, user["id"], int(time.time()))
             for org in db.execute("SELECT organization_id FROM memberships WHERE user_id=?", (user["id"],)).fetchall():
                 self._audit(db, org[0], user["id"], "account.host-password-reset", user["id"])
 
@@ -590,6 +593,31 @@ class Store:
         if invitation is None:
             raise StoreError(404, "invitation unavailable")
         return dict(invitation)
+
+    def invitation_status(self, credential: str, *, peer: str | None = None) -> dict[str, Any]:
+        """A link holder can inspect availability without consuming the invite."""
+        with self.transaction(write=peer is not None) as db:
+            if peer is not None:
+                now = int(time.time())
+                db.execute("DELETE FROM auth_attempts WHERE scope LIKE 'invitation:inspect:%' AND attempted_at<=?", (now - 900,))
+                scopes = (("invitation:inspect:peer:" + digest(peer), 120), ("invitation:inspect:link:" + digest(credential), 20))
+                for scope, maximum in scopes:
+                    count = db.execute("SELECT COUNT(*) FROM auth_attempts WHERE scope=? AND attempted_at>?",
+                                       (scope, now - 900)).fetchone()[0]
+                    if count >= maximum:
+                        raise StoreError(429, "too many invitation checks; try again later")
+                db.executemany("INSERT INTO auth_attempts VALUES(?,?)", ((scope, now) for scope, _ in scopes))
+            row = db.execute("SELECT * FROM invitations WHERE token_hash=?", (digest(credential),)).fetchone()
+            if row is None:
+                return {"state": "invalid"}
+            if row["accepted_at"] is not None:
+                return {"state": "used"}
+            if row["revoked_at"] is not None:
+                return {"state": "revoked"}
+            if row["expires_at"] <= int(time.time()):
+                return {"state": "expired"}
+            exists = db.execute("SELECT 1 FROM users WHERE email=? AND account_kind='human'", (row["email"],)).fetchone()
+            return {"state": "pending", "email": row["email"], "existing_account": exists is not None}
 
     def accept_invitation(self, credential: str, *, user_id: str | None, name: str | None, password: str | None) -> dict[str, Any]:
         with self.transaction() as db:

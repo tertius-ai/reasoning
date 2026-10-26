@@ -61,6 +61,8 @@ async function withApplication(scenario, { hold = () => null, stream = true } = 
       else if (path === "/api/organizations") data = [{ id: org, name: "Testing", role: "owner" }];
       else if (path.endsWith("/hierarchy")) data = hierarchy;
       else if (path.endsWith("/members")) data = [{ id: user, name: "Alice", role: "owner" }];
+      else if (path.endsWith("/user-administration")) data = { members: [{ id: user, name: "Alice", email: "alice@example.org", role: "owner" }],
+        invitations: [], mail: { enabled: false }, recoveries: [], events: [] };
       else if (path.endsWith("/presence")) data = { humans: [], bots: [] };
       else if (path.endsWith("/inference-configuration")) data = { allowed_models: [model.id], tools: [] };
       else if (path.endsWith("/model-prices")) data = { models: [model], allowed_models: [model.id], fetched_at: 1_800_000_000 };
