@@ -35,6 +35,11 @@ def retained_answer(db, row, status, error):
             text += "\n\nRemaining: " + checkpoint["remaining"]
         if checkpoint.get("sources"):
             text += "\n\nSources: " + "; ".join(checkpoint["sources"])
+    if any(json.loads(event[0]).get("phase") in {"compaction_failed", "compaction_skipped"} for event in db.execute(
+            "SELECT event_json FROM llm_events WHERE organization_id=? AND run_id=? AND event_json LIKE ?",
+            (row["organization_id"], row["id"], '%"compaction_%'))):
+        text += "\n\n*Earlier messages in this topic couldn't be summarized for this reply, so it drew only on recent " \
+                "messages and history lookups.*"
     if state["status"] == "waiting":
         text += "\n\n*Waiting: " + str(state["reason"]) + ". This is a checkpoint, not a completed answer.*"
     elif status != "succeeded":

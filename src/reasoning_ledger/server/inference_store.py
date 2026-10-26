@@ -467,7 +467,8 @@ class InferenceStore:
             for event in db.execute(
                 "SELECT sequence,event_json FROM llm_events WHERE organization_id=? AND run_id=? "
                 "AND json_extract(event_json,'$.phase') IN "
-                "('round','tool_requested','tool_completed','compacting','answer_ready','reasoning_summary','delegated') "
+                "('round','tool_requested','tool_completed','compacting','compaction_failed','compaction_skipped',"
+                "'answer_ready','reasoning_summary','delegated') "
                 "ORDER BY sequence DESC LIMIT 20",
                 (row["organization_id"], row["id"]),
             ):
@@ -477,6 +478,8 @@ class InferenceStore:
                     "tool_requested",
                     "tool_completed",
                     "compacting",
+                    "compaction_failed",
+                    "compaction_skipped",
                     "answer_ready",
                     "reasoning_summary",
                     "delegated",
