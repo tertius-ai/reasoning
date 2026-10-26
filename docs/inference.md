@@ -462,11 +462,15 @@ Known charges settled during the current UTC calendar month count as spent.
 Outstanding reservations and uncertain charges remain held across month
 boundaries. Admission is blocked when their sum plus known spending cannot
 cover a new request. Valid final usage settles the actual provider cost;
-definite pre-submission refusals and HTTP 401/402/403 refusals before streaming
-release the rejected call's reservation. Earlier successful calls in the same
-turn retain their actual charges. An error inside an accepted stream, including
-402, without trustworthy usage retains its reservation as uncertain. The
-executor performs no automatic paid retries.
+definite pre-submission refusals and HTTP 400/401/402/403/404/413/422 refusals
+before streaming release the rejected call's reservation: the provider refused
+the request itself and produced no generation. A timeout (408), rate limit (429)
+or upstream failure (5xx) may follow provider work and stays uncertain. On a
+route whose listed prices are all zero, a call without usage still has a known
+cost of zero and is released. Earlier successful calls in the same turn retain
+their actual charges. An error inside an accepted stream, including 402,
+without trustworthy usage retains its reservation as uncertain. The executor
+performs no automatic paid retries.
 
 Without an explicit output ceiling, a call can exceed its output/cost estimate.
 Known usage is settled in full even when it exceeds the reservation; budgets
@@ -482,6 +486,13 @@ limits, or provider availability. Credit refusals can also include allowlisted
 `limit_source` and `reason` enums distinguishing key limits, balance/oversized
 request estimates, and temporary concurrent spending limits. These follow
 [OpenRouter's credit-limit contract](https://openrouter.ai/docs/api_reference/limits).
+A 404, when OpenRouter finds no endpoint for the model and request, can include
+an `unmatched` enum read from its message: `data_policy` (the account's privacy
+settings or zero-data-retention routing exclude every endpoint; free models
+usually need free endpoints allowed in OpenRouter's privacy settings),
+`parameters` (no endpoint accepts the request's tools or parameters),
+`providers` (the key's provider settings exclude every endpoint), or `model`
+(OpenRouter does not recognize the model).
 Raw upstream messages, error bodies, prompts, headers, and credentials are
 excluded. A displayed held reservation is explicitly labeled
 **Budget held**, separate from the provider's actual charge. Status guidance

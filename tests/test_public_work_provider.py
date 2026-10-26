@@ -192,8 +192,8 @@ def test_usage_received_before_invalid_stream_is_charged_not_invented_or_reserve
     assert completion(env, row).json() == saved and len(posts(fixture)) == 1
 
 
-@pytest.mark.parametrize("status", [401, 402, 403])
-def test_pre_stream_credit_and_permission_refusals_release_reservation(installation, status):
+@pytest.mark.parametrize("status", [400, 401, 402, 403, 404, 413, 422])
+def test_pre_stream_refusals_without_a_generation_release_reservation(installation, status):
     env, row, fixture = prepared(installation)
     catalog = fixture.handle
 

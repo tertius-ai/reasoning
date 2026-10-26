@@ -412,3 +412,46 @@ def test_actual_workflow_thread_handles_bad_catalog_without_paid_child_or_worker
     finally:
         worker.stop()
     assert not worker.running
+
+
+def refusal(status, body):
+    provider = OpenRouter(transport=httpx.MockTransport(lambda request: httpx.Response(status, json=body)))
+
+    async def read():
+        with pytest.raises(ProviderError) as error:
+            async for _ in provider.stream(KEY, QUOTE, [{"role": "user", "content": "Prompt"}], 64):
+                pytest.fail("rejected request must not return output")
+        return error.value
+
+    return asyncio.run(read())
+
+
+@pytest.mark.parametrize(("message", "unmatched"), [
+    ("No endpoints found matching your data policy (Free model publication). " + KEY, "data_policy"),
+    ("No endpoints found that support tool use. " + KEY, "parameters"),
+    ("No endpoints found that can handle the requested parameters.", "parameters"),
+    ("No allowed providers are available for the selected model.", "providers"),
+    ("Model recursive/flint is not a valid model ID", "model"),
+    ("Something else entirely " + KEY, None),
+])
+def test_route_not_found_is_free_and_explained_without_provider_text(message, unmatched):
+    error = refusal(404, {"error": {"code": 404, "message": message}})
+    assert error.no_charge and error.diagnostics["http_status"] == 404
+    assert error.diagnostics.get("unmatched") == unmatched
+    assert KEY not in json.dumps(error.diagnostics) and message not in json.dumps(error.diagnostics)
+    if unmatched == "data_policy":
+        assert "privacy settings" in error.diagnostics["action"]
+
+
+@pytest.mark.parametrize("status", [408, 429, 502, 503])
+def test_refusals_that_may_follow_provider_work_stay_uncertain(status):
+    assert not refusal(status, {"error": {"message": "upstream"}}).no_charge
+
+
+def test_only_an_all_zero_price_route_counts_as_free():
+    assert Quote(MODEL, "0", "0", "0", 200000, 8192).free
+    assert Quote(MODEL, "0", "0", "0", 200000, 8192, pricing={"prompt": "0", "web_search": "0"}).free
+    assert not QUOTE.free
+    assert not Quote(MODEL, "0", "0", "0", 200000, 8192, pricing={"web_search": "0.004"}).free
+    assert not Quote(MODEL, "0", "0", "0", 200000, 8192, pricing={"prompt": "-1"}).free, "an unreadable price is not free"
+
