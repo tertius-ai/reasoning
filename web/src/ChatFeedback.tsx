@@ -5,6 +5,9 @@ import { encodeMessageEdit, MessageEditDraft, readableMessageEdit, updateMessage
 import { ReferenceContext, messageLink } from "./references";
 import "./chat-feedback.css";
 
+/** Menus are positioned before paint in the browser; server rendering has no layout to measure. */
+const useBrowserLayoutEffect = typeof window === "undefined" ? useEffect : useLayoutEffect;
+
 // The server's canonical order (reaction_emoji_schema.EMOJIS): the first six are the quick choices, as in Signal.
 const emojis = {
   up: "👍", down: "👎", heart: "❤️", laugh: "😂", surprised: "😮", sad: "😢", upside_down: "🙃", party: "🎉", thinking: "🤔", eyes: "👀",
@@ -66,7 +69,7 @@ export function ActionMenu({ label, className, icon, menuClassName = "", onClose
     setPosition(current => current && (Math.abs(top - current.top) > .5 || Math.abs(left - current.left) > .5)
       ? { left, top } : current);
   };
-  useLayoutEffect(() => {
+  useBrowserLayoutEffect(() => {
     if (!open) { onClosed?.(); return; }
     reposition();
   }, [open]);
