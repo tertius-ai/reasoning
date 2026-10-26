@@ -97,16 +97,21 @@ def sqlite_migration(db, statement):
 
 def _nullable_bot_run_column(db, column):
     # As for compute jobs: rebuild from the installation's own schema, keeping every later column, index and guard.
+    # One rebuild drops NOT NULL from all three columns, so the statements for the other two find nothing left to do;
+    # a rebuild re-parses the whole schema, and migrations are replayed to build reference schemas.
+    columns = [statement.split()[5] for statement in BOT_DIRECT_RUNS]
     schema = db.execute("SELECT sql FROM sqlite_schema WHERE type='table' AND name='bot_runs'").fetchone()[0]
     rebuilt, count = re.subn(r'^CREATE TABLE (?:"bot_runs"|bot_runs)(?=\s)', 'CREATE TABLE bot_runs_rebuild', schema, count=1)
-    if count != 1 or f"{column} TEXT" not in rebuilt:
+    if count != 1 or column not in columns or any(f"{name} TEXT" not in rebuilt for name in columns):
         raise ValueError("bot run schema does not match its direct conversation migration")
     if f"{column} TEXT NOT NULL" not in rebuilt:
         return
     indexes = [row[0] for row in db.execute(
         "SELECT sql FROM sqlite_schema WHERE tbl_name='bot_runs' AND type IN ('index','trigger') AND sql IS NOT NULL ORDER BY name"
     )]
-    db.execute(rebuilt.replace(f"{column} TEXT NOT NULL", f"{column} TEXT", 1))
+    for name in columns:
+        rebuilt = rebuilt.replace(f"{name} TEXT NOT NULL", f"{name} TEXT", 1)
+    db.execute(rebuilt)
     db.execute("INSERT INTO bot_runs_rebuild SELECT * FROM bot_runs")
     db.execute("DROP TABLE bot_runs")
     db.execute("ALTER TABLE bot_runs_rebuild RENAME TO bot_runs")
