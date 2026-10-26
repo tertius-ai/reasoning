@@ -138,7 +138,109 @@ export function FeedbackButton({ organization, describeView, onAuthLost }: { org
   </div>;
 }
 
-/** Administration › Feedback: every report in the organization, newest first, each resolvable. */
+const utc = (at: number) => new Date(at * 1000).toISOString().slice(0, 16).replace("T", " ") + " UTC";
+/** A fenced block that no backtick run inside the text can close early. */
+const fenced = (lines: string[]) => {
+  const fence = "`".repeat(Math.max(3, ...lines.map(line => Math.max(0, ...(line.match(/`+/g) ?? []).map(run => run.length + 1)))));
+  return [fence, ...lines, fence];
+};
+
+/** A report as GitHub-flavoured Markdown, with its diagnostics folded into a <details> block; times are UTC. */
+export function reportMarkdown(report: FeedbackReport): string {
+  const context = report.context, requests = context.requests ?? [], errors = context.errors ?? [];
+  const lines = [`### ${report.kind === "bug" ? "Bug report" : "Idea"} from ${report.reporter.name} · ${utc(report.created_at)}`, "", report.body];
+  if (report.resolved_at) lines.push("", `Resolved ${utc(report.resolved_at)}.`);
+  if (!Object.keys(context).length) return lines.join("\n");
+  const release = context.release && `${context.release}${context.server_release ? ` (server ${context.server_release.slice(0, 12)})` : ""}`;
+  const facts = [["View", context.view], ["Release", release], ["Browser", context.browser], ["Window", context.viewport]].filter(([, value]) => value);
+  lines.push("", "<details><summary>Diagnostics</summary>", "", ...facts.map(([label, value]) => `- ${label}: ${value}`),
+    "", `**Failed requests (${requests.length})**`,
+    ...(requests.length ? fenced(requests.map(item => `${utc(item.at).slice(11, 16)} ${item.method} ${item.path} → ${item.status || "no response"} ${item.detail}`.trimEnd())) : ["None."]),
+    "", `**Page errors (${errors.length})**`,
+    ...(errors.length ? fenced(errors.flatMap(item => [item.message, ...(item.stack ? item.stack.split("\n").map(line => "  " + line) : [])])) : ["None."]),
+    "", "</details>");
+  return lines.join("\n");
+}
+
+function Chevron() {
+  return <svg className="org-feedback-chevron" viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M6 3.5 10.5 8 6 12.5" /></svg>;
+}
+
+type Filter = "all" | Kind;
+type Group = "open" | "resolved";
+const when = (at: number) => new Date(at * 1000);
+
+/** Reports grouped into Open and Resolved; every report and both groups collapse. Resolved starts collapsed. */
+export function FeedbackReports({ reports, busy, onResolve, onCopyFailed }: {
+  reports: FeedbackReport[]; busy: string; onResolve: (report: FeedbackReport) => void; onCopyFailed: () => void;
+}) {
+  const [filter, setFilter] = useState<Filter>("all");
+  const [groups, setGroups] = useState<ReadonlySet<Group>>(() => new Set(["open"]));
+  const [expanded, setExpanded] = useState<ReadonlySet<string>>(() => new Set());
+  const [copied, setCopied] = useState("");
+  useEffect(() => {
+    if (!copied) return;
+    const timer = setTimeout(() => setCopied(""), 2000);
+    return () => clearTimeout(timer);
+  }, [copied]);
+  const flip = <T,>(set: ReadonlySet<T>, value: T) => { const next = new Set(set); if (!next.delete(value)) next.add(value); return next; };
+  const copy = (report: FeedbackReport) => {
+    if (!navigator.clipboard) { onCopyFailed(); return; }
+    void navigator.clipboard.writeText(reportMarkdown(report)).then(() => setCopied(report.id), onCopyFailed);
+  };
+  const shown = reports.filter(report => filter === "all" || report.kind === filter);
+  const open = reports.filter(report => !report.resolved_at).length;
+  const group = (key: Group, label: string, items: FeedbackReport[]) => {
+    const visible = groups.has(key), list = `org-feedback-group-${key}`;
+    return <div className="org-feedback-group" key={key}>
+      <button type="button" className="org-feedback-group-toggle" aria-expanded={visible} aria-controls={list} onClick={() => setGroups(flip(groups, key))}>
+        <Chevron />{label}<span className="org-feedback-count">{items.length}</span></button>
+      {visible && <ul id={list} aria-label={`${label} reports`}>{items.length ? items.map(report => {
+        const isOpen = expanded.has(report.id), panel = `org-feedback-report-${report.id}`;
+        const requests = report.context.requests?.length ?? 0, errors = report.context.errors?.length ?? 0, diagnostics = Object.keys(report.context).length > 0;
+        const created = when(report.created_at);
+        return <li key={report.id} className={report.resolved_at ? "org-feedback-resolved" : undefined}>
+          <div className="org-feedback-row">
+            <button type="button" className="org-feedback-toggle" aria-expanded={isOpen} aria-controls={panel} onClick={() => setExpanded(flip(expanded, report.id))}>
+              <Chevron /><span className={"org-feedback-badge org-feedback-" + report.kind}>{report.kind === "bug" ? "Bug" : "Idea"}</span>
+              <span className="org-feedback-summary">{report.body.split("\n", 1)[0]}</span></button>
+            {diagnostics && <span className="org-feedback-signals" title={`${plural(requests, "failed request")}, ${plural(errors, "page error")}`}>
+              <span className={requests ? "org-feedback-status" : undefined} aria-hidden="true">⇄{requests}</span>
+              <span className={errors ? "org-feedback-error" : undefined} aria-hidden="true">!{errors}</span>
+              <span className="org-visually-hidden">{plural(requests, "failed request")}, {plural(errors, "page error")}</span></span>}
+            <time dateTime={created.toISOString()} title={created.toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" })}>
+              {created.toLocaleDateString(undefined, { month: "short", day: "numeric" })}</time>
+          </div>
+          {isOpen && <div className="org-feedback-panel" id={panel}>
+            <p className="org-help">{report.reporter.name} · {created.toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" })}
+              {report.resolved_at && ` · resolved ${when(report.resolved_at).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" })}`}</p>
+            <p className="org-feedback-body">{report.body}</p>
+            {diagnostics ? <DiagnosticsList diagnostics={report.context} serverRelease={report.context.server_release} /> : <p className="org-help">No diagnostics attached.</p>}
+            <div className="org-feedback-report-actions">
+              <button type="button" disabled={busy === report.id} onClick={() => onResolve(report)}>{report.resolved_at ? "Reopen" : "Resolve"}</button>
+              <button type="button" className={copied === report.id ? "org-feedback-copied" : undefined} onClick={() => copy(report)}>
+                {copied === report.id ? "Copied" : "Copy report"}</button>
+            </div>
+          </div>}
+        </li>;
+      }) : <li className="org-help">No {label.toLowerCase()} reports{filter === "all" ? "" : ` of this kind`}.</li>}</ul>}
+    </div>;
+  };
+  return <>
+    <div className="org-feedback-toolbar">
+      <div className="org-feedback-filter" role="group" aria-label="Kind of report">
+        {(["all", "bug", "idea"] as const).map(value => <button key={value} type="button" aria-pressed={filter === value} onClick={() => setFilter(value)}>
+          {value === "all" ? "All" : value === "bug" ? "Bugs" : "Ideas"}</button>)}
+      </div>
+      <p className="org-help">{open} open · {reports.length - open} resolved</p>
+    </div>
+    <span className="org-visually-hidden" role="status">{copied ? "Report copied as Markdown." : ""}</span>
+    {group("open", "Open", shown.filter(report => !report.resolved_at))}
+    {group("resolved", "Resolved", shown.filter(report => report.resolved_at))}
+  </>;
+}
+
+/** Administration › Feedback: every report in the organization, newest first, grouped by status and resolvable. */
 export function FeedbackAdministration({ organizationId, onAuthLost }: { organizationId: string; onAuthLost: () => void }) {
   const [reports, setReports] = useState<FeedbackReport[] | null>(null), [error, setError] = useState(""), [busy, setBusy] = useState("");
   const root = organizationPath(organizationId) + "/feedback-reports";
@@ -156,22 +258,11 @@ export function FeedbackAdministration({ organizationId, onAuthLost }: { organiz
     void request<FeedbackReport>(root + "/" + encodeURIComponent(report.id) + "/resolution", { method: "PUT", body: { resolved: !report.resolved_at } })
       .then(updated => setReports(current => current?.map(item => item.id === updated.id ? updated : item) ?? null)).catch(fail).finally(() => setBusy(""));
   };
-  const open = reports?.filter(report => !report.resolved_at).length ?? 0;
   return <section className="org-feedback-admin" aria-label="Feedback reports">
     {error && <p role="alert" className="org-error">{error}</p>}
     {!reports ? <p role="status" className="org-help">Loading reports…</p>
       : !reports.length ? <p className="org-help">No reports yet. Members send them with the bug button next to their name.</p>
-        : <><p className="org-help">{open} open · {reports.length - open} resolved</p>
-          <ul className="org-admin-list">{reports.map(report => <li key={report.id} className={report.resolved_at ? "org-feedback-resolved" : ""}>
-            <div><strong><span className={"org-feedback-badge org-feedback-" + report.kind}>{report.kind === "bug" ? "Bug" : "Idea"}</span>{report.reporter.name}
-              <time dateTime={new Date(report.created_at * 1000).toISOString()}>{new Date(report.created_at * 1000).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" })}</time></strong>
-              <p className="org-feedback-body">{report.body}</p>
-              {Object.keys(report.context).length > 0 ? <details className="org-feedback-details"><summary>Diagnostics
-                ({plural(report.context.requests?.length ?? 0, "failed request")}, {plural(report.context.errors?.length ?? 0, "page error")})</summary>
-                <DiagnosticsList diagnostics={report.context} serverRelease={report.context.server_release} /></details>
-                : <small>No diagnostics attached.</small>}
-            </div>
-            <button type="button" disabled={busy === report.id} onClick={() => resolve(report)}>{report.resolved_at ? "Reopen" : "Resolve"}</button>
-          </li>)}</ul></>}
+        : <FeedbackReports reports={reports} busy={busy} onResolve={resolve}
+          onCopyFailed={() => setError("Clipboard unavailable. Expand the report and copy its text manually.")} />}
   </section>;
 }
