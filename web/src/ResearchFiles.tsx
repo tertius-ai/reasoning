@@ -10,8 +10,10 @@ const extension = (path: string) => (path.match(/\.([a-z0-9]+)$/i)?.[1] ?? "txt"
 const kibibytes = (bytes: number) => `${Math.ceil(bytes / 1024).toLocaleString()} KiB`;
 
 /** A topic's saved text files, PDFs and pictures: filtered by kind and name, and each opened in place. */
-export function ResearchFiles({ organizationId, topicId, canWrite, onAuthLost }: {
+export function ResearchFiles({ organizationId, topicId, canWrite, onAuthLost, initialFile }: {
   organizationId: string; topicId: string; canWrite: boolean; onAuthLost: () => void;
+  /** A saved revision to show first, such as one a reply's file chip opened. */
+  initialFile?: { path: string; revision: number } | null;
 }) {
   const [files, setFiles] = useState<File[]>([]), [selected, setSelected] = useState<File | null>(null);
   const [media, setMedia] = useState<MediaFile[]>([]), [selectedMedia, setSelectedMedia] = useState<MediaFile | null>(null);
@@ -24,10 +26,13 @@ export function ResearchFiles({ organizationId, topicId, canWrite, onAuthLost }:
     .catch((cause) => { if (!aborted(cause)) fail(cause); }); return () => controller.abort(); }, [root, refresh]);
   useEffect(() => { const controller = new AbortController(); void request<MediaFile[]>(topicPath(organizationId, topicId) + "/media", { signal: controller.signal }).then(setMedia)
     .catch((cause) => { if (!aborted(cause)) fail(cause); }); return () => controller.abort(); }, [organizationId, topicId, refresh]);
-  const open = (file: File) => {
+  const open = (file: { path: string; revision?: number }) => {
     setSelectedMedia(null); setError("");
-    void request<File>(root + "/read?path=" + encodeURIComponent(file.path)).then((value) => { setSelected(value); setText(value.text ?? ""); setName(value.path); setEditing(false); }).catch(fail);
+    void request<File>(root + "/read?path=" + encodeURIComponent(file.path) + (file.revision ? "&revision=" + file.revision : ""))
+      .then((value) => { setSelected(value); setText(value.text ?? ""); setName(value.path); setEditing(false); }).catch(fail);
   };
+  // Runs once: the dialog keys this component by the file it opens first.
+  useEffect(() => { if (initialFile) open(initialFile); }, []);
   const back = () => { setSelected(null); setSelectedMedia(null); setEditing(false); setError(""); };
   const pictures = media.filter(isPicture), pdfs = media.filter(file => !isPicture(file)), needle = query.trim().toLocaleLowerCase();
   const shownText = kind === "all" || kind === "text" ? files.filter(file => file.path.toLocaleLowerCase().includes(needle)) : [];
@@ -63,7 +68,8 @@ export function ResearchFiles({ organizationId, topicId, canWrite, onAuthLost }:
         <button disabled={busy}>{busy ? "Saving…" : "Save revision"}</button><button type="button" disabled={busy} onClick={() => selected ? setEditing(false) : back()}>Cancel</button>
       </form> : selectedMedia ? <><header><strong>{selectedMedia.name}</strong></header><ResearchMarkdown>{selectedMedia.markdown}</ResearchMarkdown>
         <a href={selectedMedia.url} target="_blank" rel="noreferrer">Open original file</a> <a href={selectedMedia.url} download={selectedMedia.name}>Download {selectedMedia.name}</a>
-        <small>SHA-256 {selectedMedia.sha256.slice(0, 12)} · {kibibytes(selectedMedia.size_bytes)}</small></> : selected && <><header><strong>{selected.path}</strong>{canWrite && !selected.truncated && <button onClick={() => setEditing(true)}>Edit</button>}</header>
+        <small>SHA-256 {selectedMedia.sha256.slice(0, 12)} · {kibibytes(selectedMedia.size_bytes)}</small></> : selected && <><header><strong>{selected.path}</strong>{canWrite && !selected.truncated && (selected.revision ?? selected.head_revision) === selected.head_revision
+          && <button onClick={() => setEditing(true)}>Edit</button>}</header>
         {selected.url && <div className="org-topic-actions"><a href={selected.url} target="_blank" rel="noreferrer">Open source</a>
           <a href={selected.download_url ?? selected.url} download={selected.path.split("/").at(-1)}>Download complete file</a>
           <button disabled={busy} onClick={() => { setBusy(true); setError("");

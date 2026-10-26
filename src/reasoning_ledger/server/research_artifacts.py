@@ -1,6 +1,7 @@
 """Versioned text artifacts shared within a research project."""
 
 import hashlib
+import json
 import re
 import time
 from urllib.parse import urlencode
@@ -19,6 +20,62 @@ def file_links(org, topic, path, revision):
     url = f"/api/organizations/{org}/topics/{topic}/research-files/content?{query}"
     return {"url": url, "download_url": url + "&download=true",
             "markdown": f"[{path} (revision {revision})]({url})"}
+
+
+BOT_REPLY = re.compile(r"bot-run-([0-9a-f]{32})-([0-9]+)")
+
+
+def reply_files(db, message):
+    """Project files a reply's own run saved, from that run's write receipts: the last saved revision of each,
+    in save order. A bot reply split into several messages lists them under its last part.
+    """
+    org, topic = message["organization_id"], message["topic_id"]
+    if message.get("inference_run_id"):
+        rows = db.execute(
+            "SELECT name,arguments_json,result_json FROM research_tool_receipts WHERE organization_id=? AND run_id=? "
+            "AND status='completed' AND name IN ('artifact_write','tool_call') ORDER BY sequence",
+            (org, message["inference_run_id"]),
+        ).fetchall()
+        results = []
+        for row in rows:
+            result = json.loads(row["result_json"] or "null")
+            if row["name"] == "tool_call":
+                if json.loads(row["arguments_json"]).get("name") != "artifact_write" or not isinstance(result, dict):
+                    continue
+                result = result.get("result")
+            results.append(result)
+    else:
+        match = BOT_REPLY.fullmatch(message.get("client_id") or "")
+        if not match or message.get("author_kind", message.get("sender_kind")) != "bot":
+            return []
+        run_id, index = match.group(1), int(match.group(2))
+        results = [json.loads(row[0]) for row in db.execute(
+            "SELECT result_json FROM bot_tool_receipts WHERE run_id=? AND name='artifact_write' ORDER BY sequence", (run_id,))]
+        if not results or db.execute("SELECT 1 FROM messages WHERE organization_id=? AND topic_id=? AND client_id=?",
+                                     (org, topic, f"bot-run-{run_id}-{index + 1}")).fetchone():
+            return []
+    saved = {}
+    for result in results:
+        if isinstance(result, dict) and safe_path(result.get("path")) and type(result.get("revision")) is int:
+            saved.pop(result["path"], None)
+            saved[result["path"]] = result["revision"]
+    files = []
+    for path, revision in saved.items():
+        # Each receipt is confirmed against the retained revision of this topic's project.
+        row = db.execute(
+            "SELECT v.sha256,COALESCE(o.total_characters,LENGTH(v.text)) AS total_characters FROM research_artifacts a "
+            "JOIN research_artifact_versions v ON v.artifact_id=a.id AND v.revision=? "
+            "LEFT JOIN research_artifact_blobs b ON b.artifact_id=a.id AND b.revision=v.revision "
+            "LEFT JOIN research_blob_objects o ON o.organization_id=b.organization_id "
+            "AND o.project_id=b.project_id AND o.digest=b.digest "
+            "WHERE a.organization_id=? AND a.path=? AND a.project_id="
+            "(SELECT c.project_id FROM topics t JOIN channels c ON c.id=t.channel_id WHERE t.organization_id=? AND t.id=?)",
+            (revision, org, path, org, topic),
+        ).fetchone()
+        if row:
+            files.append({"path": path, "revision": revision, "sha256": row["sha256"],
+                          "total_characters": row["total_characters"], **file_links(org, topic, path, revision)})
+    return files
 
 
 class ResearchArtifacts:

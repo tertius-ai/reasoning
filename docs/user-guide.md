@@ -150,7 +150,9 @@ silently replace the current publication. Inspect a draft before publishing.
 **Project files** or `/files` opens saved project text and the current topic's
 attachments. TeX displays as source. **Open source**, **Copy complete source**,
 and **Download complete file** retrieve the complete saved revision rather than
-only its preview. Bot workspace files must be published before their links are
+only its preview. A reply that saved files shows a chip for each one under its
+text; its download button saves that revision, and its open button shows it in
+**Project files**. Bot workspace files must be published before their links are
 shared. `/attach` uploads pictures and PDFs. PDF text extraction reports coverage
 and failures; topic writers can **Retry text extraction**, including for existing
 uploads. Scans need OCR or a TeX/text source, and extracted text can omit diagrams.

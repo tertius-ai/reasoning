@@ -1158,6 +1158,12 @@ class Store:
             ).fetchone()
             if parent is not None:
                 result["workflow_run_id"] = parent[0]
+        if db is not None and result["author_kind"] in {"assistant", "bot"}:
+            from .research_artifacts import reply_files
+
+            files = reply_files(db, result)
+            if files:
+                result["files"] = files
         return result
 
     def _post_message(self, db, user_id, organization_id, topic_id, content, client_id, *, sender_kind="human",

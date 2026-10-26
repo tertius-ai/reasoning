@@ -317,3 +317,17 @@ def test_on_demand_search_never_delegates_the_bot_owners_private_access(fixture)
     claim = runtime.claim(bot["token"])
     result = BotTools(runtime).invoke(bot["token"], run["id"], claim["lease"], "messages_search", {"query": "Needle"}, "search")
     assert [message["content"] for message in result] == ["Needle public"]
+
+
+def test_a_bot_reply_lists_the_files_its_run_saved(fixture):
+    from reasoning_ledger.server.bot_tools import BotTools
+
+    store, owner, topics, _, _, _ = fixture
+    runtime, bot, _, run, _ = setup(fixture)
+    claimed = runtime.claim(bot["token"])
+    BotTools(runtime).invoke(bot["token"], run["id"], claimed["lease"], "artifact_write",
+                             {"path": "bot-notes.tex", "text": "\\section{Notes}"}, "write-1")
+    runtime.finish(bot["token"], run["id"], claimed["lease"], "succeeded", "Saved bot-notes.tex.")
+    reply = [message for message in store.messages(owner["user_id"], owner["organization_id"], topics[1])
+             if message["author_kind"] == "bot"][-1]
+    assert [(file["path"], file["revision"]) for file in reply["files"]] == [("bot-notes.tex", 1)]

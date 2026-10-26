@@ -75,7 +75,12 @@ editing the file does not change an earlier link. Downloads preserve UTF-8 bytes
 and the original filename, with private no-store responses.
 
 `artifact_write`, `artifact_list`, and `research_file_read` return exact revision
-links. Model replies presenting a saved file should include that link. Local CLI
+links. Model replies presenting a saved file should include that link. Whether or
+not they do, each model or bot reply shows one chip per project file its own run
+saved, read from that run's completed `artifact_write` receipts: the file name,
+the last revision that run saved, its length, a download action and an action
+that opens that revision in **Project files**. Chips are confirmed against the
+retained revision in the topic's project. Local CLI
 workspace files remain private until explicitly published; `workspace_publish_text`
 publishes up to 30 KiB of UTF-8 source through the bot's live `artifact_write` grant.
 Overwrites require the current SHA-256. Publication does not compile TeX or verify

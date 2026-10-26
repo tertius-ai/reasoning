@@ -40,7 +40,8 @@ to the newest loaded message after scrolling away.
    Start one when sustained work needs a current argument; ordinary chat needs none.
    `/ledger` opens the scoped mathematical browser; **Project files** or `/files`
    opens shared project text artifacts with source, copy, and complete-revision
-   download actions. Saved-file tool results include clickable revision links.
+   download actions. Saved-file tool results include clickable revision links,
+   and every reply lists the files its run saved as chips with download and open.
    `/reviews` opens independent reviews.
    Expand a review for its report or cancel unfinished work.
 5. Use `/goal` or `/goal OBJECTIVE` only when the agent should continue across

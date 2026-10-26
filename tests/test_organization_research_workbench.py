@@ -825,3 +825,23 @@ def test_earlier_replies_reach_the_model_as_plain_text_and_record_replies_are_un
         # Ordinary JSON answers and objects beyond the record fields stay exactly as written.
         for text in ('{"text": "only a text field"}', '{"text": "t", "verdict": "proved"}', "[1, 2]", "Plain *Markdown*."):
             assert retained_answer(db, {**row, "output_text": text}, "succeeded", None) == text
+
+
+def test_a_reply_lists_the_last_revision_of_each_file_its_run_saved(installation):
+    state, owner, topics, row, tools = source_run(installation)
+    org, topic, user = owner["organization_id"], topics[1]["id"], owner["user_id"]
+    first = tools.invoke("artifact_write", {"path": "notes/roadmap.tex", "text": "\\documentclass{article}"})
+    tools.invoke("artifact_write", {"path": "refs.bib", "text": "@article{a}"})
+    second = tools.invoke("artifact_write", {"path": "notes/roadmap.tex", "text": "\\documentclass{amsart}",
+                                             "expected_sha256": first["result"]["sha256"]})
+    with state.store.transaction(write=True) as db:
+        reply = state.store._post_message(db, user, org, topic, "Saved both files.", "file-reply", sender_kind="assistant")
+        db.execute("UPDATE messages SET inference_run_id=? WHERE id=?", (row["id"], reply["id"]))
+    human = state.store.post_message(user, org, topic, "Thanks.", "file-thanks")
+    messages = {message["id"]: message for message in state.store.messages(user, org, topic)}
+    files = messages[reply["id"]]["files"]
+    assert [(file["path"], file["revision"]) for file in files] == [("refs.bib", 1), ("notes/roadmap.tex", 2)]
+    roadmap = files[1]
+    assert second["result"]["revision"] == 2 and roadmap["total_characters"] == len("\\documentclass{amsart}")
+    assert roadmap["download_url"].endswith("&download=true") and "revision=2" in roadmap["url"]
+    assert "files" not in messages[human["id"]]

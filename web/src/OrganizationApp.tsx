@@ -25,6 +25,7 @@ import { WorkflowAttempt } from "./workflow-api";
 import { WorkflowExecutionAttempt } from "./workflow-run-api";
 import { ComputeAttempt } from "./compute-api";
 import { MessageUsageDetails } from "./MessageUsageDetails";
+import { ReplyFiles } from "./ReplyFiles";
 import { normalizeMathDelimiters } from "./markdownMath";
 import { catalogModel, modelOptionGroups } from "./modelRecommendations";
 import { EffortPicker, ModelPicker, compactTokens } from "./ModelBrowser";
@@ -1153,6 +1154,7 @@ function Conversation({ organizationId, topic, members, user, canWrite, canManag
         <header>{!index && <strong>{authorLabel(message, members)}</strong>}
           <time dateTime={new Date(message.created_at * 1000).toISOString()} title={new Date(message.created_at * 1000).toLocaleString()}>{topic.kind === "alpha" ? new Date(message.created_at * 1000).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" }) : new Date(message.created_at * 1000).toLocaleString()}</time></header>
         <MessageMarkdown markdown={normalizeMathDelimiters(mentionMarkdown(message.content, mentionPeople))} />
+        {!!message.files?.length && <ReplyFiles topicId={topic.id} files={message.files} />}
         {message.author_kind === "assistant" && <MessageUsageDetails usage={message.usage} />}
         <MessageActions organizationId={organizationId} topicId={topic.id} messageId={message.id}
           people={mentionPeople} batchedReactions reactions={reactions[message.id]}

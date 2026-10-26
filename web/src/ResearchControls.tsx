@@ -8,6 +8,7 @@ import { catalogModel, modelOptionGroups } from "./modelRecommendations";
 import { MathematicsBrowser, ResearchMarkdown } from "./MathematicsBrowser";
 import { ResearchAccount } from "./ResearchAccount";
 import { ResearchFiles } from "./ResearchFiles";
+import { useOpenProjectFile } from "./ReplyFiles";
 import "./research-controls.css";
 import { useTopicCommand } from "./TopicCommands";
 import { TopicItemDialog } from "./TopicActivity";
@@ -285,6 +286,8 @@ export function ResearchControls({ organizationId, topicId, userId, selectedMode
       : !model.supports_tools ? "Plain response · no research tools"
         : !sourceConfig ? "Checking research capabilities…"
           : `Research · ${readers.filter(([, on]) => on).length} of ${readers.length} readers`;
+  const [openFile, setOpenFile] = useState<{ path: string; revision: number } | null>(null);
+  useOpenProjectFile(topicId, file => { setOpenFile(file); setPane("files"); });
   useTopicCommand(topicId, command => {
     if (command === "context") { void loadContext(); return; }
     if (["ledger", "files", "goal", "tools", "proposals", "reviews", "account"].includes(command)) {
@@ -313,8 +316,9 @@ export function ResearchControls({ organizationId, topicId, userId, selectedMode
       reviewAvailable={!!onPrepareReview && !selectedModel.startsWith("bot/") && !!catalogModel(catalog, selectedModel)?.supports_tools && enabled.includes("knowledge") && reviewEnabled}
       onPrepareReview={prepareReview} onAuthLost={onAuthLost} /></TopicItemDialog>}
     {pane === "ledger" && <div className="org-research-pane"><MathematicsBrowser organizationId={organizationId} topicId={topicId} canWrite={canWrite} onAuthLost={onAuthLost} /></div>}
-    {pane === "files" && <TopicItemDialog title="Project files" onClose={closeItem}>
-      <ResearchFiles organizationId={organizationId} topicId={topicId} canWrite={canWrite} onAuthLost={onAuthLost} /></TopicItemDialog>}
+    {pane === "files" && <TopicItemDialog title="Project files" onClose={() => { setOpenFile(null); closeItem(); }}>
+      <ResearchFiles key={openFile ? openFile.path + "@" + openFile.revision : "list"} organizationId={organizationId} topicId={topicId}
+        canWrite={canWrite} onAuthLost={onAuthLost} initialFile={openFile} /></TopicItemDialog>}
     {pane === "reviews" && <div className="org-research-pane"><label>Review scope<select value={reviewScope} onChange={event => setReviewScope(event.target.value)}><option value="">Topic default</option><option value="working_set">Account working set</option><option value="topic">This topic</option><option value="project">Authorized project</option></select></label>{reviews.map((review) => <details key={review.id}>
       <summary>{review.subject?.account_revision ? `Account v${review.subject.account_revision}${review.stale ? " · earlier candidate" : ""} · ` : ""}{review.result?.verdict?.verdict ?? review.status} · {review.reviewer_model}</summary>
       <p className="org-help">{review.subject?.account_revision ? "Exact-version account critique; ledger status is unchanged. " : ""}Fresh-context {review.result?.distinct_model === false ? "same-model " : ""}LLM review, not formal certification.</p>

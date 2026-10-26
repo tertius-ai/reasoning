@@ -358,9 +358,16 @@ class BotTools:
 
             artifacts = ResearchArtifacts(self.store, authorize=authorize_file)
             method = {"artifact_list": artifacts.list, "research_file_read": artifacts.read, "artifact_write": artifacts.write}[name]
-            if name == "artifact_write":
-                arguments = {**arguments, "actor_id": context["bot_id"]}
-            return method(context["owner_id"], scope["organization_id"], scope["topic_id"], **arguments)
+            if name != "artifact_write":
+                return method(context["owner_id"], scope["organization_id"], scope["topic_id"], **arguments)
+            result = method(context["owner_id"], scope["organization_id"], scope["topic_id"],
+                            **{**arguments, "actor_id": context["bot_id"]})
+            # The receipt lets the reply list the file it saved.
+            with self.store.transaction(write=True) as db:
+                self.runtime.leased(db, credential, run_id, lease)
+                db.execute("INSERT INTO bot_tool_receipts(run_id,name,result_json,created_at) VALUES(?,?,?,?)",
+                           (run_id, name, json.dumps(result), int(time.time())))
+            return result
         if name.startswith("media_"):
             from .research_media import MEDIA_READ_TOOLS, ResearchMedia, media_tools
 

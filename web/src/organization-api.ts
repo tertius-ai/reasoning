@@ -45,6 +45,8 @@ export type Message = { id: string; sequence: number; topic_id: string; author_i
   revision?: number; edited_at?: number | null;
   agent_role?: string;
   author_kind?: "human" | "assistant" | "bot"; bot_name?: string; assistant_model?: string | null; inference_run_id?: string | null;
+  /** Project file revisions this reply's own run saved. */
+  files?: import("./ReplyFiles").ReplyFile[];
   workflow_run_id?: string; usage?: MessageUsage | null };
 export type ImpactProfile = { model: string; input_kwh_per_million: number; output_kwh_per_million: number;
   location: string; grid_grams_co2e_per_kwh: number | null; source: string };
