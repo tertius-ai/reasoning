@@ -52,14 +52,43 @@ class WorkflowRuns:
     def _view(self, db, run):
         images = json.loads(run.pop("images_json"))
         version = self._definition(db, run)
+        nodes = self._nodes(db, run)
+        outcome, known = self._outcome(db, run, nodes)
         return {
             **run,
+            **outcome,
             "definition_digest": version["definition_digest"],
             "definition": version["definition"],
             "node_order": version["node_order"],
             "images": images,
-            "nodes": [{key: value for key, value in node.items() if key != "inputs_json"} for node in self._nodes(db, run).values()],
+            "nodes": [{**{key: value for key, value in node.items() if key != "inputs_json"}, **known[node["node_id"]]}
+                      for node in nodes.values()],
         }
+
+    @staticmethod
+    def _outcome(db, run, nodes):
+        """What each child did, apart from whether its charge is settled.
+
+        A finished model call with an uncertain charge keeps its node and run
+        outcome_unknown, so retry and capacity stay fenced. Its outcome is still
+        known; only its cost is not.
+        """
+        known = {}
+        for node in nodes.values():
+            outcome, cost_unknown = node["status"], False
+            if node["status"] == "outcome_unknown" and node["inference_run_id"]:
+                child = db.execute(
+                    "SELECT status,accounting_state FROM llm_runs WHERE organization_id=? AND id=?",
+                    (node["organization_id"], node["inference_run_id"]),
+                ).fetchone()
+                if child and child["accounting_state"] == "uncertain" and child["status"] not in {"queued", "running"}:
+                    outcome, cost_unknown = child["status"], True
+            known[node["node_id"]] = {"outcome": outcome, "cost_unknown": cost_unknown}
+        outcomes = {value["outcome"] for value in known.values()}
+        result = run["status"]
+        if result == "outcome_unknown" and outcomes and outcomes <= NODE_TERMINAL | {"interrupted"}:
+            result = "cancelled" if run["cancel_requested"] else "succeeded" if outcomes == {"succeeded"} else "failed"
+        return {"outcome": result, "cost_unknown": any(value["cost_unknown"] for value in known.values())}, known
 
     def _event(self, db, run, value):
         db.execute(
@@ -268,6 +297,8 @@ class WorkflowRuns:
                     if comparison
                     else None
                 )
+                row.update(self._outcome(db, row, self._nodes(db, row))[0] if row["status"] == "outcome_unknown"
+                           else {"outcome": row["status"], "cost_unknown": False})
             return rows
 
     def events(self, user, org, run_id, after=0):

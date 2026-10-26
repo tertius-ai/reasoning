@@ -1165,6 +1165,15 @@ contains no transcript, definition, output or credentials and does not restore
 ordinary access to a deleted topic. Up to 200 records are returned, with occupied
 places first and released records newest first; the summary reports truncation.
 
+Run summaries, runs and their node attempts carry `outcome` and `cost_unknown`
+beside `status`. A finished model call whose charge is uncertain keeps its node
+and run `outcome_unknown`, so retry and capacity stay fenced. Its `outcome` is
+still what the call did, for example `cancelled`, with `cost_unknown` true. A
+run whose nodes all have known outcomes reports `cancelled` when cancellation
+was requested, `succeeded` when every node succeeded, and otherwise `failed`.
+Comparisons and workflow runs show such work as "cancelled · cost unknown"
+rather than "outcome unknown".
+
 An administrator can release the place of an `outcome_unknown` workflow after
 inspection, including one in a deleted topic. Known active children must stop
 first; a missing child record prevents release. The inspector asks for explicit
