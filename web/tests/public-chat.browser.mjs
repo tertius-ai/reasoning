@@ -122,7 +122,8 @@ test("three users create an organization, exchange alpha messages, and use durab
       page.on("pageerror", (error) => pageErrors.push(error.message));
       await page.goto(link); await visible(page.getByRole("heading", { name: "Join an organization" }));
       assert.equal(new URL(page.url()).hash, "");
-      await page.getByLabel("Your name").fill(name); await page.getByLabel("Password", { exact: true }).fill(password);
+      await page.getByLabel("Your name").fill(name); await page.getByLabel("Choose a password", { exact: true }).fill(password);
+      await page.getByLabel("Confirm password", { exact: true }).fill(password);
       await page.getByRole("button", { name: "Accept invitation", exact: true }).click();
       await visible(page.getByRole("button", { name: "Account menu", exact: true }));
       await visible(page.locator(".org-message").filter({ hasText: "Hello colleagues." }));

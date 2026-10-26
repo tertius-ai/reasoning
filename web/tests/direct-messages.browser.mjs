@@ -63,7 +63,8 @@ test("a member messages a colleague from People, who finds, reads and replies, t
     const member = await (await browser.newContext({ viewport: { width: 1280, height: 860 } })).newPage();
     member.on("pageerror", (error) => pageErrors.push(error.message));
     await member.goto(link); await visible(member.getByRole("heading", { name: "Join an organization" }));
-    await member.getByLabel("Your name").fill("Researcher"); await member.getByLabel("Password", { exact: true }).fill(password);
+    await member.getByLabel("Your name").fill("Researcher"); await member.getByLabel("Choose a password", { exact: true }).fill(password);
+    await member.getByLabel("Confirm password", { exact: true }).fill(password);
     await member.getByRole("button", { name: "Accept invitation", exact: true }).click();
     await visible(member.getByRole("button", { name: "Account menu", exact: true }));
 
