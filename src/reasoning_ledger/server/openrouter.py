@@ -21,6 +21,8 @@ OPENROUTER_URL = "https://openrouter.ai/api/v1"
 OUTPUT_RESERVATION_TOKENS = 8192
 CATALOG_TTL = 60
 CATALOG_RETRY = 5
+# OpenRouter's generation statistics accept only its own `gen-` identifiers.
+GENERATION_ID = re.compile(r"gen-[0-9A-Za-z-]{1,124}")
 
 
 class ProviderError(Exception):
@@ -642,6 +644,48 @@ class OpenRouter:
             return result
         except (httpx.HTTPError, ValueError, KeyError, TypeError, AttributeError, RecursionError) as exc:
             raise ProviderError("catalog_unavailable", no_charge=True) from exc
+
+    async def generation(self, key: str, generation: str, *, origin: str | None = None) -> dict | None:
+        """The provider's recorded charge for one generation; None while it has no record.
+
+        A read of OpenRouter's generation statistics, never a model request.
+        """
+        if not GENERATION_ID.fullmatch(generation):
+            raise ProviderError("provider_protocol")
+        if any(ord(char) < 32 or ord(char) > 126 for char in key):
+            raise ProviderError("provider_key_invalid", no_charge=True)
+        try:
+            async with (
+                self.client() as client,
+                client.stream(
+                    "GET",
+                    (origin or self.base_url) + "/generation",
+                    params={"id": generation},
+                    headers={"Authorization": "Bearer " + key, "Accept": "application/json"},
+                ) as response,
+            ):
+                if response.status_code == 404:
+                    return None
+                if response.status_code != 200:
+                    raise ProviderError("generation_unavailable")
+                body = json.loads(await self._bounded(response, 1024 * 1024), parse_float=Decimal)
+            data = body["data"]
+            if not isinstance(data, dict) or data.get("id") != generation:
+                raise ProviderError("provider_protocol")
+
+            def count(value):
+                return value if isinstance(value, int) and not isinstance(value, bool) and 0 <= value <= 10**9 else None
+
+            return {
+                "cost_microusd": microusd(data["total_cost"]),
+                "prompt_tokens": count(data.get("tokens_prompt")),
+                "completion_tokens": count(data.get("tokens_completion")),
+                "cached_tokens": count(data.get("native_tokens_cached")),
+                "reasoning_tokens": count(data.get("native_tokens_reasoning")),
+                "cancelled": data.get("cancelled") is True,
+            }
+        except (httpx.HTTPError, ValueError, KeyError, TypeError, AttributeError, RecursionError) as exc:
+            raise ProviderError("generation_unavailable" if isinstance(exc, httpx.HTTPError) else "provider_protocol") from exc
 
     async def stream(self, key: str, quote: Quote, messages: list[dict], output_tokens: int | None) -> AsyncIterator[Chunk]:
         payload = {

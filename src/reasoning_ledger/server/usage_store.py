@@ -300,22 +300,35 @@ class UsageStore:
                 "reconciliation",
                 {**data, "accounting_state": "settled", "actual_microusd": cost, "reconciled_by": user, "reconciled_at": int(time.time())},
             )
-            receipts = [
-                json.loads(item[0])
-                for item in db.execute(
-                    """SELECT e.data_json FROM inference_calls i
-                JOIN inference_call_events e ON e.sequence=(SELECT MAX(sequence) FROM inference_call_events WHERE call_id=i.id)
-                WHERE i.run_id=?""",
-                    (run_id,),
-                )
-            ]
-            uncertain = any(item.get("accounting_state") in {"uncertain", "reserved"} for item in receipts)
-            actual = None if uncertain else sum(item.get("actual_microusd") or 0 for item in receipts)
-            db.execute(
-                "UPDATE llm_runs SET accounting_state=?,actual_microusd=?,settled_at=? WHERE id=?",
-                ("uncertain" if uncertain else "settled", actual, None if uncertain else int(time.time()), run_id),
-            )
+            self.settle_run(db, run_id)
             self.store._audit(db, org, user, "inference.call-cost-reconcile", call_id)
+
+    @staticmethod
+    def settle_run(db, run_id: str) -> int | None:
+        """Settle a run from its calls' latest receipts once none is uncertain; return its cost, else None."""
+        receipts = [
+            json.loads(item[0])
+            for item in db.execute(
+                """SELECT e.data_json FROM inference_calls i
+            JOIN inference_call_events e ON e.sequence=(SELECT MAX(sequence) FROM inference_call_events WHERE call_id=i.id)
+            WHERE i.run_id=?""",
+                (run_id,),
+            )
+        ]
+        uncertain = any(item.get("accounting_state") in {"uncertain", "reserved"} for item in receipts)
+        actual = None if uncertain else sum(item.get("actual_microusd") or 0 for item in receipts)
+        db.execute(
+            "UPDATE llm_runs SET accounting_state=?,actual_microusd=?,settled_at=? WHERE id=?",
+            ("uncertain" if uncertain else "settled", actual, None if uncertain else int(time.time()), run_id),
+        )
+        # Token counts are filled only when every call reported them, never estimated.
+        counted = all(type(item.get(field)) is int for item in receipts for field in ("prompt_tokens", "completion_tokens"))
+        if actual is not None and counted:
+            db.execute(
+                "UPDATE llm_runs SET prompt_tokens=COALESCE(prompt_tokens,?),completion_tokens=COALESCE(completion_tokens,?) WHERE id=?",
+                (sum(item["prompt_tokens"] for item in receipts), sum(item["completion_tokens"] for item in receipts), run_id),
+            )
+        return actual
 
     def recommendation_preferences(self, user: str, org: str) -> list[str] | None:
         with self.store.transaction() as db:

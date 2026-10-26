@@ -497,6 +497,44 @@ def test_uncertain_inference_is_not_replayed_before_reconciliation(installation)
     assert env.inference.claim()["id"] != child["id"]
 
 
+def test_stopped_comparison_settles_from_the_provider_record_without_replay(installation):
+    import httpx
+
+    from reasoning_ledger.server.inference_settlement import LOOKUP_DELAYS, InferenceSettlement
+    from reasoning_ledger.server.openrouter import OpenRouter
+    from reasoning_ledger.server.usage_store import UsageStore
+
+    env = installation
+    run = env.start([llm_node()], client="stopped-comparison-settles")
+    action = env.runs.advance(run["id"])
+    env.runs.advance(run["id"], quote_action=action, quotes=[QUOTE])
+    child = env.inference.claim()
+    ledger = UsageStore(env.store)
+    call = ledger.begin_call(child, QUOTE, purpose="workflow")
+    env.runs.cancel(env.user, env.org, run["id"], "stopped-comparison-cancel")
+    ledger.finish_call(call, status="cancelled", provider_generation_id="gen-stopped-comparison", error_code="cancel_requested")
+    env.inference.finish(child, "cancelled", error="cancel_requested", accounting_unknown=True)
+    env.runs.advance(run["id"])
+    assert env.view(run)["status"] == "outcome_unknown" and env.view(run)["cost_unknown"]
+    requests = []
+
+    def generation(request):
+        requests.append(request)
+        return httpx.Response(200, json={"data": {"id": "gen-stopped-comparison", "total_cost": 0.00004, "cancelled": True}})
+
+    provider = OpenRouter(transport=httpx.MockTransport(generation))
+    finished = env.inference.run(env.user, env.org, child["id"])["finished_at"]
+    assert asyncio.run(InferenceSettlement(env.inference).run(provider, now=finished + LOOKUP_DELAYS[0])) == 1
+    assert [request.method for request in requests] == ["GET"]
+    env.runs.advance(run["id"])
+    view = env.view(run)
+    assert view["status"] == "cancelled" and view["finished_at"] is not None and not view["cost_unknown"]
+    assert nodes(view)["reason"]["status"] == "cancelled" and not nodes(view)["reason"]["cost_unknown"]
+    assert env.inference.run(env.user, env.org, child["id"])["actual_microusd"] == 40
+    assert env.inference.balance(env.user, env.org)["uncertain_microusd"] == 0
+    assert env.inference.claim() is None
+
+
 def test_cancelled_call_with_uncertain_charge_reads_cancelled_with_cost_unknown(installation):
     env = installation
     run = env.start([llm_node()])
