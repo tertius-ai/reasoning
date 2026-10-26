@@ -547,6 +547,29 @@ a.org-reference:hover, a.org-reference:focus-visible { text-decoration: underlin
 .org-reply-bar-text { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .org-reply-bar strong { color: var(--foreground); font-weight: 500; }
 .org-app .org-reply-bar button { width: 22px; min-height: 22px; padding: 0; border-color: transparent; background: transparent; color: var(--muted); }
+/* Thread mode: the box joins a running model reply. A tinted bar names it, the plus moves inside, the model row hides. */
+.org-composer-box.org-composer-adding { padding-top: 0; overflow: hidden; border-color: var(--blue); }
+.org-composer-controls[hidden] { display: none; }
+/* Adding a message to a running reply sends with the usual return button rather than Stop. */
+.org-composer-adding .org-composer-send:has(> .org-send-play) > .org-composer-transport { display: none; }
+.org-composer-adding .org-composer-send:has([data-stopping]) > .org-send-play { display: inline-grid; }
+.org-adding-bar { display: flex; align-items: center; gap: 8px; margin: 0 -7px 7px -6px; padding: 6px 10px 6px 12px;
+  background: color-mix(in srgb, var(--blue) 14%, transparent); color: color-mix(in srgb, var(--blue) 80%, var(--foreground)); font-size: 12px; }
+.org-adding-bar-text { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.org-app .org-adding-bar button { width: 22px; min-height: 22px; padding: 0; border-color: transparent; background: transparent; color: inherit; }
+.org-add-notice { display: flex; align-items: center; gap: 8px; margin: 0 0 6px; color: var(--muted); font-size: 12px; }
+.org-app .org-add-notice button { width: 22px; min-height: 22px; padding: 0; border-color: transparent; background: transparent; color: var(--muted); }
+/* A running reply's thread line: what was added to it; clicking it adds the next message. */
+.org-app .org-thread-line { display: flex; align-items: center; gap: 7px; width: auto; min-height: 26px; margin: 6px 0 2px 2px; padding: 3px 10px;
+  border: 0; border-left: 3px solid color-mix(in srgb, var(--blue) 45%, transparent); border-radius: 0; background: transparent;
+  color: var(--muted); font-size: 12px; text-align: left; cursor: pointer; }
+.org-app .org-thread-line:hover, .org-app .org-thread-line-selected { border-radius: 0 8px 8px 0;
+  background: color-mix(in srgb, var(--blue) 12%, transparent); color: color-mix(in srgb, var(--blue) 80%, var(--foreground)); }
+.org-addition-receipt { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; margin: 4px 0 0; color: var(--muted); font-size: 11px; }
+.org-addition-receipt > span:first-child { color: var(--teal); }
+.org-addition-receipt.org-addition-waiting { color: color-mix(in srgb, var(--blue) 75%, var(--foreground)); }
+.org-app .org-addition-receipt button { min-height: 20px; padding: 0 6px; font-size: 11px; }
+.chat-menu-reason { display: block; max-width: 240px; margin-top: 2px; color: var(--muted); font-size: 11px; white-space: normal; }
 /* The whole thread over a dimmed conversation. */
 .org-thread-dialog { width: min(560px, calc(100vw - 32px)); max-height: min(80vh, 720px); padding: 12px 14px; border: 1px solid var(--border-strong);
   border-radius: var(--radius-card); background: var(--surface); color: var(--foreground); box-shadow: var(--shadow-overlay); }

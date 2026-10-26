@@ -420,6 +420,7 @@ def test_more_reactions_are_accepted_and_older_installations_widen_the_check(ins
     with store.transaction(write=True) as db:
         _reaction_check(db, " CHECK(emoji IN ('up','down','upside_down'))")
         db.execute("DROP TABLE account_mail")
+        db.execute("DROP TABLE inference_additions")
         db.execute("DROP TABLE feedback_reports")
         db.execute("DROP TABLE direct_media_chunks")
         db.execute("DROP TABLE direct_media")

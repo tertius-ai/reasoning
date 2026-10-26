@@ -191,7 +191,7 @@ export function ReactionControl({ path, canWrite = true, onAuthLost, batched = f
   </span>;
 }
 
-export function MessageActions({ organizationId, topicId, messageId, kind, canWrite, onForked, onAuthLost, message, canEdit, onEdited, onReplyAgain, onReply, onMarkUnread, people = [], reactions, batchedReactions = false }: {
+export function MessageActions({ organizationId, topicId, messageId, kind, canWrite, onForked, onAuthLost, message, canEdit, onEdited, onReplyAgain, onReply, replyLabel = "Reply", onMarkUnread, moveInto, people = [], reactions, batchedReactions = false }: {
   organizationId: string; topicId: string; messageId: string; kind: string; canWrite: boolean;
   reactions?: Feedback; batchedReactions?: boolean;
   onForked?: (topicId: string) => void; onAuthLost?: () => void;
@@ -199,6 +199,10 @@ export function MessageActions({ organizationId, topicId, messageId, kind, canWr
   onReplyAgain?: () => Promise<void>;
   /** Starts a reply to this message in the composer. */
   onReply?: () => void;
+  /** Names what ↩ does, when it adds to this message's running model reply instead of replying. */
+  replyLabel?: string;
+  /** Moves this posted message into a running model reply; ``blocked`` says why it cannot. */
+  moveInto?: { label: string; blocked: string | null; onMove: () => Promise<void> };
   /** Moves your read point back to just before this message. */
   onMarkUnread?: () => void;
   people?: { id: string; name: string }[];
@@ -221,14 +225,19 @@ export function MessageActions({ organizationId, topicId, messageId, kind, canWr
     if (cause instanceof ApiError && cause.status === 401) onAuthLost?.(); else setError(errorMessage(cause));
   };
   // Every persisted message offers its link; forking, editing and history depend on access and revisions.
-  const hasMenu = Boolean(message) || (kind === "beta" && canWrite) || canEdit;
+  const hasMenu = Boolean(message) || (kind === "beta" && canWrite) || canEdit || Boolean(moveInto);
   return <div className={`chat-message-actions${hasMenu ? " chat-has-fork" : ""}${message ? " chat-has-copy" : ""}${onReply ? " chat-has-reply" : ""}${canWrite ? " chat-has-react" : ""}`}>
     <ReactionBar {...{ organizationId, topicId, canWrite, onAuthLost }} targetKind="message" targetId={messageId}
       batched={batchedReactions} preloaded={reactions} modelReply={message?.author_kind === "assistant" || message?.author_kind === "bot"} />
-    {onReply && <button type="button" className="chat-action-launcher chat-reply-launcher" aria-label="Reply" title="Reply"
+    {onReply && <button type="button" className="chat-action-launcher chat-reply-launcher" aria-label={replyLabel} title={replyLabel}
       onClick={event => { event.preventDefault(); onReply(); }}>↩</button>}
     {hasMenu && <ActionMenu label="Message actions" className="chat-fork-launcher" icon={<MessageMenuIcon />}>
-      {close => <>{message && <button type="button" role="menuitem" onClick={() => {
+      {close => <>{moveInto && <button type="button" role="menuitem" disabled={busy || Boolean(moveInto.blocked)}
+        title={moveInto.blocked ?? undefined} onClick={() => {
+          close(); setBusy(true); setError("");
+          void moveInto.onMove().catch(fail).finally(() => setBusy(false));
+        }}>{moveInto.label}{moveInto.blocked && <small className="chat-menu-reason">{moveInto.blocked}</small>}</button>}
+      {message && <button type="button" role="menuitem" onClick={() => {
         close(); setLinkStatus("");
         void navigator.clipboard.writeText(messageLink(window.location.origin, organizationId, topicId, messageId))
           .then(() => setLinkStatus("Link copied."))

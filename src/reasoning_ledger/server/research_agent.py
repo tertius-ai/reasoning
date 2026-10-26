@@ -139,6 +139,7 @@ class ResearchAgent:
             self.inference._event(db, self.row["organization_id"], self.row["id"], {"type": "agent", "phase": kind, **body})
 
     def _transform(self, payload):
+        from .inference_additions import prompt
         from .review_verdict import submissions
         from .topic_agents import TopicAgents
 
@@ -158,6 +159,11 @@ class ResearchAgent:
         messages = payload["messages"]
         if pending_agents:
             raise TurnSuspended("delegated work")
+        if not pending_review:
+            # Messages added to this reply join the native conversation itself, so every later step keeps them.
+            additions = self.inference.take_additions(self.row, len(self.client.responses) + 1)
+            if additions:
+                messages.append(prompt(additions))
         if pending_review and not pending_agents:
             checkpoint_tools = [tool for tool in payload.get("tools", []) if tool["function"]["name"] == "goal_checkpoint"]
             if goal and goal["status"] == "active" and not checkpoint and checkpoint_tools:

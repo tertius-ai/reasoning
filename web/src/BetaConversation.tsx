@@ -8,6 +8,7 @@ import { OutputActions } from "./ChatFeedback";
 import { createPortal } from "react-dom";
 import { TransportControls, dispatchTopicCommand, useComputeActivity, useTopicCommand } from "./TopicCommands";
 import { useBotActivity } from "./BotPlayback";
+import { additionsSummary, replyThreads, threadRoot } from "./ReplyAdditions";
 import {
   ApiError, ModelAttempt, ModelRun, PendingModelAttempt, UNDESCRIBED_ERROR,
   aborted, decimalBudget, errorMessage, organizationPath, request, sharedRequest, topicPath, usd,
@@ -132,7 +133,7 @@ export const replacedByReply = (run: ModelRun, transcript?: LoadedTranscript) =>
 /** A queued request whose agent conversation is paused: it does not start until someone resumes it. */
 export const pausedRun = (run: ModelRun) => run.status === "queued" && run.agent?.thread_status === "paused";
 
-export function BetaConversation({ organizationId, topicId, userId, canWrite, canManage, online, attempt, onAttempt, onAuthLost, onActivity, toolbarTarget, hidePlay, wake, transcript, onReplyPending }: {
+export function BetaConversation({ organizationId, topicId, userId, canWrite, canManage, online, attempt, onAttempt, onAuthLost, onActivity, toolbarTarget, hidePlay, wake, transcript, onReplyPending, onRuns, addingTo, onAddTo }: {
   organizationId: string; topicId: string; userId: string; canWrite: boolean; canManage: boolean;
   online: boolean; attempt?: PendingModelAttempt; onAttempt: (attempt?: PendingModelAttempt) => void; onAuthLost: () => void;
   onActivity: (entries: TopicActivity[]) => void;
@@ -143,6 +144,10 @@ export function BetaConversation({ organizationId, topicId, userId, canWrite, ca
   transcript?: LoadedTranscript;
   /** Called while a finished run's reply message is not yet in the transcript, so messages refresh at once. */
   onReplyPending?: () => void;
+  /** Receives every runs read, so the transcript can offer adding to a running reply. */
+  onRuns?: (runs: ModelRun[]) => void;
+  /** The root run the message box is adding to, and how its thread line starts adding. */
+  addingTo?: string; onAddTo?: (rootRun: string) => void;
 }) {
   const [runs, setRuns] = useState<ModelRun[]>([]), [reconciled, setReconciled] = useState<ReadonlySet<string>>(new Set());
   const [threads, setThreads] = useState<{ root_run: string; status: string; reason?: string | null; requested_by: string; tasks: number }[]>([]);
@@ -261,10 +266,19 @@ export function BetaConversation({ organizationId, topicId, userId, canWrite, ca
   };
   useTopicCommand(topicId, command => { if (command === "play" || command === "stop") void transport(command === "play"); });
   // A finished run gives way to its reply message only once the transcript shows it, so the output never disappears.
-  const visibleRuns = runs.filter((run) => (run.context_through_sequence !== 0 || run.agent)
+  // A reply cancelled because its message moved into another reply leaves no card: the message shows where it went.
+  const visibleRuns = runs.filter((run) => (run.context_through_sequence !== 0 || run.agent) && run.error_code !== "moved_into_reply"
     && (run.status !== "succeeded" || !run.message_id || awaitingReply(run, transcript))
     // A cost reconciled in this page stays on its card: the already loaded reply shows it only after a reload.
     && (!replacedByReply(run, transcript) || reconciled.has(run.id)));
+  useEffect(() => { onRuns?.(runs); }, [runs, onRuns]);
+  // Each running reply shows its thread line once, on its first visible card.
+  const running = replyThreads(runs).filter(thread => thread.active);
+  const hosts = new Map<string, ReturnType<typeof replyThreads>[number]>();
+  for (const run of visibleRuns) {
+    const thread = running.find(item => item.root.id === threadRoot(run));
+    if (thread && ![...hosts.values()].includes(thread)) hosts.set(run.id, thread);
+  }
   const replyPending = runs.some(run => awaitingReply(run, transcript));
   useEffect(() => { if (replyPending) onReplyPending?.(); }, [replyPending, onReplyPending]);
   useEffect(() => { onActivity(visibleRuns.map(run => ({ id: "run:" + run.id, created_at: run.created_at ?? run.started_at ?? 0,
@@ -273,8 +287,12 @@ export function BetaConversation({ organizationId, topicId, userId, canWrite, ca
       canControl={canManage || run.requested_by === userId} awaiting={awaitingReply(run, transcript)}
       onReconciled={() => setReconciled(current => new Set(current).add(run.id))}
       canReact={canWrite}
+      thread={canWrite && onAddTo && hosts.has(run.id) ? {
+        summary: additionsSummary(hosts.get(run.id)!.additions), selected: addingTo === hosts.get(run.id)!.root.id,
+        onAdd: () => onAddTo(hosts.get(run.id)!.root.id),
+      } : undefined}
       onUpdated={() => setRefresh(value => value + 1)} onAuthLost={onAuthLost} />,
-  }))); }, [runs, reconciled, transcript, busy, online, connected, canWrite, canManage, userId, root, organizationId, topicId, onActivity, onAuthLost]);
+  }))); }, [runs, reconciled, transcript, busy, online, connected, canWrite, canManage, userId, root, organizationId, topicId, onActivity, onAuthLost, addingTo, onAddTo]);
   return <section className="org-beta" aria-label="Agent activity">
     {toolbarTarget && createPortal(<TransportControls {...{ canPlay, canStop, hidePlay }}
       playTitle={attempt?.unconfirmed ? "Retry the unconfirmed reply request"
@@ -301,8 +319,10 @@ export function RunProgress({ run }: { run: ModelRun }) {
   return <p role="status" className="org-working" aria-label="Research progress">{progress}…</p>;
 }
 
-function BetaRunCard({ root, organizationId, topicId, run, canManage, canControl, canReact, awaiting, onReconciled, onUpdated, onAuthLost }: {
+function BetaRunCard({ root, organizationId, topicId, run, canManage, canControl, canReact, awaiting, thread, onReconciled, onUpdated, onAuthLost }: {
   root: string; organizationId: string; topicId: string; run: ModelRun; canManage: boolean; canReact: boolean;
+  /** The thread line of a running reply: its additions, and a button that adds the next message to it. */
+  thread?: { summary: string; selected: boolean; onAdd: () => void };
   /** The requester or an administrator may resume or cancel a paused request. */
   canControl: boolean; onReconciled: () => void;
   /** Finished, with its reply message not yet shown: the output stays expanded until the message replaces it. */
@@ -324,6 +344,10 @@ function BetaRunCard({ root, organizationId, topicId, run, canManage, canControl
       {!active && run.error_code && <span title={run.diagnostics?.message}>{run.diagnostics?.http_status ? `HTTP ${run.diagnostics.http_status}` : run.error_code.replaceAll("_", " ")}</span>}
       {run.actual_microusd != null && <small>{usd(run.actual_microusd)}</small>}
     </summary>
+    {thread && <button type="button" className={"org-thread-line" + (thread.selected ? " org-thread-line-selected" : "")}
+      aria-pressed={thread.selected} title="Add your next message to this reply" onClick={thread.onAdd}>
+      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round"
+        strokeLinejoin="round" aria-hidden="true"><path d="m9 6 6 6-6 6" /></svg>{thread.summary}</button>}
     <RunProgress run={run} />
     {paused && <div className="org-run-paused">
       <p className="org-help">This request was paused before it started, for example by Stop (■). {run.reserved_microusd ? `Its internal hold of ${usd(run.reserved_microusd)} is not a charge.` : ""}</p>
