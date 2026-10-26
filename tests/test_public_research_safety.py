@@ -68,6 +68,17 @@ def start(research, **changes):
     return goal, row, ResearchTools(inference, row)
 
 
+def test_a_free_route_without_usage_has_known_zero_cost(research):
+    from reasoning_ledger.server.openrouter import Quote
+
+    store, _, owner, topic, inference, goals = research
+    _, row, _ = start(research)
+    free = Quote(row["model"], "0", "0", "0", 200000, 8192).record()
+    assert inference.finish({**row, "quote_json": json.dumps(free)}, "failed", error="provider_network")
+    with store.transaction() as db:
+        assert db.execute("SELECT accounting_state FROM llm_runs WHERE id=?", (row["id"],)).fetchone()[0] == "released"
+
+
 def test_goal_replay_validates_duration_and_released_calls_cost_zero(research):
     store, _, owner, topic, inference, goals = research
     goal, row, _ = start(research)

@@ -757,6 +757,9 @@ class InferenceStore:
             if accounting_unknown:
                 usage = None
             accounting = "settled" if usage else "released" if no_charge else "uncertain"
+            if accounting == "uncertain" and row.get("quote_json") and Quote(**json.loads(row["quote_json"])).free:
+                # Nothing on an all-zero-price route can be charged, so its cost is known.
+                accounting = "released"
             db.execute(
                 "UPDATE llm_runs SET status=?,finished_at=?,error_code=?,message_id=?,accounting_state=?,actual_microusd=?,settled_at=?,"
                 "prompt_tokens=?,completion_tokens=? WHERE id=?",

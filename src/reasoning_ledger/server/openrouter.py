@@ -31,11 +31,49 @@ class ProviderError(Exception):
         self.code, self.no_charge, self.diagnostics = code, no_charge, diagnostics
 
 
+# Why OpenRouter found no endpoint (HTTP 404), read from its message into a fixed set of explanations.
+UNMATCHED = {
+    "data_policy": (
+        "OpenRouter found no endpoint for this model that matches the account's data policy.",
+        "Free models usually need free endpoints allowed in OpenRouter's privacy settings; also check this organization's "
+        "zero-data-retention routing, or select another model.",
+    ),
+    "parameters": (
+        "OpenRouter found no endpoint for this model that accepts this request's tools or parameters.",
+        "Select a model whose endpoints support the tools and parameters this topic uses.",
+    ),
+    "providers": (
+        "OpenRouter's provider settings exclude every endpoint for this model.",
+        "Check the key's allowed and ignored providers in OpenRouter, or select another model.",
+    ),
+    "model": (
+        "OpenRouter does not recognize this model.",
+        "Refresh the model catalog and select an available model.",
+    ),
+}
+
+
+def unmatched_reason(message: str) -> str | None:
+    text = message.lower()
+    if any(word in text for word in ("data policy", "privacy", "zdr", "data collection", "training", "publication")):
+        return "data_policy"
+    if any(word in text for word in ("tool", "parameter", "requested", "support")):
+        return "parameters"
+    if "provider" in text:
+        return "providers"
+    if "model" in text and any(word in text for word in ("not found", "not a valid", "does not exist")):
+        return "model"
+    return None
+
+
 def rejection_error(status: int, metadata: object = None) -> ProviderError:
     """Expose static guidance and allowlisted enums, never raw provider text.
 
     no_charge applies only to an HTTP refusal before streaming starts, not an
-    error inside an accepted stream whose usage may be unknown.
+    error inside an accepted stream whose usage may be unknown. A refusal of the
+    request itself (format, credential, credit, permission, route, size or
+    parameters) produced no generation and so no charge; a timeout, rate limit or
+    upstream failure may follow provider work and stays uncertain.
     """
     categories = {
         400: (
@@ -60,8 +98,8 @@ def rejection_error(status: int, metadata: object = None) -> ProviderError:
         ),
         404: (
             "availability",
-            "The selected model or provider route was not found.",
-            "Refresh the model catalog and select an available model.",
+            "OpenRouter found no available endpoint for this model and request.",
+            "Check the organization's OpenRouter privacy and provider settings, or select another model.",
         ),
         408: (
             "timeout",
@@ -94,6 +132,9 @@ def rejection_error(status: int, metadata: object = None) -> ProviderError:
             "privacy": "Check OpenRouter privacy/ZDR eligibility for this model. Required privacy policies are not relaxed automatically.",
             "model": "Check the OpenRouter key and account's permission to use this model; choose another permitted model if necessary.",
         }[restriction]
+    if status == 404 and isinstance(metadata, dict) and metadata.get("unmatched") in UNMATCHED:
+        diagnostics["unmatched"] = metadata["unmatched"]
+        diagnostics["message"], diagnostics["action"] = UNMATCHED[metadata["unmatched"]]
     if status == 402 and isinstance(metadata, dict):
         source, reason = metadata.get("limit_source"), metadata.get("reason")
         if source in ("openrouter_key_limit", "openrouter_credits", "openrouter_in_flight_budget"):
@@ -116,7 +157,7 @@ def rejection_error(status: int, metadata: object = None) -> ProviderError:
             )
     return ProviderError(
         "provider_rejected",
-        no_charge=status in {401, 402, 403},
+        no_charge=status in {400, 401, 402, 403, 404, 413, 422},
         diagnostics=diagnostics,
     )
 
@@ -235,7 +276,7 @@ def stream_error_diagnostics(error: object) -> dict | None:
 async def response_rejection(response: httpx.Response) -> ProviderError:
     """Read a bounded error envelope and discard non-allowlisted values."""
     metadata = None
-    if response.status_code in {402, 403}:
+    if response.status_code in {402, 403, 404}:
         try:
             async with asyncio.timeout(5):
                 body = bytearray()
@@ -247,6 +288,8 @@ async def response_rejection(response: httpx.Response) -> ProviderError:
                 value = json.loads(body)
                 error = value.get("error") if isinstance(value, dict) else None
                 metadata = error.get("metadata") if isinstance(error, dict) else None
+                if response.status_code == 404 and isinstance(error, dict):
+                    metadata = {"unmatched": unmatched_reason(str(error.get("message", "")))}
                 if response.status_code == 403 and isinstance(error, dict):
                     text = str(error.get("message", "")).lower()
                     restriction = "region" if any(word in text for word in ("region", "country", "geograph")) else (
@@ -324,6 +367,14 @@ class Quote:
     routing: dict | None = None
     supports_images: bool = False
     reasoning_efforts: tuple[str, ...] = ()
+
+    @property
+    def free(self) -> bool:
+        """Every listed price is zero, so no call on this route can be charged."""
+        try:
+            return all(money(price) == 0 for price in (self.prompt, self.completion, self.request, *(self.pricing or {}).values()))
+        except ProviderError:
+            return False
 
     def route(self):
         policy = self.routing or {"strategy": "cheapest", "zdr": False, "region": "global"}
