@@ -14,6 +14,7 @@ from reasoning_ledger.server.bot_client import BotClientError, BotUnavailable
 from reasoning_ledger.server.bot_runner import runtime_step
 from reasoning_ledger.server.bot_runtime import BotRuntime
 from reasoning_ledger.server.bot_tools import BotTools
+from reasoning_ledger.server.store import StoreError
 
 
 @pytest.fixture
@@ -22,10 +23,14 @@ def fixture(tmp_path):
 
 
 @pytest.mark.parametrize("lost_receipt", [False, True])
-@pytest.mark.parametrize("heartbeat_failures", [0, 1, 3])
+# Waits of 1+2+4+8+16 s stay inside the 100 s lease window; nine failures outlast it.
+@pytest.mark.parametrize("heartbeat_failures", [0, 1, 5, 9, "stopped"])
 def test_mention_runner_model_routing_canonical_tools_and_post_receipt(fixture, tmp_path, monkeypatch,
                                                                       lost_receipt, heartbeat_failures):
-    monkeypatch.setattr("reasoning_ledger.server.bot_client.time.sleep", lambda _: None)
+    clock = [0.0]
+    monkeypatch.setattr("reasoning_ledger.server.bot_client.time.monotonic", lambda: clock[0])
+    monkeypatch.setattr("reasoning_ledger.server.bot_client.time.sleep", lambda seconds: clock.__setitem__(0, clock[0] + seconds))
+    stopped = heartbeat_failures == "stopped"
     store, owner, topics, _, _, bots = fixture
     bot = bots.create(owner["user_id"], owner["organization_id"], "Math bot", topics[1:],
                       ["messages:read", "messages:write", "knowledge:read", "knowledge:write"], personal=True)
@@ -37,7 +42,7 @@ def test_mention_runner_model_routing_canonical_tools_and_post_receipt(fixture, 
 
     class Client:
         fail_finish = lost_receipt
-        failed_heartbeats = heartbeat_failures
+        failed_heartbeats = 0 if stopped else heartbeat_failures
         def messages(self, after, limit):
             return bots.messages(bot["token"], after, limit)
 
@@ -52,7 +57,10 @@ def test_mention_runner_model_routing_canonical_tools_and_post_receipt(fixture, 
                 if self.failed_heartbeats:
                     self.failed_heartbeats -= 1
                     raise BotUnavailable("heartbeat connection lost")
-                return runtime.progress(bot["token"], path.split("/")[4], **body)
+                try:
+                    return runtime.progress(bot["token"], path.split("/")[4], **body)
+                except StoreError as error:  # The wire client reports a 409 as a client error.
+                    raise BotClientError(str(error)) from None
             result = runtime.finish(bot["token"], path.split("/")[4], **body)
             if self.fail_finish:
                 self.fail_finish = False
@@ -67,6 +75,8 @@ def test_mention_runner_model_routing_canonical_tools_and_post_receipt(fixture, 
         assert not options["gateway"].is_relative_to(cwd)
         assert bot["token"] not in prompt
         assert read_document(root / "runtime-runner.json")["pending"]["phase"] == "executing"
+        if stopped:
+            runtime.stop(owner["user_id"], owner["organization_id"], gateway["run_id"])
         options["heartbeat"]()
         with store.transaction(write=True) as db:
             db.execute("UPDATE topics SET knowledge_policy_json='[\"ledger\"]' WHERE id=?", (topics[1],))
@@ -78,7 +88,21 @@ def test_mention_runner_model_routing_canonical_tools_and_post_receipt(fixture, 
     binding = {"server": "https://example.org", "bot_id": bot["id"], "owner_id": owner["user_id"], "allow_other_users": False}
     configuration = {"server": binding["server"], "token": bot["token"]}
     client = Client()
-    if heartbeat_failures == 3:
+    if stopped:
+        if lost_receipt:
+            # The server settled the stop, but the runner cannot know that; it keeps its local receipt.
+            with pytest.raises(BotClientError, match="lease is no longer active"):
+                runtime_step(client, root, configuration, agent, binding, runner=runner)
+            assert read_document(root / "runtime-runner.json")["pending"]["phase"] == "executing"
+            assert runtime.listing(owner["user_id"], owner["organization_id"], topics[1])[0]["status"] == "cancelled"
+            return
+        assert not runtime_step(client, root, configuration, agent, binding, runner=runner)["replied"]
+        assert read_document(root / "runtime-runner.json")["pending"] is None
+        assert runtime.listing(owner["user_id"], owner["organization_id"], topics[1])[0]["status"] == "cancelled"
+        assert not runtime_step(client, root, configuration, agent, binding, runner=runner)["replied"]
+        assert len(calls) == 1
+        return
+    if heartbeat_failures == 9:
         with pytest.raises(BotUnavailable):
             runtime_step(client, root, configuration, agent, binding, runner=runner)
         assert read_document(root / "runtime-runner.json")["pending"]["phase"] == "executing"

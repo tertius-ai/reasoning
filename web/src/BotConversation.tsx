@@ -26,9 +26,10 @@ export function BotRunStatus({ run }: { run: BotRun }) {
       : run.status === "waiting_approval" ? run.approval_by === "requester"
         ? "Waiting for the requesting member to approve the exact GitHub issue preview in People."
         : "Waiting for the bot owner's approval in People."
-      : run.status === "outcome_unknown" ? run.error_code === "stop_requested"
-        ? "Stopped at the server; the local outcome is unknown. Ask the bot owner to inspect its retained invocation before any new attempt."
+      : run.status === "outcome_unknown" ? run.error_code === "stop_requested" || run.error_code === "cancelled"
+        ? "Stopping: waiting for the bot's runner to confirm that its CLI ended. Until it does, the local outcome is unknown."
         : "Runner interrupted. No automatic retry; ask the bot owner to reconcile its local receipt."
+      : run.status === "cancelled" && (run.error_code === "stop_requested" || run.error_code === "cancelled") ? "Stopped."
         : run.status === "running" ? (run.activity?.at(-1)?.label ?? run.phase.replaceAll("_", " ")) + "…" : run.error_code?.replaceAll("_", " ") ?? run.status}
   </p>;
 }

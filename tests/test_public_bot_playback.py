@@ -45,10 +45,16 @@ def test_claimed_stop_fences_lease_and_preserves_unknown_side_effects(fixture, a
     assert stopped["status"] == "outcome_unknown" and stopped["error_code"] == "stop_requested"
     with pytest.raises(StoreError, match="lease is no longer active"):
         runtime.progress(bot["token"], run["id"], claim["lease"], "thinking")
+    # The runner's receipt confirms its CLI ended; only a consumed approval keeps the outcome unknown.
+    settled = "outcome_unknown" if approval_state == "consumed" else "cancelled"
+    receipt = (bot["token"], run["id"], claim["lease"], "succeeded", "No stale completion")
+    assert runtime.finish(*receipt)["status"] == settled
+    assert runtime.finish(*receipt)["status"] == settled
     with pytest.raises(StoreError, match="lease is no longer active"):
-        runtime.finish(bot["token"], run["id"], claim["lease"], "succeeded", "No stale completion")
+        runtime.finish(bot["token"], run["id"], "another lease", "succeeded", "No stale completion")
+    assert all("No stale completion" not in message["content"]
+               for message in store.messages(owner["user_id"], owner["organization_id"], run["topic_id"]))
     with store.transaction() as db:
-        assert db.execute("SELECT lease_hash FROM bot_runs WHERE id=?", (run["id"],)).fetchone()[0] is None
         if approval:
             expected = "consumed" if approval_state == "consumed" else "denied"
             assert db.execute("SELECT status FROM bot_execution_approvals WHERE id=?", (approval["id"],)).fetchone()[0] == expected
@@ -125,19 +131,18 @@ def test_concurrent_finish_and_stop_never_posts_after_a_stopped_lease(fixture):
 
     def finish():
         barrier.wait()
-        try:
-            return runtime.finish(bot["token"], run["id"], claimed["lease"], "succeeded", "Concurrent retained result")
-        except StoreError as error:
-            assert error.status == 409
-            return None
+        return runtime.finish(bot["token"], run["id"], claimed["lease"], "succeeded", "Concurrent retained result")
 
     with ThreadPoolExecutor(max_workers=2) as threads:
         stopped, finished = threads.submit(stop), threads.submit(finish)
         stopped, finished = stopped.result(), finished.result()
     posted = [message for message in store.messages(owner["user_id"], owner["organization_id"], topics[1])
               if message["content"] == "Concurrent retained result"]
-    assert stopped["status"] == ("succeeded" if finished else "outcome_unknown")
-    assert len(posted) == (1 if finished else 0)
+    # A completion after the stop is the runner's confirmation that its CLI ended, never a reply.
+    delivered = finished["status"] == "succeeded"
+    assert finished["status"] == ("succeeded" if delivered else "cancelled")
+    assert stopped["status"] == ("succeeded" if delivered else "outcome_unknown")
+    assert len(posted) == (1 if delivered else 0)
 
 
 def test_concurrent_approval_and_stop_cannot_reenable_unconsumed_execution(fixture):

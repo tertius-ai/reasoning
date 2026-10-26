@@ -14,12 +14,14 @@ from pathlib import Path
 from ..deployment.host import InstallError, atomic_write, canonical
 from ..deployment.private import read_private, write_document, write_private
 from .bot_agent import invoke
-from .bot_client import BotClientError, reconnect
+from .bot_client import BotClientError, BotRateLimit, BotUnavailable, reconnect
 from .bot_recovery import interrupted
 from .bot_runtime import mentioned_models
 from .bot_store import IDENTITY
 
 MAX_JOURNAL = 1024 * 1024
+# The server keeps a lease for 120 seconds after its last heartbeat; the rest is request-timeout margin.
+LEASE_RETRY_SECONDS = 100
 
 
 def read_journal(path):
@@ -106,10 +108,11 @@ def runtime_step(client, directory, configuration, agent, binding, *, runner=inv
         completion = {"lease": pending["run"]["lease"], "status": "succeeded", "output": pending["text"]} \
             if pending["phase"] == "reply_ready" else {"lease": pending["run"]["lease"], "status": "failed",
                                                        "error": "gateway_not_attached"}
-        client._request("POST", f"/api/bot/runs/{pending['run']['id']}/finish", with_timing(completion, pending.get("timing")))
+        receipt = client._request("POST", f"/api/bot/runs/{pending['run']['id']}/finish",
+                                  with_timing(completion, pending.get("timing")))
         state["pending"] = None
         write_journal(journal, state)
-        return {"replied": pending["phase"] == "reply_ready", "cursor": state["cursor"]}
+        return {"replied": isinstance(receipt, dict) and receipt.get("status") == "succeeded", "cursor": state["cursor"]}
     # Mentions and topic-default selection use the same durable queue. The source message identity deduplicates them.
     for message in client.messages(state["cursor"], 20):
         if message["author_kind"] == "human" and mentioned_models(message["content"], binding['bot_id']) and (
@@ -152,21 +155,26 @@ def runtime_step(client, directory, configuration, agent, binding, *, runner=inv
         + run["prompt"]
     )
 
+    lease = {"until": time.monotonic() + LEASE_RETRY_SECONDS}
+
     def heartbeat():
-        # Brief transport outages can reconnect without restarting the CLI.
-        # Extended loss/revocation aborts it rather than running without a lease.
+        # Transport outages within the lease window reconnect without restarting the CLI.
+        # A longer loss or a revocation aborts it rather than running without a lease.
+        reporting = {"on_status": on_status} if on_status else {}
         progress = reconnect(lambda: client._request("POST", f"/api/bot/runs/{run['id']}/progress",
-                  {"lease": run["lease"]}), attempts=3, **({"on_status": on_status} if on_status else {}))
+                  {"lease": run["lease"]}), deadline=lease["until"], **reporting)
+        lease["until"] = time.monotonic() + LEASE_RETRY_SECONDS
         reconnect(lambda: client._request("POST", "/api/bot/runtime", {"engine": agent["engine"], "models": models,
                   "allow_other_users": binding["allow_other_users"], "local_tools": agent["local_tools"],
-                  "capabilities": capabilities}), attempts=3,
-                  **({"on_status": on_status} if on_status else {}))
+                  "capabilities": capabilities}), deadline=lease["until"], **reporting)
         return progress
 
     def activity(kind):
         from .bot_activity import LABELS
 
-        client._request("POST", f"/api/bot/runs/{run['id']}/progress", {"lease": run["lease"], "activity": kind})
+        # Labels are display only; the heartbeat keeps the lease through transport outages.
+        with suppress(BotUnavailable, BotRateLimit):
+            client._request("POST", f"/api/bot/runs/{run['id']}/progress", {"lease": run["lease"], "activity": kind})
         if on_activity:
             on_activity(LABELS[kind])
 
@@ -194,6 +202,7 @@ def runtime_step(client, directory, configuration, agent, binding, *, runner=inv
         from .bot_gateway_probe import BotGatewayError
 
         # Never echo stderr, command output or credentials into an error. The local invocation stays retained.
+        receipt = None
         with suppress(BotClientError):
             receipt = client._request("POST", f"/api/bot/runs/{run['id']}/finish", with_timing({"lease": run["lease"],
                              "status": "failed" if isinstance(exc, BotGatewayError) else "outcome_unknown",
@@ -202,6 +211,11 @@ def runtime_step(client, directory, configuration, agent, binding, *, runner=inv
             if receipt.get("error_code") == "approval_transport_ended":
                 state["pending"] = {"phase": "approval_interrupted", "run": retained_run}
                 write_journal(journal, state)
+        if isinstance(receipt, dict) and receipt.get("status") == "cancelled":
+            # A stop fenced the lease and this receipt settled it; keep listening.
+            state["pending"] = None
+            write_journal(journal, state)
+            return {"replied": False, "cursor": state["cursor"]}
         if isinstance(exc, BotGatewayError):
             state["pending"] = None
             write_journal(journal, state)

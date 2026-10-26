@@ -17,6 +17,8 @@ from .store import StoreError, _id, _row
 MODEL = re.compile(r"[A-Za-z0-9][A-Za-z0-9._/-]{0,99}\Z")
 ACTIVE = {"queued", "running", "waiting_approval"}
 TERMINAL = {"succeeded", "failed", "outcome_unknown", "cancelled"}
+# Error codes of a running invocation that a person, workflow or agent stop fenced.
+STOPPED = {"stop_requested", "cancelled"}
 PHASES = {"thinking", "reading", "writing", "using_tools", "waiting_approval", "finishing"}
 AWAITING_CONSENT = (
     "(EXISTS (SELECT 1 FROM bot_execution_approvals a WHERE a.run_id=bot_runs.id AND a.status IN ('pending','approved')) "
@@ -409,8 +411,10 @@ class BotRuntime:
             if run["status"] in ACTIVE:
                 now = int(time.time())
                 status = "cancelled" if run["status"] == "queued" or run["error_code"] == "approval_transport_ended" else "outcome_unknown"
+                # The status fences every lease effect; the retained lease authenticates
+                # only the runner's receipt that its CLI ended (see finish).
                 db.execute(
-                    "UPDATE bot_runs SET status=?,error_code='stop_requested',lease_hash=NULL,updated_at=? WHERE id=?",
+                    "UPDATE bot_runs SET status=?,error_code='stop_requested',updated_at=? WHERE id=?",
                     (status, now, run_id),
                 )
                 db.execute(
@@ -546,6 +550,15 @@ class BotRuntime:
         self.bots._meter(credential, "write")
         with self.store.transaction(write=True) as db:
             bot, run = self.leased(db, credential, run_id, lease, terminal=True)
+            if run["error_code"] in STOPPED and run["status"] in {"outcome_unknown", "cancelled"}:
+                # Any receipt after a stop means the runner's CLI has ended. The stop
+                # fenced all lease effects, so only consumed approvals keep it unknown.
+                # The receipt's own output is discarded.
+                if run["status"] == "outcome_unknown" and not self._consumed_effects(db, run_id):
+                    db.execute("UPDATE bot_runs SET status='cancelled',phase='finishing',updated_at=?,"
+                               "runner_timing_json=COALESCE(runner_timing_json,?) WHERE id=?",
+                               (int(time.time()), json.dumps(timing) if timing else None, run_id))
+                return self.public(db.execute("SELECT * FROM bot_runs WHERE id=?", (run_id,)).fetchone())
             if run["status"] in TERMINAL:
                 if run["status"] != status or run["output_text"] != output or run["error_code"] != error:
                     raise StoreError(409, "bot completion receipt differs from the retained outcome")

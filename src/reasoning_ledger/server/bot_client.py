@@ -48,11 +48,14 @@ def bot_panel(title, rows):
     Console(highlight=False).print(Panel(table, title=Text(title), border_style="cyan", padding=(1, 2)))
 
 
-def reconnect(operation, *, once=False, attempts=None, wait=None, report=None, on_status=None):
-    """Retry transport/availability only; authorization and unknown work stop."""
+def reconnect(operation, *, once=False, deadline=None, wait=None, report=None, on_status=None):
+    """Retry transport/availability only; authorization and unknown work stop.
+
+    With ``deadline`` (a ``time.monotonic()`` value), give up once the next wait would pass it.
+    """
     wait = wait or time.sleep
     report = report or (lambda message: print(message, flush=True))
-    delay, disconnected, failures = 1, False, 0
+    delay, disconnected = 1, False
     offline_since = None
     while True:
         try:
@@ -63,10 +66,9 @@ def reconnect(operation, *, once=False, attempts=None, wait=None, report=None, o
                 report("✓ Reconnected; continuing from retained receipts.")
             return result
         except (BotUnavailable, BotRateLimit) as exc:
-            failures += 1
-            if once or attempts is not None and (failures >= attempts or isinstance(exc, BotRateLimit)):
-                raise
             pause = 60 if isinstance(exc, BotRateLimit) else delay
+            if once or deadline is not None and time.monotonic() + pause > deadline:
+                raise
             reason = "Rate limited" if isinstance(exc, BotRateLimit) else "Server unavailable"
             if on_status is not None:
                 if offline_since is None:

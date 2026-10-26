@@ -327,6 +327,33 @@ def test_bot_workflow_dependency_uses_local_receipts_without_openrouter_key(inst
         assert db.execute("SELECT COUNT(*) FROM llm_runs").fetchone()[0] == 0
 
 
+def test_cancelled_bot_step_settles_when_its_runner_confirms_it_stopped(installation):
+    from reasoning_ledger.server.bot_runtime import BotRuntime
+    from reasoning_ledger.server.bot_store import BotStore
+
+    env = installation
+    bots = BotStore(env.store)
+    bot = bots.create(env.user, env.org, "Codex", [env.topic], ["messages:read", "messages:write"], personal=True)
+    runtime = BotRuntime(bots)
+    runtime.advertise(bot["token"], "codex", ["default"], False, False)
+    env.runs.inference_enabled = False
+    node = llm_node()
+    node["parameters"]["model"] = f"bot/{bot['id']}/default"
+    run = env.start([node])
+    env.runs.advance(run["id"])
+    claimed = runtime.claim(bot["token"])
+    env.runs.cancel(env.user, env.org, run["id"], "cancel-bot-step-001")
+    env.runs.advance(run["id"])
+    assert env.view(run)["status"] == "outcome_unknown", "a stop is not proof that the local CLI ended"
+    with pytest.raises(StoreError, match="lease is no longer active"):
+        runtime.progress(bot["token"], claimed["id"], claimed["lease"], "thinking")
+    receipt = (bot["token"], claimed["id"], claimed["lease"], "outcome_unknown", "", "cli_failed")
+    assert runtime.finish(*receipt)["status"] == "cancelled"
+    assert runtime.finish(*receipt)["status"] == "cancelled"
+    env.runs.advance(run["id"])
+    assert env.view(run)["status"] == "cancelled"
+
+
 def test_compute_approval_llm_compute_with_frozen_inputs_and_no_duplicate_dispatch(installation):
     env = installation
     run = env.start(

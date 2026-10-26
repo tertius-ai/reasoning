@@ -306,9 +306,12 @@ and server-failure bodies, and secrets are not logged. Tools receive the same
 explanation, for example which argument failed validation.
 Tool argument refusals name the failing field and the violated schema rule,
 never the submitted values.
-Active invocations tolerate brief heartbeat outages with at most three attempts;
-extended outages or revoked access terminate the local process and retain its
-unknown outcome. Reconnection never replays an unknown CLI invocation.
+Active invocations keep their CLI process through heartbeat outages that end
+within 100 seconds of the last accepted heartbeat, inside the server's
+120-second lease. Activity labels are display only, and a lost label update
+does not interrupt the invocation. Longer outages or revoked access terminate
+the local process and retain its unknown outcome. Reconnection never replays
+an unknown CLI invocation.
 
 The continuous runner keeps connection status and brief activity in one live
 terminal panel. Thinking and tool phases update in place rather than printing
@@ -322,9 +325,15 @@ bot owner, or an organization administrator with current topic write access may
 stop it. A queued invocation becomes cancelled before it can be claimed. A
 claimed invocation becomes outcome unknown: its lease is fenced and unconsumed
 execution approvals are denied, but this does not prove that an external CLI,
-provider call, or approved local process physically stopped. Consumed approval
-receipts and retained output remain intact. Unknown bot invocations are not
-automatically replayed by play (▶); reconcile the owner's local receipt first.
+provider call, or approved local process physically stopped. The runner sees
+the fence at its next heartbeat, terminates the CLI, and sends its completion
+receipt. That receipt settles the invocation as cancelled and is never posted
+as a reply. An invocation with a consumed approval stays outcome unknown. The
+same holds for a bot step of a cancelled workflow and for bot workers of
+cancelled topic agents. The runner keeps listening after a settled stop.
+Consumed approval receipts and retained output remain intact. Unknown bot
+invocations are not automatically replayed by play (▶); reconcile the owner's
+local receipt first.
 Running activity pulses the phase actually reported by the bot, respecting the
 system's reduced-motion preference.
 
