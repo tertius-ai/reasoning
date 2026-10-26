@@ -639,6 +639,9 @@ a.org-reference:hover, a.org-reference:focus-visible { text-decoration: underlin
   border: 1px solid var(--border-strong); border-radius: 999px; background: transparent; color: var(--foreground); font-size: 12px; cursor: pointer; }
 .org-app .org-card-stop:hover:not(:disabled) { background: color-mix(in srgb, var(--foreground) 8%, transparent); }
 .org-run-message > summary > time + .org-card-stop { margin-left: 0; }
+/* A running reply's Stop takes the header's free space and sits at its right edge; the elapsed time stays by the status. */
+.org-run-compact > summary:has(> .org-card-stop) { padding-right: 0; }
+.org-run-compact > summary:has(> .org-card-stop) > small { margin-left: 0; }
 .org-card-stop-square { width: 8px; height: 8px; border-radius: 2px; background: currentColor; }
 .org-run-compact > summary small { margin-left: auto; }
 .org-round-activity { list-style: none; margin: 8px 0; padding: 0; color: var(--muted); font-size: 11px; }
