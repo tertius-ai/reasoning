@@ -121,13 +121,14 @@ test("administrators search thirty members and invitations, safely retry recover
     const invitations = [{ id: "d".repeat(32), email: "pending@example.org", role: "member", expires_at: 2_000_000_000,
       accepted_at: null, revoked_at: null, email_state: "accepted" }, { id: "e".repeat(32), email: "old@example.org", role: "member",
       expires_at: 2_000_000_000, accepted_at: null, revoked_at: 1_700_000_000, email_state: "cancelled" }];
-    const recoveries = []; let sessionRevocations = 0;
+    const recoveries = [], passwordChanges = []; let sessionRevocations = 0, authenticated = true;
     page.on("pageerror", error => errors.push(error.message));
     page.on("dialog", dialog => void dialog.accept());
     await page.route("**/api/**", async route => {
       const req = route.request(), path = new URL(req.url()).pathname; let data = [];
       if (path === "/api/health") data = { initialized: true };
-      else if (path === "/api/auth/me") data = { id: user, name: "Owner", email: "owner@example.org" };
+      else if (path === "/api/auth/me") return authenticated
+        ? fulfill(route, { id: user, name: "Owner", email: "owner@example.org" }) : fulfill(route, { detail: "sign-in required" }, 401);
       else if (path === "/api/organizations") data = [{ id: org, name: "Research", role: "owner" }];
       else if (path.endsWith("/hierarchy")) data = { projects: [], channels: [], topics: [], topic_state: [] };
       else if (path.endsWith("/members")) data = members;
@@ -140,6 +141,10 @@ test("administrators search thirty members and invitations, safely retry recover
         recoveries.push({ user_id: members[30].id, state: "queued", created_at: 1_790_000_000 }); data = { message: "Requested" };
       } else if (path === "/api/auth/email-verification") data = { enabled: true, email_verified_at: 1, delivery: null };
       else if (path === "/api/auth/sessions/revoke-others") { sessionRevocations++; data = { revoked_sessions: 2 }; }
+      else if (path === "/api/auth/password") {
+        passwordChanges.push(req.postDataJSON()); authenticated = false;
+        data = { message: "Password changed. Sign in with your new password." };
+      }
       return fulfill(route, data);
     });
     await page.goto(base + "organization.html");
@@ -173,6 +178,14 @@ test("administrators search thirty members and invitations, safely retry recover
     await openMenu(); await page.getByRole("button", { name: "User information", exact: true }).click();
     await page.getByRole("button", { name: "Sign out other sessions", exact: true }).click();
     await page.getByRole("status").filter({ hasText: "other sessions have been signed out" }).waitFor();
-    assert.equal(sessionRevocations, 1); assert.deepEqual(errors, []);
+    assert.equal(sessionRevocations, 1);
+    await page.getByLabel("Current password", { exact: true }).fill("the old fixture password");
+    await page.getByLabel("New password", { exact: true }).fill(password);
+    await page.getByLabel("Confirm new password", { exact: true }).fill(password);
+    await page.getByRole("button", { name: "Change password and sign out", exact: true }).click();
+    await page.getByRole("heading", { name: "Sign in to reasoning" }).waitFor();
+    await page.getByRole("status").filter({ hasText: "Sign in with your new password" }).waitFor();
+    assert.deepEqual(passwordChanges, [{ current_password: "the old fixture password", password }]);
+    assert.deepEqual(errors, []);
   });
 });

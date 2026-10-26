@@ -117,7 +117,7 @@ class AccountRecovery:
             self._audit_account(db, row["user_id"], "account.password.recovered")
         return {"message": "Password changed. Sign in with your new password."}
 
-    def change_password(self, user, current, password, access):
+    def change_password(self, user, current, password):
         with self.store.transaction() as db:
             row = _row(db.execute("SELECT email,password_hash FROM users WHERE id=? AND account_kind='human'", (user,)).fetchone())
         self.store._login_attempt(row["email"], "change-password:" + user)
@@ -128,12 +128,13 @@ class AccountRecovery:
             updated = db.execute("UPDATE users SET password_hash=? WHERE id=? AND password_hash=?", (encoded, user, row["password_hash"]))
             if updated.rowcount != 1:
                 raise StoreError(409, "password changed while this request was running; try again")
-            # Keep only this authenticated session; other browsers must sign in again.
-            db.execute("DELETE FROM sessions WHERE user_id=? AND token_hash<>?", (user, digest(access)))
+            # Reauthentication also replaces this browser's token, so a copied
+            # current-session credential cannot survive a password change.
+            db.execute("DELETE FROM sessions WHERE user_id=?", (user,))
             invalidate_recovery(db, user, int(time.time()))
             self._notice(db, user, row["email"], int(time.time()))
             self._audit_account(db, user, "account.password.change")
-        return {"message": "Password changed. Other sessions have been signed out."}
+        return {"message": "Password changed. Sign in with your new password."}
 
     def sign_out_others(self, user, access):
         with self.store.transaction(write=True) as db:

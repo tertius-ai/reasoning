@@ -1442,7 +1442,7 @@ function Administration({ organization, onClose, onRefresh, onAuthLost }: { orga
 /** The signed-in workspace; the shell owns the session check, sign-in, and pending invitation/verification links. */
 export function OrganizationApp({ user, onAccount, onAuthenticated, onSignedOut, invitation, onInvitation: setInvitation,
   verificationToken, onVerificationToken: setVerificationToken, sessionOrganization = null }: {
-  user: Account; onAccount: (account: Account) => void; onAuthenticated: (session: Session) => Promise<void>; onSignedOut: () => void;
+  user: Account; onAccount: (account: Account) => void; onAuthenticated: (session: Session) => Promise<void>; onSignedOut: (message?: string) => void;
   invitation: string; onInvitation: (token: string) => void; verificationToken: string; onVerificationToken: (token: string) => void;
   sessionOrganization?: string | null;
 }) {
@@ -1819,7 +1819,7 @@ export function OrganizationApp({ user, onAccount, onAuthenticated, onSignedOut,
           onAdmin={() => setAdmin(true)} onCreate={() => beginCreation("organization")} onKnowledge={() => setTool("knowledge")} onBots={() => setTool("bots")}
           onModels={() => setTool("prices")} onUsage={() => setTool("usage")}
           onShortcuts={() => setShortcutsOpen(true)}
-          onSignOut={() => void request("/auth/logout", { method: "POST", body: {} }).then(authLost).catch((cause) => setError(errorMessage(cause)))} />
+          onSignOut={() => void request("/auth/logout", { method: "POST", body: {} }).then(() => authLost()).catch((cause) => setError(errorMessage(cause)))} />
           {organization && <FeedbackButton organization={organization} onAuthLost={authLost} describeView={describeView} />}</div></footer>
       </aside>
       <main className="org-main">
@@ -1856,7 +1856,7 @@ export function OrganizationApp({ user, onAccount, onAuthenticated, onSignedOut,
     {information && <Dialog title={information === "user" ? "User information" : "Organization information"} onClose={() => setInformation(null)}>
       {information === "user" ? <><dl><dt>Name</dt><dd>{user.name}</dd><dt>Email</dt><dd>{user.email}</dd></dl>
         <EmailVerification onVerified={() => { void request<Account>("/auth/me").then(onAccount).catch(cause => setError(errorMessage(cause))); }} />
-        <AccountSecurity onAuthLost={authLost} /></>
+        <AccountSecurity onAuthLost={authLost} onChanged={message => onSignedOut(message)} /></>
         : organization && <dl><dt>Name</dt><dd>{organization.name}</dd><dt>Your role</dt><dd>{organization.role}</dd></dl>}
     </Dialog>}
     {tool && organization && <Dialog title={tool === "bots" ? "My bots" : tool === "knowledge" ? "Shared knowledge" : tool === "prices" ? "Model capabilities" : "Usage and energy"} onClose={() => setTool(null)}>

@@ -62,7 +62,7 @@ export function ResetPassword({ token, onDone, onSignIn, onRequestNew }: {
   </div></main>;
 }
 
-export function AccountSecurity({ onAuthLost }: { onAuthLost: () => void }) {
+export function AccountSecurity({ onAuthLost, onChanged }: { onAuthLost: () => void; onChanged: (message: string) => void }) {
   const [current, setCurrent] = useState(""), [password, setPassword] = useState(""), [confirmation, setConfirmation] = useState("");
   const [busy, setBusy] = useState(false), [error, setError] = useState(""), [message, setMessage] = useState("");
   const failed = (cause: unknown) => {
@@ -75,7 +75,7 @@ export function AccountSecurity({ onAuthLost }: { onAuthLost: () => void }) {
       if (password !== confirmation) { setError("Passwords do not match."); return; }
       setBusy(true);
       void request<{ message: string }>("/auth/password", { method: "POST", body: { current_password: current, password } })
-        .then(value => setMessage(value.message)).catch(failed)
+        .then(value => onChanged(value.message)).catch(failed)
         .finally(() => { setBusy(false); setCurrent(""); setPassword(""); setConfirmation(""); });
     }}><label>Current password<input type="password" name="current-password" autoComplete="current-password" required disabled={busy}
         maxLength={1024} value={current} onChange={event => setCurrent(event.target.value)} /></label>
@@ -83,8 +83,8 @@ export function AccountSecurity({ onAuthLost }: { onAuthLost: () => void }) {
         maxLength={1024} value={password} onChange={event => setPassword(event.target.value)} /></label>
       <label>Confirm new password<input type="password" name="confirm-new-password" autoComplete="new-password" required disabled={busy}
         minLength={12} maxLength={1024} value={confirmation} onChange={event => setConfirmation(event.target.value)} /></label>
-      <button disabled={busy}>Change password</button></form>
-    <p>Changing your password signs out your other browsers and devices. This session stays signed in.</p>
+      <button disabled={busy}>Change password and sign out</button></form>
+    <p>Changing your password signs out every session, including this browser. You will sign in again with your new password.</p>
     <button disabled={busy} onClick={() => {
       if (!window.confirm("Sign out your other browsers and devices? This session stays signed in.")) return;
       setBusy(true); setError(""); setMessage("");

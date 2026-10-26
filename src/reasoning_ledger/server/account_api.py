@@ -35,6 +35,10 @@ def install_routes(app, store, mail, authenticated, credentials, *, session_cook
     User = Annotated[str, Depends(authenticated)]
     recovery = mail.recovery
 
+    def clear_cookies(response):
+        response.delete_cookie(session_cookie, secure=secure, httponly=True, samesite="strict")
+        response.delete_cookie(csrf_cookie, secure=secure, httponly=False, samesite="strict")
+
     @app.get("/api/auth/password-reset")
     def recovery_available():
         return {"enabled": mail.config is not None, "worker_running": app.state.mail_worker.running}
@@ -47,15 +51,14 @@ def install_routes(app, store, mail, authenticated, credentials, *, session_cook
     @app.post("/api/auth/password-reset/confirm")
     def reset_password(body: RecoveryPassword, response: Response):
         result = recovery.reset(body.token.get_secret_value(), body.password.get_secret_value())
-        response.delete_cookie(session_cookie, secure=secure, httponly=True, samesite="strict")
-        response.delete_cookie(csrf_cookie, secure=secure, httponly=False, samesite="strict")
+        clear_cookies(response)
         return result
 
     @app.post("/api/auth/password")
-    def change_password(body: ChangePassword, request: Request, user: User):
-        credential = credentials(request)
-        assert credential is not None
-        return recovery.change_password(user, body.current_password.get_secret_value(), body.password.get_secret_value(), credential[1])
+    def change_password(body: ChangePassword, response: Response, user: User):
+        result = recovery.change_password(user, body.current_password.get_secret_value(), body.password.get_secret_value())
+        clear_cookies(response)
+        return result
 
     @app.post("/api/auth/sessions/revoke-others")
     def sign_out_other_sessions(body: Input, request: Request, user: User):

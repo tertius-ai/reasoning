@@ -261,9 +261,10 @@ changes the password, verifies mailbox ownership, invalidates all outstanding
 recovery links, and revokes every session for that account. It clears this
 browser's cookies and requires a normal sign-in; it does not create a session.
 `POST /api/auth/password` requires an authenticated session, the current
-password and a new `password`; it keeps the requesting session and revokes the
-others. `POST /api/auth/sessions/revoke-others` signs out only the authenticated
-user's other sessions. These actions are available under **User information**.
+password and a new `password`; it revokes every session, clears this browser's
+cookies, and requires a new sign-in. `POST /api/auth/sessions/revoke-others`
+signs out only the authenticated user's other sessions. These actions are
+available under **User information**.
 Password changes queue a security notification when email and its daily
 allowance are available; an admission-limited notification is recorded in the
 account audit history without blocking a completed password change. Database

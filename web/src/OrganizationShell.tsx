@@ -98,7 +98,9 @@ export function OrganizationShell() {
     setUser(await request<Account>("/auth/me")); setInitialized(true); setMode("login"); setError("");
     if (session.organization_id) { setSessionOrganization(session.organization_id); setInvitation(""); }
   }, []);
-  const signedOut = useCallback(() => { clearSharedReads(); setUser(null); setSessionOrganization(null); }, []);
+  const signedOut = useCallback((message = "") => {
+    clearSharedReads(); setUser(null); setSessionOrganization(null); setMode("login"); setAuthNotice(message);
+  }, []);
   const startupError = error && <div className="org-startup-error" role="alert">{error} <button onClick={() => window.location.reload()}>Reconnect</button></div>;
   if (resetToken) return <ResetPassword key={resetToken + ":" + linkRevision} token={resetToken} onDone={() => {
     clearSharedReads(); setResetToken(""); setUser(null); setMode("login"); setAuthNotice("Password changed. Sign in with your new password.");

@@ -29,8 +29,9 @@ password submission loses its response, try signing in with the new password
 before requesting another link.
 
 **Account menu → User information** lets you change your password using your
-current password, or **Sign out other sessions**. Both sign out your other
-browsers and devices while keeping this session signed in.
+current password, or **Sign out other sessions**. Changing the password signs
+out every session and requires a new sign-in. **Sign out other sessions** keeps
+this browser signed in.
 
 Owners and administrators can open **Administration → Users** and search by
 name or email across members and invitations. **Show** filters membership and

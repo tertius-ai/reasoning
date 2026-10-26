@@ -128,17 +128,38 @@ def test_recovery_delivery_does_not_retry_uncertain_sends_or_cross_configuration
     assert changed.claim() is None
 
 
-def test_password_change_requires_current_password_and_keeps_only_this_session(installation):
+def test_password_change_requires_current_password_and_revokes_every_session(installation):
     store, owner, mail = installation
+    unrelated = member(installation)
     current = store.login("owner@example.org", PASSWORD, "first-browser")
     other = store.login("owner@example.org", PASSWORD, "second-browser")
     with pytest.raises(StoreError, match="current password"):
-        mail.recovery.change_password(owner["user_id"], "wrong password", NEW_PASSWORD, current["access_token"])
-    mail.recovery.change_password(owner["user_id"], PASSWORD, NEW_PASSWORD, current["access_token"])
-    assert store.session(current["access_token"])
+        mail.recovery.change_password(owner["user_id"], "wrong password", NEW_PASSWORD)
+    mail.recovery.change_password(owner["user_id"], PASSWORD, NEW_PASSWORD)
+    with pytest.raises(StoreError):
+        store.session(current["access_token"])
     with pytest.raises(StoreError):
         store.session(other["access_token"])
+    assert store.session(unrelated["access_token"])
     assert store.login("owner@example.org", NEW_PASSWORD, "third-browser")
+
+
+def test_password_change_http_clears_cookies_and_requires_sign_in(installation):
+    store, _, _ = installation
+    app = create_app(Config(store.data_dir, "https://chat.example.org", mail=CONFIG, inference_enabled=False))
+    client = TestClient(app, base_url="https://chat.example.org")
+    session = client.post("/api/auth/login", json={"email": "owner@example.org", "password": PASSWORD}).json()
+    headers = {"Origin": "https://chat.example.org", "X-CSRF-Token": session["csrf_token"]}
+    body = {"current_password": PASSWORD, "password": NEW_PASSWORD}
+    assert client.post("/api/auth/password", json=body).status_code == 403
+    assert client.get("/api/auth/me").status_code == 200
+    result = client.post("/api/auth/password", json=body, headers=headers)
+    assert result.status_code == 200 and "access_token" not in result.json()
+    assert "Sign in" in result.json()["message"]
+    assert client.cookies.get("__Host-reasoning_session") is None
+    assert client.cookies.get("__Host-reasoning_csrf") is None
+    assert client.get("/api/auth/me").status_code == 401
+    assert client.post("/api/auth/login", json={"email": "owner@example.org", "password": NEW_PASSWORD}).status_code == 200
 
 
 def test_sign_out_others_preserves_current_and_unrelated_accounts(installation):
