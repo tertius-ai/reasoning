@@ -2,6 +2,7 @@ import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
+import { releaseNotesPlugin } from "./release-notes.mjs";
 
 // Served pages carry `script-src 'self'` as a response header, so a built
 // entry page must not depend on an inline script. JSON data blocks are inert.
@@ -9,7 +10,7 @@ const INLINE_SCRIPT = /<script\b(?![^>]*\bsrc\s*=)(?![^>]*\btype\s*=\s*["']?appl
 const INLINE_HANDLER = /<[^>]+\son[a-z]+\s*=/i;
 
 export default defineConfig({
-  plugins: [react(), {
+  plugins: [react(), releaseNotesPlugin(fileURLToPath(new URL(".", import.meta.url))), {
     name: "reasoning-no-inline-scripts",
     enforce: "post",
     generateBundle(_options, bundle) {

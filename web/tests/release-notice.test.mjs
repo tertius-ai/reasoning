@@ -25,7 +25,7 @@ test("only a complete release digest counts as a known release", () => {
   assert.equal(release.pageRelease(undefined), null, "server-side rendering has no page release");
 });
 
-test("a different reported release is offered until dismissed, and a later release is offered again", () => {
+test("a different reported release is offered, and returning to the page's release withdraws it", () => {
   const watch = new release.ReleaseWatch(loaded);
   let notified = 0;
   const unsubscribe = watch.subscribe(() => { notified += 1; });
@@ -39,17 +39,13 @@ test("a different reported release is offered until dismissed, and a later relea
   watch.observe(newer); watch.observe(null);
   assert.equal(watch.available, newer, "repeats and unknown values change nothing");
   assert.equal(notified, 1);
-  watch.dismiss();
-  assert.equal(watch.available, null);
-  watch.observe(newer);
-  assert.equal(watch.available, null, "a dismissed release stays dismissed");
   watch.observe(newest);
-  assert.equal(watch.available, newest, "a further upgrade is offered again");
+  assert.equal(watch.available, newest, "a further upgrade is offered");
   watch.observe(loaded);
-  assert.equal(watch.available, null, "returning to the page's release withdraws the notice");
+  assert.equal(watch.available, null, "returning to the page's release withdraws the offer");
   unsubscribe();
   watch.observe(newer);
-  assert.equal(notified, 4);
+  assert.equal(notified, 3);
 });
 
 test("a page without a known release never offers a reload", () => {

@@ -40,7 +40,7 @@ import { TexRequestDialog, texRequest } from "./TexRequestDialog";
 import { EmailVerification, VerifyEmailBanner } from "./EmailVerification";
 import { BatchInvitations, InvitationDeliveryProgress } from "./BatchInvitations";
 import { ProviderKeyUsage } from "./ProviderKeyUsage";
-import { ReleaseNotice } from "./ReleaseNotice";
+import { WhatsNew } from "./WhatsNew";
 import { ReferenceCandidate, ReferenceContext, ReferenceLink, ReferenceResolver, ReferenceText, applicationHref, followApplicationLink, matchReferences,
   referenceCandidates, referenceFromHref, referenceQuery, referenceToken, remarkReferences, topicLink } from "./references";
 import {
@@ -1786,6 +1786,7 @@ export function OrganizationApp({ user, onAccount, onAuthenticated, onSignedOut,
         {directTotal > 0 && <span className="org-unread org-presence-unread" aria-hidden="true">{directTotal}</span>}</button>}
       {organization && topic && <TopicCopyButton key={organization.id + "/" + topic.id} organizationId={organization.id} topicId={topic.id} onAuthLost={authLost} />}
       {organization && <KnowledgeLinks organizationId={organization.id} topicId={topic?.id} onOpen={openKnowledge} onIntent={() => void loadKnowledgeWorkspace().catch(() => { /* The workspace view reports load failures. */ })} />}
+      <WhatsNew />
       <a className="org-icon-button" href="/organization.html?view=help" aria-label="Help" title="Help" onClick={event => {
         if (event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) return;
         event.preventDefault(); setHelpOpen(value => !value);
@@ -1794,7 +1795,6 @@ export function OrganizationApp({ user, onAccount, onAuthenticated, onSignedOut,
     </header>
     {error && <div className="org-banner" role="alert">{error}<button aria-label="Dismiss error" onClick={() => setError("")}>×</button></div>}
     {linkNotice && <div className="org-banner" role="status">{linkNotice}<button aria-label="Dismiss notice" onClick={() => setLinkNotice("")}>×</button></div>}
-    <ReleaseNotice />
     {verificationToken && <VerifyEmailBanner token={verificationToken} onDone={() => {
       setVerificationToken(""); window.history.replaceState(null, "", window.location.pathname + window.location.search);
       void request<Account>("/auth/me").then(onAccount).catch(cause => setError(errorMessage(cause)));
