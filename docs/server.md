@@ -460,7 +460,7 @@ Use the prefix `/api/organizations/{organization_id}` for organization resources
 | `{prefix}/projects/{project_id}`, `{prefix}/channels/{channel_id}`, `{prefix}/topics/{topic_id}` | DELETE | Atomic deletion; body contains the exact name in `confirmation` and current `plan_token` |
 | `{prefix}/projects/{project_id}/members` | GET | Private-project roster for project owners and organization administrators |
 | `{prefix}/projects/{project_id}/members/{member_id}` | PUT, DELETE | Private-project owner/member assignment and removal |
-| `{prefix}/topics/{topic_id}/messages` | GET, POST | History and message submission |
+| `{prefix}/topics/{topic_id}/messages` | GET, POST | History and message submission; `adds_to` adds the new message to a running model reply |
 | `{prefix}/topics/{topic_id}/message-updates` | GET | Incremental edited-message updates with a revision-event cursor |
 | `{prefix}/topics/{topic_id}/events` | GET | Server-Sent Events: message watermarks and run, agent, goal and bot-invocation changes for one readable topic |
 | `{prefix}/topics/{topic_id}/messages/{message_id}` | PATCH | Human author's optimistic edit with the current revision |
@@ -510,6 +510,8 @@ Use the prefix `/api/organizations/{organization_id}` for organization resources
 | `{prefix}/inference-runs/{run_id}/events` | GET | Exclusive-cursor progress replay |
 | `{prefix}/inference-runs/{run_id}/cancel` | POST | Requester/administrator cancellation |
 | `{prefix}/inference-runs/{run_id}/cost` | PUT | Administrator reconciliation of an unknown charge |
+| `{prefix}/inference-runs/{run_id}/additions` | POST | Author moves a later posted message into the running reply; its own queued reply is cancelled |
+| `{prefix}/inference-runs/{run_id}/additions/{message_id}` | DELETE | Author removes an addition the reply has not read |
 | `{prefix}/compute-configuration` | GET | Approved compute images, organization policy, and quota balance |
 | `{prefix}/compute-policy` | PUT | Administrator compute admission/concurrency limits |
 | `{prefix}/topics/{topic_id}/compute-jobs` | GET, POST | Gamma compute job history and idempotent submission |
@@ -884,7 +886,9 @@ inference worker settles an uncertain run from the provider's record of its
 generation, on a bounded schedule and without replaying the request; see
 [inference accounting](inference.md). Administrators can record a verified
 provider cost for a run that stays uncertain. Unsent composer text
-is never included in a model request.
+is never included in a model request. A later message can join a running
+reply instead of starting its own, from the reply's thread line, ↩ on its
+question, or a posted message's actions menu; see [inference](inference.md).
 The account menu's **My bots** provides personal bot connections bounded by the
 member's current permissions. **Follow my access** resolves all owner-visible
 topics dynamically, including newly created private topics. Explicit-only grants

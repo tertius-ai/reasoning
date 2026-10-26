@@ -30,7 +30,37 @@ in run records, progress events, client responses, or error messages.
 
 Choose the initial model and knowledge access when creating a beta topic.
 Sending a human message captures context through that committed message and
-requests the model selected beside Send. Chat, goal turns, and independent
+requests the model selected beside Send.
+
+A later message can join a reply that is still running instead of starting
+its own. A running reply's card shows a thread line (**Add to this reply**, or
+the count of added messages read and waiting); clicking it, or ↩ on the question
+it answers, puts the message box into thread mode. The box then shows an
+**Adding to … reply** bar, the attachment plus inside the box, and no model or
+effort controls, because an addition uses the running reply's model and effort.
+Esc or × returns to the usual box and keeps the text. Thread mode sends
+`adds_to` with the message: the message and its addition commit together, the
+message requests no reply of its own, and the box returns to new questions. A
+reply that finished first refuses the addition with 409 and posts nothing; the
+browser then sends the same message as a new question. An already posted message
+can also move into the latest running reply to an earlier question from its
+**Message actions** menu, but only while that message's own reply is still
+queued; moving cancels that reply before it starts, releasing its reservation.
+Only the author adds or moves a message, and only a message posted after the
+question. **Undo** removes an addition the reply has not read; undoing a move
+requests the message's own reply again.
+
+A reply and its agent continuations form one thread named by the reply's root
+run, and additions belong to that thread. Before each provider call of a
+coordinator run of the thread (delegated runs never read additions), the
+executor appends the unread additions to its conversation as one user message
+of source-message records, so every later call keeps them, and records the
+`additions_read` event with the call's step. A continuation that recompiles the
+topic after delegated work already carries those messages and records them read
+at step 0. Additions never replay or restart a provider call. An addition the
+thread did not read before it finished stays unread, and its message shows that
+it is not in the answer. Attached files of an added message reach the reply as
+their links only. Chat, goal turns, and independent
 reviews do not impose an application output-token cap by default. Provider
 output/context capacity still applies. Reservations use an 8,192-output-token
 estimate, reduced for smaller model/window capacity; this estimate is not sent

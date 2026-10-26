@@ -1059,10 +1059,24 @@ class Store:
             self._audit(db, organization_id, user_id, f"{kind}.delete", entity_id)
 
     def post_message(self, user_id: str, organization_id: str, topic_id: str, content: str, client_id: str,
-                     reply_to: str | None = None) -> dict[str, Any]:
+                     reply_to: str | None = None, adds_to: str | None = None) -> dict[str, Any]:
+        """``adds_to`` names a running model reply in this topic that reads the message at its next step."""
         with self.transaction(write=True) as db:
             self._topic_access(db, user_id, organization_id, topic_id, write=True)
-            return self._post_message(db, user_id, organization_id, topic_id, content, client_id, reply_to=reply_to)
+            result = self._post_message(db, user_id, organization_id, topic_id, content, client_id, reply_to=reply_to)
+            if adds_to is not None:
+                from . import inference_additions
+                from .inference_store import InferenceStore
+
+                added = inference_additions.for_message(db, organization_id, result["id"])
+                if added is None:
+                    message = db.execute("SELECT * FROM messages WHERE organization_id=? AND id=?",
+                                         (organization_id, result["id"])).fetchone()
+                    inference_additions.link(db, InferenceStore(self), organization_id, topic_id, adds_to, message, user_id)
+                elif added["run_id"] != adds_to:
+                    raise StoreError(409, "client_id was already used for a different message")
+                result["addition"] = inference_additions.for_message(db, organization_id, result["id"])
+            return result
 
     def edit_message(self, user_id, organization_id, topic_id, message_id, content, revision):
         if not isinstance(content, str) or not content.strip() or len(content) > 16000 or type(revision) is not int or revision < 0:
@@ -1130,6 +1144,12 @@ class Store:
     def _message(row, db=None) -> dict[str, Any]:
         result = _row(row)
         result["author_kind"] = result.pop("sender_kind")
+        if db is not None and result["author_kind"] == "human":
+            from .inference_additions import for_message
+
+            addition = for_message(db, result["organization_id"], result["id"])
+            if addition is not None:
+                result["addition"] = addition
         name = result.pop("sender_name", None)
         if result["author_kind"] == "bot":
             result["bot_name"] = name

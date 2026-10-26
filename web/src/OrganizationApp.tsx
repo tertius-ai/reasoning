@@ -17,6 +17,7 @@ import { ComputeConversation } from "./ComputeConversation";
 import { DirectConversation, DirectMessageMarks, DirectMessagePicker, NewDirectMessageButton, directPath, directUnread, directUnreadTotal, peopleInbox } from "./DirectMessages";
 import { KnowledgeLinks, KnowledgeView } from "./KnowledgeLinks";
 import { ReplyBar, ReplyPointer, ThreadDialog } from "./MessageReplies";
+import { additionReceipt, modelName, moveBlocked, moveTarget, replyThreads, threadAnswering } from "./ReplyAdditions";
 import { MentionMirror, MentionSelf, MentionTag, chatTones, mentionFromHref, mentionInitials, speakerKey, speakerTone, toneClass } from "./mentions";
 import { LazyView } from "./LazyView";
 import { WorkflowConversation } from "./WorkflowConversation";
@@ -45,7 +46,7 @@ import { ReferenceCandidate, ReferenceContext, ReferenceLink, ReferenceResolver,
   referenceCandidates, referenceFromHref, referenceQuery, referenceToken, remarkReferences, topicLink } from "./references";
 import {
   Account, ApiError, Channel, EMPTY_HIERARCHY, Hierarchy, InferenceConfiguration, Invitation, InvitationMail, KeyMetadata, KIND_LABEL, KIND_SYMBOL, KnowledgeTool,
-  BotModel, Member, MentionQuery, Message, ModelAttempt, Organization, OrganizationPrices, Policy, Presence, Project, ProjectMember, SearchResult, Session, Topic, TopicKind, aborted,
+  BotModel, Member, MentionQuery, Message, ModelAttempt, ModelRun, Organization, ReplyAddition, OrganizationPrices, Policy, Presence, Project, ProjectMember, SearchResult, Session, Topic, TopicKind, aborted,
   authorLabel, decimalBudget, errorMessage, invitationEmailLabel, mentionMarkdown, mentionQuery, mentionText, mergeMessages, modelCatalog as sharedModelCatalog, organizationPath, readTopicSnapshot, rememberTopicSnapshot, request, sharedRequest, topicPath, PendingModelAttempt,
 } from "./organization-api";
 
@@ -67,7 +68,8 @@ const projectTopic = (hierarchy: Hierarchy, projectId: string) => hierarchy.topi
   hierarchy.channels.some(channel => channel.id === topic.channel_id && channel.project_id === projectId))?.id;
 const DirectConversationView = lazy(() => import("./DirectConversation").then(module => ({ default: module.DirectConversationView })));
 
-type Draft = { text: string; clientId: string; attempted: boolean; mentions?: MentionBinding[]; replyTo?: string };
+/** ``addTo`` is the root run of a running model reply that the next message joins instead of starting its own. */
+type Draft = { text: string; clientId: string; attempted: boolean; mentions?: MentionBinding[]; replyTo?: string; addTo?: string };
 type Creation = "organization" | "project" | "channel" | "topic";
 const newDraft = (): Draft => ({ text: "", clientId: crypto.randomUUID(), attempted: false });
 /** Keep the current value when a refresh returns equal data, so dependent views and effects do not restart. */
@@ -800,6 +802,23 @@ function Conversation({ organizationId, topic, members, user, canWrite, canManag
   };
   const cancelReply = () => updateDraft({ ...currentDraft.current, replyTo: undefined, clientId: crypto.randomUUID(), attempted: false });
   const replyOriginal = draft.replyTo ? messages.find(message => message.id === draft.replyTo) : undefined;
+  // Thread mode: the next message joins a running model reply. Leaving it keeps the text for a new question.
+  const [betaRuns, setBetaRuns] = useState<ModelRun[]>([]), [addNotice, setAddNotice] = useState("");
+  const threads = useMemo(() => replyThreads(betaRuns), [betaRuns]);
+  const startAdding = useRef((_root: string) => {});
+  startAdding.current = (rootRun: string) => {
+    updateDraft({ ...currentDraft.current, addTo: rootRun, replyTo: undefined, clientId: crypto.randomUUID(), attempted: false });
+    setAddNotice("");
+    requestAnimationFrame(() => textarea.current?.focus());
+  };
+  const onAddTo = useCallback((rootRun: string) => startAdding.current(rootRun), []);
+  const cancelAdding = () => updateDraft({ ...currentDraft.current, addTo: undefined, clientId: crypto.randomUUID(), attempted: false });
+  const adding = topic.kind === "beta" && draft.addTo ? threads.find(thread => thread.root.id === draft.addTo) : undefined;
+  useEffect(() => {
+    if (!adding || adding.active) return;
+    updateDraft({ ...currentDraft.current, addTo: undefined, clientId: crypto.randomUUID(), attempted: false });
+    setAddNotice(`${modelName(adding.root.model)}'s reply finished. Your message will be sent as a new question.`);
+  }, [adding?.active]);
   useEffect(() => {
     const controller = new AbortController(); let timer: ReturnType<typeof setTimeout>;
     const refreshBots = async () => {
@@ -866,7 +885,7 @@ function Conversation({ organizationId, topic, members, user, canWrite, canManag
     if (!mention) return;
     const label = `@${member.name}${member.model ? "-" + member.model : ""}${member.effort ? "!" + member.effort : ""}`, token = label + " ";
     const text = draft.text.slice(0, mention.start) + token + draft.text.slice(mention.end);
-    updateDraft({ text, clientId: crypto.randomUUID(), attempted: false,
+    updateDraft({ text, clientId: crypto.randomUUID(), attempted: false, replyTo: draft.replyTo, addTo: draft.addTo,
       mentions: [...editMentions(draft.text, text, draft.mentions), { start: mention.start, end: mention.start + label.length,
         id: member.id, label, model: member.model, effort: member.effort }] });
     const position = mention.start + token.length;
@@ -878,7 +897,7 @@ function Conversation({ organizationId, topic, members, user, canWrite, canManag
     if (!reference) return;
     const label = "#" + target.label, token = label + " ";
     const text = draft.text.slice(0, reference.start) + token + draft.text.slice(reference.end);
-    updateDraft({ text, clientId: crypto.randomUUID(), attempted: false,
+    updateDraft({ text, clientId: crypto.randomUUID(), attempted: false, replyTo: draft.replyTo, addTo: draft.addTo,
       mentions: [...editMentions(draft.text, text, draft.mentions), { start: reference.start, end: reference.start + label.length,
         id: target.id, label, wire: referenceToken(target.kind, target.id) }] });
     const position = reference.start + token.length;
@@ -1072,17 +1091,28 @@ function Conversation({ organizationId, topic, members, user, canWrite, canManag
       if (objective !== null) { setGoalDraft(objective); return; }
     }
     const attempt = prepareMessageAttempt(draft);
-    updateDraft(attempt); setSending(true); setError("");
+    updateDraft(attempt); setSending(true); setError(""); setAddNotice("");
     try {
       const wireText = encodeMentions(attempt.text, attempt.mentions);
-      const message = await request<Message>(root + "/messages", { method: "POST", body: {
-        content: wireText, client_id: attempt.clientId, ...(attempt.replyTo ? { reply_to: attempt.replyTo } : {}) } });
+      const body = { content: wireText, client_id: attempt.clientId, ...(attempt.replyTo ? { reply_to: attempt.replyTo } : {}) };
+      let addedTo = topic.kind === "beta" ? attempt.addTo : undefined, message: Message;
+      try {
+        message = await request<Message>(root + "/messages", { method: "POST", body: addedTo ? { ...body, adds_to: addedTo } : body });
+      } catch (cause) {
+        // The reply finished first: the server posted nothing, so the same message becomes a new question.
+        if (!addedTo || !(cause instanceof ApiError) || cause.status !== 409) throw cause;
+        const finished = threads.find(thread => thread.root.id === addedTo);
+        addedTo = undefined;
+        setAddNotice(`${finished ? modelName(finished.root.model) : "The model"}'s reply finished first, so this was sent as a new question.`);
+        message = await request<Message>(root + "/messages", { method: "POST", body });
+      }
       if (!alive.current) return;
       setMessages((existing) => mergeMessages(existing, [message]));
       // The incremental cursor advances only from a contiguous poll page, not a
       // POST result: another member may have posted intervening messages.
       if (currentDraft.current.clientId === attempt.clientId) updateDraft(newDraft());
       bottom.current = true; setAtBottom(true);
+      if (addedTo) return;
       const control = topic.kind === "beta" ? agentCommand(attempt.text) : null;
       if (control) {
         await request(root + "/agents/control", { method: "POST", body: { status: control } });
@@ -1126,7 +1156,33 @@ function Conversation({ organizationId, topic, members, user, canWrite, canManag
   // that returns no change, and model-menu updates reuse the same elements. Callbacks read current values from refs.
   const replyAgain = useRef({ selectedModel, selectedEffort, modelCatalog, onModelAttempt, onForked });
   replyAgain.current = { selectedModel, selectedEffort, modelCatalog, onModelAttempt, onForked };
+  // Running replies change the transcript only through what they offer each message, so polling rebuilds it rarely.
+  const runsNow = useRef({ betaRuns, threads });
+  runsNow.current = { betaRuns, threads };
+  const threadKey = topic.kind !== "beta" ? "" : JSON.stringify([
+    threads.map(thread => [thread.root.id, thread.root.model, thread.root.context_through_sequence, thread.active, thread.additions]),
+    betaRuns.map(run => [run.context_through_sequence, run.requested_by, run.status]),
+  ]);
   const canReplyAgain = topic.kind === "beta" && Boolean(selectedModel) && canWrite && online && !modelAttempt;
+  const undoAddition = async (message: Message, addition: ReplyAddition) => {
+    try {
+      const undone = await request<{ moved: boolean; cancelled_runs: string[] }>(organizationPath(organizationId) + "/inference-runs/"
+        + encodeURIComponent(addition.run_id) + "/additions/" + encodeURIComponent(message.id), { method: "DELETE" });
+      if (!alive.current) return;
+      setMessages(existing => mergeMessages(existing, [{ ...message, addition: undefined }]));
+      // A moved message lost its own queued reply; undoing the move asks for that reply again.
+      const { selectedModel, selectedEffort, modelCatalog, onModelAttempt } = replyAgain.current;
+      if (undone.moved && undone.cancelled_runs.length && selectedModel) {
+        const metadata = modelCatalog?.models.find(model => model.id === selectedModel);
+        const attempt = automaticModelAttempt(selectedModel, message.sequence, metadata?.max_completion_tokens ?? 8192);
+        if (selectedEffort) attempt.effort = selectedEffort;
+        onModelAttempt(attempt);
+        await requestModelReply(organizationId, topic.id, attempt, onModelAttempt);
+      }
+    } catch (cause) {
+      if (cause instanceof ApiError && cause.status === 401) onAuthLost(); else setError(errorMessage(cause));
+    }
+  };
   const workflowRunKey = topic.kind === "gamma" ? workflowActivity.map(entry => entry.id).join(",") : "";
   const messageActivity: TopicActivity[] = useMemo(() => {
   const workflowRuns = new Set(workflowRunKey.split(","));
@@ -1145,7 +1201,15 @@ function Conversation({ organizationId, topic, members, user, canWrite, canManag
       id: "message:" + group[0].id, created_at: group[0].created_at, sequence: group[0].sequence, body: <>
       {topic.kind === "alpha" && (groupIndex === 0 || new Date(groups[groupIndex - 1][0].created_at * 1000).toDateString() !== new Date(group[0].created_at * 1000).toDateString())
         && <div className="org-message-day"><time dateTime={new Date(group[0].created_at * 1000).toISOString().slice(0, 10)}>{new Date(group[0].created_at * 1000).toLocaleDateString(undefined, { weekday: "long", month: "short", day: "numeric", year: "numeric" })}</time></div>}
-      <div className={"org-message-group org-speaker-" + (group[0].author_kind ?? "human") + " " + speakerTone(group[0], tones)}>{group.map((message, index) => <React.Fragment key={message.id}>
+      <div className={"org-message-group org-speaker-" + (group[0].author_kind ?? "human") + " " + speakerTone(group[0], tones)}>{group.map((message, index) => {
+        const { threads } = runsNow.current;
+        const answering = topic.kind === "beta" && canWrite ? threadAnswering(threads, message.sequence) : undefined;
+        const addition = topic.kind === "beta" ? threads.flatMap(thread => thread.additions).find(item => item.message_id === message.id)
+          ?? message.addition : undefined;
+        const additionThread = addition ? threads.find(thread => thread.root.id === addition.run_id) : undefined;
+        const movable = topic.kind === "beta" && canWrite && !addition && message.author_id === user.id
+          && (message.author_kind ?? "human") === "human" ? moveTarget(threads, message) : undefined;
+        return <React.Fragment key={message.id}>
         {message.sequence === unreadFrom && <div className="org-unread-divider" role="separator" aria-label="New messages"><span>New</span></div>}<article className={"org-message " + (index ? "org-message-continuation " : "") + (message.author_kind !== "assistant" && message.author_id === user.id ? "org-message-own" : "") + (message.id === highlighted ? " org-message-linked" : "")}
         key={message.id} id={"message-" + message.sequence} data-sequence={message.sequence} data-message-id={message.id}
         tabIndex={message.id === focus ? -1 : undefined} aria-current={message.id === highlighted ? "location" : undefined}>
@@ -1156,9 +1220,21 @@ function Conversation({ organizationId, topic, members, user, canWrite, canManag
         <MessageMarkdown markdown={normalizeMathDelimiters(mentionMarkdown(message.content, mentionPeople))} />
         {!!message.files?.length && <ReplyFiles topicId={topic.id} files={message.files} />}
         {message.author_kind === "assistant" && <MessageUsageDetails usage={message.usage} />}
+        {addition && <p className={"org-addition-receipt" + (addition.read_at === null && additionThread?.active ? " org-addition-waiting" : "")}
+          role="status"><span aria-hidden="true">↳</span>{additionReceipt(addition, additionThread?.root.model ?? "the model", Boolean(additionThread?.active))}
+          {addition.read_at === null && additionThread?.active && message.author_id === user.id && canWrite && <button type="button"
+            onClick={() => void undoAddition(message, addition)}>Undo</button>}</p>}
         <MessageActions organizationId={organizationId} topicId={topic.id} messageId={message.id}
           people={mentionPeople} batchedReactions reactions={reactions[message.id]}
-          onReply={canWrite ? () => startReply.current(message.id) : undefined}
+          onReply={canWrite ? () => { if (answering) startAdding.current(answering.root.id); else startReply.current(message.id); } : undefined}
+          replyLabel={answering ? `Add to ${modelName(answering.root.model)}'s reply` : undefined}
+          moveInto={movable ? { label: `Move into ${modelName(movable.root.model)}'s thread`,
+            blocked: moveBlocked(runsNow.current.betaRuns, message, user.id),
+            onMove: async () => {
+              const added = await request<ReplyAddition>(organizationPath(organizationId) + "/inference-runs/"
+                + encodeURIComponent(movable.root.id) + "/additions", { method: "POST", body: { message_id: message.id } });
+              setMessages(existing => mergeMessages(existing, [{ ...message, addition: added }]));
+            } } : undefined}
           message={message} canEdit={canWrite && message.author_kind !== "assistant" && message.author_kind !== "bot" && message.author_id === user.id}
           onEdited={updated => setMessages(existing => mergeMessages(existing, [updated]))}
           onReplyAgain={canReplyAgain ? async () => {
@@ -1175,15 +1251,16 @@ function Conversation({ organizationId, topic, members, user, canWrite, canManag
             catch { /* Storage is optional. */ }
             onForked(id);
           }} onAuthLost={onAuthLost} onMarkUnread={() => markUnread(message)} />
-      </article></React.Fragment>)}</div></> }));
-  }, [messages, reactions, workflowRunKey, topic.kind, topic.id, mentionPeople, tones, members, user.id, organizationId, canWrite, canReplyAgain, onAuthLost, focus, highlighted, unreadFrom]);
+      </article></React.Fragment>; })}</div></> }));
+  }, [messages, reactions, workflowRunKey, topic.kind, topic.id, mentionPeople, tones, members, user.id, organizationId, canWrite, canReplyAgain, onAuthLost, focus, highlighted, unreadFrom, threadKey]);
   // The plus sits under the box beside the model picker in AI chats, and inside the box on its left everywhere else.
   const attach = <span ref={attachmentControl} className="org-composer-attach"><AttachmentButton organizationId={organizationId} topicId={topic.id}
     disabled={!canWrite || sending || (topic.kind === "beta" && !!modelAttempt)} onError={cause => {
       if (cause instanceof ApiError && cause.status === 401) onAuthLost();
     }} onInsert={markdown => {
       const previous = currentDraft.current, text = previous.text + (previous.text ? "\n\n" : "") + markdown;
-      updateDraft({ text, clientId: crypto.randomUUID(), attempted: false, mentions: previous.mentions });
+      updateDraft({ text, clientId: crypto.randomUUID(), attempted: false, mentions: previous.mentions,
+        replyTo: previous.replyTo, addTo: previous.addTo });
       requestAnimationFrame(() => textarea.current?.focus());
     }} /></span>;
   return <MediaScope.Provider value={{ organizationId, topicId: topic.id, canWrite }}><section className="org-conversation" aria-label="Topic conversation">
@@ -1215,6 +1292,7 @@ function Conversation({ organizationId, topic, members, user, canWrite, canManag
       {topic.kind === "beta" && <BetaConversation organizationId={organizationId} topicId={topic.id} userId={user.id}
         canWrite={canWrite} canManage={canManage} online={online} toolbarTarget={composerButton} hidePlay={Boolean(draft.text.trim())}
         attempt={modelAttempt} onAttempt={onModelAttempt} onAuthLost={onAuthLost} onActivity={setBetaActivity} wake={messages.at(-1)?.sequence}
+        onRuns={setBetaRuns} addingTo={adding?.root.id} onAddTo={onAddTo}
         transcript={transcript} onReplyPending={refreshMessages} />}
       <BotConversation organizationId={organizationId} topicId={topic.id} names={botNames} userId={user.id}
         canWrite={canWrite} canManage={canManage} onActivity={setBotActivity} onAuthLost={onAuthLost} wake={messages.at(-1)?.sequence} />
@@ -1246,18 +1324,25 @@ function Conversation({ organizationId, topic, members, user, canWrite, canManag
         canWrite={canWrite} canManage={canManage} attempt={computeAttempt} onAttempt={onComputeAttempt} onAuthLost={onAuthLost} toolbarTarget={composerTools} onActivity={setComputeActivity} />}
     <form className="org-composer" onSubmit={(event) => void send(event)}>
       <SlashCommandPalette topicId={topic.id} kind={topic.kind} text={draft.text} onSelect={chooseCommand} />
-      <div className="org-composer-box">
+      {addNotice && <p role="status" className="org-add-notice">{addNotice}
+        <button type="button" aria-label="Dismiss notice" onClick={() => setAddNotice("")}>×</button></p>}
+      <div className={"org-composer-box" + (adding ? " org-composer-adding" : "")}>
+      {adding && <div className="org-adding-bar" role="status"><span aria-hidden="true">↳</span>
+        <span className="org-adding-bar-text">Adding to {modelName(adding.root.model)}'s reply to the {
+          new Date((messages.find(item => item.sequence === adding.root.context_through_sequence)?.created_at
+            ?? adding.root.created_at ?? 0) * 1000).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" })} question</span>
+        <button type="button" aria-label="Stop adding" title="Back to a new question · Esc" onClick={cancelAdding}>×</button></div>}
       {draft.replyTo && <ReplyBar original={replyOriginal} label={replyOriginal && authorLabel(replyOriginal, members)} onCancel={cancelReply} />}
       <label className="org-visually-hidden" htmlFor="org-message">Message</label>
-      <div className="org-composer-row">{topic.kind !== "beta" && attach}<div className="org-composer-input"><MentionMirror ref={mirror} text={draft.text} bindings={draft.mentions} self={user.id} />
+      <div className="org-composer-row">{(topic.kind !== "beta" || adding) && attach}<div className="org-composer-input"><MentionMirror ref={mirror} text={draft.text} bindings={draft.mentions} self={user.id} />
       <textarea id="org-message" ref={textarea} onScroll={event => { if (mirror.current) mirror.current.scrollTop = event.currentTarget.scrollTop; }} placeholder={!canWrite ? "You have read-only access" : topic.kind === "beta" && modelAttempt
         ? modelAttempt.unconfirmed ? "Retry or dismiss the unconfirmed reply request before sending another message"
-          : "Sending the reply request…" : topic.kind === "beta" && selectedModel
+          : "Sending the reply request…" : adding ? `Add to ${modelName(adding.root.model)}'s reply…` : topic.kind === "beta" && selectedModel
       ? `Message ${catalogModel(replyCatalog, selectedModel)?.execution_source === "bot"
         ? catalogModel(replyCatalog, selectedModel)?.name : selectedModel}…` : "Write a message…"} value={draft.text}
         disabled={!canWrite || sending || (topic.kind === "beta" && !!modelAttempt)} maxLength={16000} rows={1} onChange={(event) => {
           updateDraft({ text: event.target.value, clientId: draft.attempted || !draft.clientId ? crypto.randomUUID() : draft.clientId,
-            attempted: false, mentions: editMentions(draft.text, event.target.value, draft.mentions), replyTo: draft.replyTo });
+            attempted: false, mentions: editMentions(draft.text, event.target.value, draft.mentions), replyTo: draft.replyTo, addTo: draft.addTo });
           setMention(mentionQuery(event.target.value, event.target.selectionStart, topicBots.map(bot => bot.name)));
           setReference(referenceQuery(event.target.value, event.target.selectionStart)); setMentionIndex(0);
         }} onSelect={(event) => {
@@ -1270,6 +1355,7 @@ function Conversation({ organizationId, topic, members, user, canWrite, canManag
           if (event.nativeEvent.isComposing) return;
           if (event.key === "Escape") {
             if (!mention && !reference && draft.replyTo) cancelReply();
+            else if (!mention && !reference && draft.addTo) cancelAdding();
             setMention(null); setReference(null); return;
           }
           if (event.key === "Tab" && (mention || reference) && !event.shiftKey && !event.ctrlKey && !event.metaKey && !event.altKey) {
@@ -1297,8 +1383,8 @@ function Conversation({ organizationId, topic, members, user, canWrite, canManag
           {topic.kind !== "alpha" && <div className="org-composer-transport" ref={setComposerButton} />}
         </div></div>
       </div>
-      {topic.kind === "beta" && <div className="org-composer-controls">
-        {attach}
+      {topic.kind === "beta" && <div className="org-composer-controls" hidden={Boolean(adding)}>
+        {!adding && attach}
         <div className="org-composer-tools" ref={setComposerTools} />
         <div className="org-composer-model">
           <span className="org-composer-capabilities" ref={setCapabilitiesSlot} />

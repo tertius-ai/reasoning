@@ -429,6 +429,7 @@ class InferenceStore:
             "completion_tokens",
             "context_through_sequence",
         )
+        from .inference_additions import for_run
         from .inference_timing import run_timing
         from .research_answers import answer_state
         from .usage_store import UsageStore, footprint
@@ -512,6 +513,7 @@ class InferenceStore:
             "answer_state": answer_state(db, row) if db is not None else None,
             "capabilities": capabilities,
             "timing": run_timing(db, row) if db is not None else None,
+            "additions": for_run(db, row["organization_id"], row["id"]) if db is not None else [],
         }
 
     @staticmethod
@@ -567,6 +569,42 @@ class InferenceStore:
                 db.execute("UPDATE topic_agent_threads SET status='cancelled' WHERE root_run=?", (root,))
             self.store._audit(db, org, user, "inference.cancel", run)
         return self.run(user, org, run)
+
+    def add_message(self, user: str, org: str, run: str, message_id: str) -> dict:
+        """Move your own later message into a running reply; its own queued reply is cancelled before it starts."""
+        from . import inference_additions
+
+        with self.store.transaction(write=True) as db:
+            row = _row(db.execute(self._joined() + "WHERE r.organization_id=? AND r.id=?", (org, run)).fetchone())
+            self.store._topic_access(db, user, org, row["topic_id"], write=True)
+            message = db.execute("SELECT * FROM messages WHERE organization_id=? AND topic_id=? AND id=?",
+                                 (org, row["topic_id"], message_id)).fetchone()
+            if message is None:
+                raise StoreError(404, "message not found in this topic")
+            inference_additions.link(db, self, org, row["topic_id"], run, message, user, moved=True)
+            self.store._audit(db, org, user, "inference.addition", message_id)
+            return inference_additions.for_message(db, org, message_id)
+
+    def remove_addition(self, user: str, org: str, run: str, message_id: str) -> dict:
+        """Undo an unread addition. A moved message's cancelled reply stays cancelled; request a new one to replace it."""
+        from . import inference_additions
+
+        with self.store.transaction(write=True) as db:
+            row = _row(db.execute(self._joined() + "WHERE r.organization_id=? AND r.id=?", (org, run)).fetchone())
+            self.store._topic_access(db, user, org, row["topic_id"], write=True)
+            result = inference_additions.unlink(db, self, org, run, message_id, user)
+            self.store._audit(db, org, user, "inference.addition-remove", message_id)
+            return result
+
+    def take_additions(self, row: dict, step: int) -> list[dict]:
+        """Additions this attempt has not read yet, marked read at ``step``; none once the attempt is fenced."""
+        from . import inference_additions
+
+        with self.store.transaction(write=True) as db:
+            current = db.execute("SELECT status,attempt_id FROM llm_runs WHERE id=?", (row["id"],)).fetchone()
+            if current is None or current["status"] != "running" or current["attempt_id"] != row["attempt_id"]:
+                return []
+            return inference_additions.take(db, self, row, step)
 
     def _request_cancel(self, db, org, row):
         if row["status"] == "queued":
