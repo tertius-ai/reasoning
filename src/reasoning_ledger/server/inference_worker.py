@@ -21,6 +21,7 @@ from .worker_poll import claim_work, database_poll
 
 logger = logging.getLogger(__name__)
 DEFAULT_AGENT_CONCURRENCY = 8
+SETTLEMENT_INTERVAL = 15
 
 
 class InferenceWorker:
@@ -83,10 +84,12 @@ class InferenceWorker:
     async def _dispatch(self) -> None:
         tasks: set[asyncio.Task] = set()
         maintenance = asyncio.create_task(self._maintain())
+        settlement = asyncio.create_task(self._settle())
         try:
             while not self._stop.is_set():
-                if maintenance.done():
-                    maintenance.result()
+                for background in (maintenance, settlement):
+                    if background.done():
+                        background.result()
                 finished = {task for task in tasks if task.done()}
                 for task in finished:
                     task.result()
@@ -99,9 +102,10 @@ class InferenceWorker:
                 await asyncio.sleep(0.1)
         finally:
             maintenance.cancel()
+            settlement.cancel()
             for task in tasks:
                 task.cancel()
-            await asyncio.gather(maintenance, *tasks, return_exceptions=True)
+            await asyncio.gather(maintenance, settlement, *tasks, return_exceptions=True)
 
     async def _maintain(self) -> None:
         """Keep catalog-dependent background admission off the runnable queue path."""
@@ -118,6 +122,17 @@ class InferenceWorker:
                 await ResearchReviews(self.state).dispatch(self.provider, stopped=self._stop.is_set)
                 await ResearchGoals(self.state).dispatch(self.provider, stopped=self._stop.is_set)
             await asyncio.sleep(1)
+
+    async def _settle(self) -> None:
+        """Settle uncertain charges from provider generation records; never a model request."""
+        from .inference_settlement import InferenceSettlement
+
+        while not self._stop.is_set():
+            try:
+                await InferenceSettlement(self.state).run(self.provider)
+            except Exception:
+                logger.warning("provider charge lookup unavailable; uncertain charges stay held and are retried on schedule")
+            await asyncio.sleep(SETTLEMENT_INTERVAL)
 
     async def _execute(self, row: dict, *, spans: Spans | None = None) -> None:
         with self.state.store.transaction() as db:

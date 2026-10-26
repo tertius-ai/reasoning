@@ -487,12 +487,30 @@ excluded. A displayed held reservation is explicitly labeled
 **Budget held**, separate from the provider's actual charge. Status guidance
 does not establish whether an ambiguous submission incurred a bill.
 
-For an uncertain run, use its generation ID and the provider's activity record
-to verify the actual charge. An administrator can open Reconcile unknown charge
-in the beta run panel, enter the verified USD cost, confirm that the record was
-checked, and record it. A zero cost is appropriate only after verifying that no
-charge occurred. Reconciliation settles the charge and removes the held
-reservation. Generation lookup and automatic reconciliation are not implemented.
+The inference worker settles uncertain calls automatically from the
+provider's own record. For each stopped run whose call is uncertain and has an
+OpenRouter `gen-` generation ID, it reads
+[`GET /generation`](https://openrouter.ai/docs/api-reference/get-a-generation)
+with the run's organization key, from the run's routing region. The lookup is
+a read of usage statistics, never a model request, and runs outside every
+database transaction. Lookups are due 30 seconds, 2 minutes, 10 minutes, 1 hour
+and 6 hours after the run stopped; the worker checks every 15 seconds. A record
+settles the call at its `total_cost`, adds the token counts the stream did not
+report, and appends a `provider_settlement` receipt. The run settles once
+none of its calls remains uncertain, which removes the held reservation. Each
+lookup appends an `accounting_lookup` run event with its attempt and outcome;
+a settlement also appends an `accounting` run event and an
+`inference.cost-settle` audit event without an actor. A missing record
+(`not_found`), a failed or malformed response, or a disabled key leaves the call
+uncertain until the next scheduled lookup; the last lookup is marked `final`.
+Calls without a `gen-` generation ID are never looked up.
+
+For a run that stays uncertain, use its generation ID and the provider's
+activity record to verify the actual charge. An administrator can open Reconcile
+unknown charge in the beta run panel, enter the verified USD cost, confirm that
+the record was checked, and record it. A zero cost is appropriate only after
+verifying that no charge occurred. Reconciliation settles the charge and
+removes the held reservation; a lookup that completes after it changes nothing.
 The inference ledger provides access to older calls. Runs with multiple
 uncertain calls require verification of each call's provider record; their
 charges are never divided by assumption.
@@ -583,9 +601,10 @@ fails the call with `protocol_field` (for example `reasoning_details[].index`) a
 
 A `provider_protocol` failure after submission is never retried automatically
 and leaves the call's charge uncertain unless trustworthy usage arrived first.
-To recover, read the call's generation ID and diagnostic in the inference ledger
-or topic diagnostic export, and compare it with the OpenRouter activity record.
-Then reconcile the verified cost as described above, and start a new turn
+Automatic settlement reads the call's provider record as described above. If
+the call stays uncertain, read its generation ID and diagnostic in the inference
+ledger or topic diagnostic export, and compare it with the OpenRouter activity
+record. Then reconcile the verified cost as described above, and start a new turn
 deliberately. Unknown charges or unresolved side effects still block automatic
 goal continuation; known recoverable turn failures schedule a fresh durable turn.
 
@@ -597,7 +616,8 @@ response. Pending runs without a submission receipt contribute their held
 reservation. Input includes the captured
 model context; it is not assigned to each human message again. Token counts and
 cost come from provider reports; outstanding reservations are shown separately.
-Manual charge reconciliation changes the cost, not unreported token counts.
+Manual charge reconciliation changes the cost, not unreported token counts;
+automatic settlement adds token counts the provider record reports.
 Totals include coverage counts for tokens, cost, energy, and carbon: known
 partial totals must not be read as complete totals. Scope excludes CAS jobs,
 human/bot message posting, unrelated provider calls, and other applications.
@@ -661,7 +681,7 @@ Under `/api/organizations/{organization_id}/inference-ledger`:
 - `GET` accepts `limit` (1–200), exclusive `before` sequence, `model`, `status`,
   `purpose`, `project_id`, `topic_id`, `actor`, and inclusive UNIX `since`/`until`.
   It returns `calls` and `next_before`.
-- `GET /{call_id}` includes all original and reconciliation receipts.
+- `GET /{call_id}` includes all original, provider-settlement and reconciliation receipts.
 - `GET /export` returns up to 1,000 matching JSONL records with the same filters;
   an `X-Next-Before` header supplies the next page when present.
 - `PUT /{call_id}/cost` with `actual_microusd` lets an organization administrator

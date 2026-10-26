@@ -870,8 +870,11 @@ and uncertain charges remain available in their run records. Finished and partia
 replies become topic messages labeled with their model, not their requester.
 LLM messages and run records show provider-reported tokens/cost plus explicitly
 configured operational kWh and kg CO₂e scenario estimates. Human/bot chat posts
-do not represent inference calls. The requester or an administrator can cancel an active response. Administrators
-can record a verified provider cost for an uncertain run. Unsent composer text
+do not represent inference calls. The requester or an administrator can cancel an active response. The
+inference worker settles an uncertain run from the provider's record of its
+generation, on a bounded schedule and without replaying the request; see
+[inference accounting](inference.md). Administrators can record a verified
+provider cost for a run that stays uncertain. Unsent composer text
 is never included in a model request.
 The account menu's **My bots** provides personal bot connections bounded by the
 member's current permissions. **Follow my access** resolves all owner-visible
@@ -1082,8 +1085,10 @@ branches can continue. Run states are `running`, `awaiting_approval`,
 `outcome_unknown`, `succeeded`, `failed`, and `cancelled`. Approval waiting is
 reported when remaining pending work is behind gates and no child is active.
 Unknown child outcomes keep reservations and prevent dependent work; they are
-not automatically retried. Use the existing child reconciliation APIs after
-verifying provider cost or physical-container cleanup.
+not automatically retried. A model child whose charge was uncertain settles
+automatically when the provider's generation record is found, and its node then
+takes the child's status. Otherwise use the existing child reconciliation APIs
+after verifying provider cost or physical-container cleanup.
 
 Cancellation is available to the requester or an administrator. It cancels
 undispatched nodes and requests cancellation of linked children. Removing or
@@ -1148,7 +1153,8 @@ writer/administrator roles and restored-run fences determine available controls;
 the server rechecks authorization for every action and replay. Attempt inspection
 shows bounded history and captured dependency inputs, with linked computation
 logs/artifact downloads and model output/accounting. Unknown outcomes retain
-reservations and require verified operator reconciliation, not automatic retry.
+reservations until the provider's generation record settles a model charge or
+an operator reconciles a verified outcome; they are never retried automatically.
 
 **Workflow activity**, in a gamma topic's details card, opens the organization
 workflow allowance and retained-run inspector. Each unfinished workflow occupies one place; a multi-model comparison
