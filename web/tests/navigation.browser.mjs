@@ -68,7 +68,7 @@ test("phone toolbar retains every action and scoped navigation survives refresh"
     await page.getByLabel("Copy topic JSON", { exact: true }).focus();
     assert.equal(await readout.count(), 0);
     const icons = page.locator(".org-toolbar-icons .org-icon-button");
-    assert.equal(await icons.count(), 7);
+    assert.equal(await icons.count(), 8);
     const boxes = await Promise.all((await icons.all()).map(icon => icon.boundingBox()));
     for(let index=1; index<boxes.length; index++) assert.equal(boxes[index].x-boxes[index-1].x,30);
     const helpStyle = await page.getByLabel("Help", { exact: true }).evaluate(element => {
