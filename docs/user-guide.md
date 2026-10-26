@@ -12,12 +12,13 @@ a verified release manifest shows the commit as **development build** or
 built from modified source. A failed check shows **Unavailable** with the reason.
 
 An open tab keeps running the version it loaded. After the server is upgraded,
-the next update the tab receives shows **A new version of Reasoning is
-available** below the top bar. Choose **Reload** to use the new version, or
-**×** to dismiss the notice until a further upgrade. The tab never reloads by
-itself: unsent drafts exist only in the open tab and are discarded by a reload,
-so send or copy them first. A development server without a release identity
-does not show the notice.
+the next update the tab receives highlights the **What's new** button (✦) in
+the top bar with a dot. It opens the changes merged since the tab's version and
+**Reload to update**. The tab never reloads by itself: unsent drafts exist only
+in the open tab and are discarded by a reload, so send or copy them first. After
+a reload, the dot stays until you open the notes once; otherwise the button
+lists recent changes. A development server without a release identity never
+offers a new version.
 
 ## Conversations
 

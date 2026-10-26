@@ -154,10 +154,19 @@ With `--deployment-release`, every response carries the release digest as
 `X-Reasoning-Release`, and the HTML entry point embeds it as
 `<meta name="reasoning-release" content="<digest>">`. An open page compares the
 header of the API responses and event streams it already requests with the
-release that served it; when they differ, it shows a dismissible notice that
+release that served it; when they differ, the top bar's **What's new** button
 offers a reload and never reloads by itself. It does no extra polling for this.
 Without `--deployment-release`, neither the header nor the meta element is
-sent, and pages never show the notice.
+sent, and pages never offer a new version.
+
+The frontend build embeds release notes in `organization.html` as an inert
+`<script type="application/json" id="reasoning-release-notes">` block: the
+build's Git revision and commit time, and up to 40 merged pull request titles
+from first-parent history (commit subjects ending in ` (#number)`), newest
+first. A build without Git history embeds an empty list. When a newer release is
+reported, the page reads the notes from the current `organization.html` and
+lists the entries newer than its own revision. The release bundle format is
+unchanged.
 
 `serve` binds to `127.0.0.1:8766` by default. For a public installation, set
 `--public-url https://chat.example.org` and place a same-origin HTTPS reverse

@@ -18,7 +18,6 @@ export function pageRelease(document: Pick<Document, "querySelector"> | undefine
  */
 export class ReleaseWatch {
   private reported: string | null = null;
-  private dismissed: string | null = null;
   private readonly listeners = new Set<() => void>();
   constructor(readonly loaded: string | null) {}
 
@@ -30,13 +29,8 @@ export class ReleaseWatch {
     if (reported !== this.reported) { this.reported = reported; this.notify(); }
   }
 
-  /** The newer release to offer, unless the reader dismissed the notice for that release. */
-  get available(): string | null { return this.reported !== this.dismissed ? this.reported : null; }
-
-  dismiss(): void {
-    if (this.reported === null || this.dismissed === this.reported) return;
-    this.dismissed = this.reported; this.notify();
-  }
+  /** The newer release the server reports, if any. */
+  get available(): string | null { return this.reported; }
 
   subscribe = (listener: () => void): (() => void) => {
     this.listeners.add(listener);
