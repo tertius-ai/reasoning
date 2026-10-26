@@ -165,10 +165,12 @@ function WorkflowBuilder({ models, catalog, compute, busy, onCancel, onSave }: {
   </form>;
 }
 
-export function WorkflowConversation({ organizationId, topicId, userId, canWrite, canManage, attempt, onAttempt, executionAttempt, onExecutionAttempt, onAuthLost, toolbarTarget, onActivity, hidePlay }: {
+export function WorkflowConversation({ organizationId, topicId, userId, canWrite, canManage, attempt, onAttempt, executionAttempt, onExecutionAttempt, onAuthLost, toolbarTarget, menuTarget = null, onActivity, hidePlay }: {
   organizationId: string; topicId: string; userId: string; canWrite: boolean; canManage: boolean; attempt?: WorkflowAttempt;
   executionAttempt?: WorkflowExecutionAttempt; onExecutionAttempt: (value?: WorkflowExecutionAttempt) => void;
   onAttempt: (value?: WorkflowAttempt) => void; onAuthLost: () => void; toolbarTarget: HTMLDivElement | null;
+  /** The topic details card in the top bar: Workflow activity appears there. */
+  menuTarget?: HTMLElement | null;
   onActivity: (entries: TopicActivity[]) => void;
   hidePlay?: boolean;
 }) {
@@ -254,7 +256,7 @@ export function WorkflowConversation({ organizationId, topicId, userId, canWrite
     </ActivityDialog>}
     <WorkflowRuns organizationId={organizationId} topicId={topicId} userId={userId} canWrite={canWrite} canManage={canManage}
       version={version} definitionBusy={busy || !!attempt} attempt={executionAttempt} onAttempt={onExecutionAttempt} onAuthLost={onAuthLost}
-      autoStartKey={autoStartKey} onAutoStarted={() => setAutoStartKey(null)} toolbarTarget={toolbarTarget} onActivity={onActivity} hidePlay={hidePlay}
+      autoStartKey={autoStartKey} onAutoStarted={() => setAutoStartKey(null)} toolbarTarget={toolbarTarget} menuTarget={menuTarget} onActivity={onActivity} hidePlay={hidePlay}
       onUncap={definition => { setSource(JSON.stringify(definition, null, 2)); setEditor("json"); setError(""); }} />
   </>;
 }

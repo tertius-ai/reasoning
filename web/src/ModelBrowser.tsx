@@ -209,23 +209,26 @@ export function effortLabel(effort: string): string {
   return effort === "" ? "Default effort" : effort === "xhigh" ? "Extra high" : effort[0].toUpperCase() + effort.slice(1);
 }
 
-export function EffortMenu({ model, catalog, effort, disabled, onBack, onSelect }: {
+export function EffortMenu({ model, catalog, effort, disabled, onBack, onSelect, checks = false }: {
   model: string; catalog: OrganizationPrices | null; effort: string; disabled: boolean;
   /** Returns to the model list; without it the menu stands alone. */
   onBack?: () => void; onSelect: (effort: string) => void;
+  /** A plain menu beside the model picker: no model name, and a check mark on the current level instead of radio buttons. */
+  checks?: boolean;
 }) {
   const group = useRef<HTMLDivElement>(null), name = useId();
   const choices = ["", ...availableEfforts(catalog, model)];
   const selected = choices.includes(effort) ? effort : "";
   useEffect(() => { group.current?.querySelector<HTMLInputElement>("input:checked")?.focus(); }, [model]);
-  return <section className="org-effort-options" aria-label="Choose reasoning effort">
-    <header>{onBack && <button type="button" aria-label="Back to models" onClick={onBack}>←</button>}
-      <strong title={modelSelectionLabel(catalog, model)}>{modelSelectionLabel(catalog, model)}</strong></header>
+  return <section className={checks ? "org-effort-options org-effort-checks" : "org-effort-options"} aria-label="Choose reasoning effort">
+    {!checks && <header>{onBack && <button type="button" aria-label="Back to models" onClick={onBack}>←</button>}
+      <strong title={modelSelectionLabel(catalog, model)}>{modelSelectionLabel(catalog, model)}</strong></header>}
     <div ref={group} role="radiogroup" aria-label="Reasoning effort">{choices.map(choice => <label key={choice}>
       <input type="radio" name={name} value={choice} checked={choice === selected} disabled={disabled}
         aria-label={choice || "Default effort"} onChange={() => onSelect(choice)}
         onClick={() => { if (choice === selected) onSelect(choice); }} />
-      <span>{effortLabel(choice)}</span>
+      {checks && <span className="org-effort-check" aria-hidden="true">{choice === selected ? "✓" : ""}</span>}
+      <span>{checks ? effortLabel(choice).replace(" effort", "") : effortLabel(choice)}</span>
     </label>)}</div>
   </section>;
 }
@@ -249,7 +252,7 @@ export function EffortPicker({ model, catalog, effort, disabled = false, onSelec
   return <div className="org-effort-picker" ref={box}>
     <button type="button" ref={button} className="org-composer-pick org-composer-effort" aria-label={`Reasoning effort: ${label}`} title="Reasoning effort"
       aria-haspopup="true" aria-expanded={open} disabled={disabled} onClick={() => setOpen(value => !value)}>{label.replace(" effort", "")}</button>
-    {open && <div className="org-model-options org-effort-popover"><EffortMenu model={model} catalog={catalog} effort={effort} disabled={disabled}
+    {open && <div className="org-model-options org-effort-popover"><EffortMenu model={model} catalog={catalog} effort={effort} disabled={disabled} checks
       onSelect={choice => { onSelect(choice); setOpen(false); button.current?.focus(); }} /></div>}
   </div>;
 }

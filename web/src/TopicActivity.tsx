@@ -41,3 +41,11 @@ export function ActivityDialog({ title, onClose, children }: { title: string; on
     <header><h2>{title}</h2><button type="button" aria-label={`Close ${title.toLowerCase()}`} onClick={onClose}>×</button></header>{children}
   </dialog>;
 }
+/** A topic item opened from the topic's details card, in a centered dialog like a direct conversation's files. */
+export function TopicItemDialog({ title, onClose, children }: { title: string; onClose: () => void; children: React.ReactNode }) {
+  const dialog = useRef<HTMLDialogElement>(null);
+  useEffect(() => { dialog.current?.showModal(); }, []);
+  return <dialog ref={dialog} className="org-dialog org-topic-item-dialog" aria-label={title} onCancel={event => { event.preventDefault(); onClose(); }}>
+    <header><h2>{title}</h2><button type="button" aria-label="Close dialog" onClick={onClose}>×</button></header>{children}
+  </dialog>;
+}

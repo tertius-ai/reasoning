@@ -1,13 +1,31 @@
-.org-capacity-launcher { border: 0; background: transparent; color: var(--muted); font-size: 11px; min-height: 26px; }
-.org-workflow-capacity .org-capacity-count { font-size: 15px; }
-.org-workflow-capacity meter { width: 100%; height: 12px; }
-.org-capacity-runs, .org-capacity-nodes { list-style: none; padding: 0; }
-.org-capacity-runs > li { display: flex; align-items: center; gap: .75rem; padding: .65rem 0; border-bottom: 1px solid var(--border); }
-.org-capacity-run { flex: 1; min-width: 0; text-align: left; background: transparent; border: 0; }
-.org-capacity-run strong, .org-capacity-run span, .org-capacity-run small { display: block; overflow-wrap: anywhere; }
-.org-capacity-run span, .org-capacity-run small { margin-top: .2rem; color: var(--muted); }
-.org-capacity-status { font-size: 11px; color: var(--muted); }
-.org-capacity-nodes li { margin: .75rem 0; overflow-wrap: anywhere; }
+/* Workflow activity, opened from a workflow topic's details card: a list like Project files, and one run inspected in place. */
+.org-workflow-capacity .org-capacity-count { margin: 0 0 4px; }
+.org-workflow-capacity .org-capacity-count strong { font-size: 15px; font-weight: 600; }
+.org-workflow-capacity meter { width: 100%; height: 8px; margin: 0 0 10px; }
+.org-capacity-kinds { display: flex; flex-wrap: wrap; gap: 4px; margin: 0 0 8px; }
+.org-capacity-kinds button span { color: var(--muted); font-size: 11px; }
+.org-workflow-capacity input[type="search"] { width: 100%; box-sizing: border-box; margin-bottom: 6px; }
+.org-workflow-capacity .org-help { margin: 8px 0 0; color: var(--muted); font-size: 12px; }
+.org-capacity-runs, .org-capacity-nodes { margin: 0; padding: 0; list-style: none; }
+.org-capacity-runs { max-height: 50vh; overflow: auto; }
+.org-capacity-runs > li { display: flex; align-items: center; gap: 10px; padding: 7px 2px; border-top: 1px solid var(--border); }
+.org-capacity-mark { display: grid; place-items: center; flex: none; width: 28px; height: 28px; border-radius: 7px; background: var(--surface-2); color: var(--muted); font: 600 12px var(--font-mono); }
+.org-capacity-mark[data-tone="running"] { background: color-mix(in srgb, var(--teal) 16%, var(--surface)); color: var(--teal); }
+.org-capacity-mark[data-tone="waiting"] { background: color-mix(in srgb, var(--amber) 16%, var(--surface)); color: var(--amber); }
+.org-capacity-mark[data-tone="uncertain"] { background: color-mix(in srgb, var(--red, #e5484d) 16%, var(--surface)); color: var(--red, #e5484d); }
+.org-capacity-text { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.org-capacity-text strong { font-weight: 500; overflow-wrap: anywhere; }
+.org-capacity-text small { color: var(--muted); font-size: 11px; overflow-wrap: anywhere; }
+.org-capacity-status { flex: none; font-size: 11px; color: var(--muted); white-space: nowrap; }
+.org-capacity-back { margin-bottom: 10px; }
+.org-capacity-inspection h3 { margin: 0 0 2px; font-size: 14px; }
+.org-capacity-inspection h4 { margin: 12px 0 2px; font-size: 12px; color: var(--muted); font-weight: 500; }
+.org-capacity-nodes li { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; padding: 5px 0; border-top: 1px solid var(--border); overflow-wrap: anywhere; }
+.org-capacity-nodes li > span:first-child { flex: 1; }
+.org-capacity-nodes li > p { flex-basis: 100%; margin: 0; color: var(--muted); font-size: 11.5px; }
+.org-capacity-warning { padding: 8px 10px; border: 1px solid color-mix(in srgb, var(--amber) 35%, transparent); border-radius: var(--radius-control);
+  background: color-mix(in srgb, var(--amber) 7%, var(--surface)); }
+.org-capacity-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin: 10px 0; }
 .org-workflow-capacity code { overflow-wrap: anywhere; }
 .org-capacity-confirm { padding: .75rem; border: 1px solid var(--border); border-radius: var(--radius-card); }
-@media (max-width: 600px) { .org-capacity-runs > li { align-items: flex-start; flex-direction: column; gap: .25rem; } }
+@media (max-width: 600px) { .org-capacity-runs > li { flex-wrap: wrap; } .org-capacity-text { flex-basis: calc(100% - 38px); } }

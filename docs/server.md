@@ -1150,12 +1150,12 @@ shows bounded history and captured dependency inputs, with linked computation
 logs/artifact downloads and model output/accounting. Unknown outcomes retain
 reservations and require verified operator reconciliation, not automatic retry.
 
-**Workflow activity** opens the organization workflow allowance and retained-run
-inspector. Each unfinished workflow occupies one place; a multi-model comparison
+**Workflow activity**, in a gamma topic's details card, opens the organization
+workflow allowance and retained-run inspector. Each unfinished workflow occupies one place; a multi-model comparison
 counts as one workflow. The allowance is 64 per organization and 256 per
 installation, and includes waiting/uncertain work. Actual model and compute
 execution use their separate worker, quota and spending controls. Released places
-appear in collapsed history and do not count toward the allowance.
+are listed under their own filter and do not count toward the allowance.
 
 Rows identify the workflow, project/channel/topic, requester and time. The total
 includes all organization work; inaccessible runs contribute only an anonymous

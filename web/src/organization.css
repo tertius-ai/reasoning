@@ -362,6 +362,13 @@ a.org-reference:hover, a.org-reference:focus-visible { text-decoration: underlin
 .org-model-options.org-effort-popover { width: 220px; }
 .org-effort-popover > .org-effort-options { margin: 0; padding: 2px; border-top: 0; font-size: 12px; }
 .org-effort-popover > .org-effort-options > header { padding: 4px 8px 7px; }
+/* The effort menu beside the model picker: a plain list with a check mark on the current level. The radio inputs stay for the keyboard. */
+.org-model-options.org-effort-popover:has(.org-effort-checks) { width: 160px; padding: 5px; }
+.org-effort-checks [role=radiogroup] { padding-top: 0; }
+.org-effort-checks label { position: relative; gap: 6px; padding: 6px 8px 6px 6px; font-size: 12.5px; }
+.org-effort-checks label:has(input:checked) { background: var(--surface-2); }
+.org-effort-checks input[type=radio] { position: absolute; width: 1px; height: 1px; opacity: 0; }
+.org-effort-check { width: 14px; flex: none; text-align: center; color: var(--foreground); }
 .org-composer-tools { display: flex; flex-wrap: wrap; gap: 3px; min-width: 0; flex: none; }
 .org-composer-tools .org-research-toolbar:empty { display:none; }
 .org-activity-dialog { width: min(720px, calc(100vw - 24px)); }

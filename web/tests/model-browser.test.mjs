@@ -94,6 +94,17 @@ test("effort menu uses compact native radio choices and only advertised levels",
   assert.match(render("unsupported"), /aria-label="Default effort"[^>]*checked=""/);
 });
 
+test("the effort menu beside the model picker shows only the levels, with a check mark on the current one", () => {
+  const html = renderToStaticMarkup(React.createElement(models.EffortMenu, {
+    model: "provider/reasoner", catalog: { models: [{ id: "provider/reasoner", reasoning_efforts: ["high", "xhigh"] }] },
+    effort: "high", disabled: false, onSelect() {}, checks: true,
+  }));
+  assert.doesNotMatch(html, /provider\/reasoner|<header|Back to models/, "no model name above the levels");
+  assert.match(html, /role="radiogroup" aria-label="Reasoning effort"/, "native radios stay for the keyboard");
+  assert.deepEqual([...html.matchAll(/class="org-effort-check" aria-hidden="true">(✓?)<\/span><span>([^<]+)</g)].map(match => match[1] + match[2]),
+    ["Default", "✓High", "Extra high"]);
+});
+
 test("benchmark indices use exact identifiers, show zero, and leave missing scores blank", () => {
   const benchmarks = { models: { "m/model": { intelligence_index: 71.2, agentic_index: 0, coding_index: 65.8 } },
     meta: { as_of: "2026-10-09T12:00:00Z" }, status: "cached" };
