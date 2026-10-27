@@ -265,7 +265,7 @@ jobs:
     if: needs.selection.outputs.frontend == 'true'
     name: Frontend tests and build
     runs-on: ubuntu-24.04
-    timeout-minutes: 10
+    timeout-minutes: 14
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
@@ -284,7 +284,26 @@ jobs:
       - run: uv sync --locked --extra dev
       - name: Bound runner package-mirror waits
         run: sudo install -m 0644 .github/ci/apt-network.conf /etc/apt/apt.conf.d/99-reasoning-network
-      - run: npm --prefix web exec -- playwright install --with-deps chromium
+      # The Ubuntu mirror sometimes trickles Chromium's font packages for minutes; the browser CDN has not stalled.
+      # The prefetch can only save time: whatever it does not fetch, apt still installs in the next step.
+      - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/playwright-apt
+          key: playwright-apt-ubuntu-24.04-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: playwright-apt-ubuntu-24.04-
+      - name: Prefetch Chromium's system packages
+        id: prefetch
+        continue-on-error: true
+        timeout-minutes: 3
+        run: .github/ci/prefetch-playwright-packages.sh ~/.cache/playwright-apt
+      - if: always() && steps.prefetch.outputs.fetched == 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/playwright-apt
+          key: playwright-apt-ubuntu-24.04-${{ github.run_id }}-${{ github.run_attempt }}
+      - name: Install Chromium and its system packages
+        timeout-minutes: 5
+        run: npm --prefix web exec -- playwright install --with-deps chromium
       - run: npm --prefix web run test:dev
       - run: npm --prefix web run test:topic-agents
       - run: npm --prefix web run test:direct-messages

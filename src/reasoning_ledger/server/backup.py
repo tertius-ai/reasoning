@@ -15,6 +15,7 @@ import struct
 import tempfile
 import time
 from contextlib import closing, contextmanager
+from functools import lru_cache
 from pathlib import Path
 
 from cryptography.exceptions import InvalidTag
@@ -37,6 +38,7 @@ FILE_LIMIT = 262_147
 DEFAULT_BYTES = 8 * 1024**3
 MAX_BYTES = 64 * 1024**3
 CHUNK_BYTES = 32_768
+SCHEMA_QUERY = "SELECT type,name,tbl_name,sql FROM sqlite_schema ORDER BY name"
 BASE_FILES = {"server.sqlite3", "encryption.key", "setup-token"}
 CHUNK_NAME = re.compile(r"artifacts/([a-f0-9]{32})/(0|[1-9][0-9]{0,4})\Z")
 CLOUD_NAME = re.compile(
@@ -248,19 +250,25 @@ def _connect(path: Path, *, writable: bool = False):
         db.close()
 
 
+@lru_cache(maxsize=8)
+def _expected_schema(migrations, migrate) -> tuple:
+    # Replaying every migration takes about 0.1 s and one activation verifies the schema dozens of times. The key is
+    # the statements and the operation themselves, so a different release's migrations never share an entry.
+    with closing(sqlite3.connect(":memory:")) as expected:
+        for migration in migrations:
+            for statement in migration:
+                migrate(expected, statement)
+        return tuple(expected.execute(SCHEMA_QUERY))
+
+
 def _schema(db, *, schema_version: int | None = None) -> None:
     version = len(MIGRATIONS) if schema_version is None else schema_version
     if type(version) is not int or not 1 <= version <= len(MIGRATIONS):
         raise BackupError("unsupported database schema verification")
     if db.execute("PRAGMA user_version").fetchone()[0] != version:
         raise BackupError("backup requires this release's exact database schema; use the matching release")
-    with closing(sqlite3.connect(":memory:")) as expected:
-        for migration in MIGRATIONS[:version]:
-            for statement in migration:
-                sqlite_migration(expected, statement)
-        query = "SELECT type,name,tbl_name,sql FROM sqlite_schema ORDER BY name"
-        if db.execute(query).fetchall() != expected.execute(query).fetchall():
-            raise BackupError("backup database schema differs from this release")
+    if tuple(db.execute(SCHEMA_QUERY)) != _expected_schema(MIGRATIONS[:version], sqlite_migration):
+        raise BackupError("backup database schema differs from this release")
     if db.execute("PRAGMA integrity_check").fetchall() != [("ok",)] or db.execute("PRAGMA foreign_key_check").fetchone():
         raise BackupError("backup database integrity check failed")
 
