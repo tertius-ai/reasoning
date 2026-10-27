@@ -40,30 +40,33 @@ if [ -z "$packages" ]; then
   echo "Playwright reports no missing system packages"
   exit 0
 fi
+# --print-uris names each download and the file apt expects in its archive directory; the index records of the same
+# candidate versions give each pool path's SHA-512.
 # shellcheck disable=SC2086
 sudo apt-get install --print-uris -qq -y --no-install-recommends $packages | grep "^'" > "$PREFETCH_WORK/uris"
+# shellcheck disable=SC2086
+apt-cache show --no-all-versions $packages |
+  awk 'function emit() { if (f && s512) print f, "sha512sum", s512; else if (f && s256) print f, "sha256sum", s256 }
+       /^Filename: /{f=$2} /^SHA256: /{s256=$2} /^SHA512: /{s512=$2}
+       /^$/{emit(); f = s256 = s512 = ""} END{emit()}' > "$PREFETCH_WORK/index"
 
 : > "$PREFETCH_WORK/queue"
-while read -r uri file _size hash; do
+while read -r uri file _; do
   uri=${uri//\'/}
-  case ${hash%%:*} in
-    SHA512) sum=sha512sum ;;
-    SHA256) sum=sha256sum ;;
-    *) echo "left $file to apt: no SHA-256 or SHA-512 in the index"; continue ;;
-  esac
-  case $uri in
-    */pool/*) path=pool/${uri#*/pool/} ;;
-    *) echo "left $file to apt: $uri is outside the archive pool"; continue ;;
-  esac
-  if [ -f "$cache/$file" ] && echo "${hash#*:}  $cache/$file" | "$sum" -c --status; then
+  path=pool/${uri#*/pool/}
+  read -r sum digest < <(awk -v path="$path" '$1 == path {print $2, $3; exit}' "$PREFETCH_WORK/index")
+  if [ -z "${digest:-}" ]; then
+    echo "left $file to apt: no SHA-256 or SHA-512 in the index for $uri"
+  elif [ -f "$cache/$file" ] && echo "$digest  $cache/$file" | "$sum" -c --status; then
     cp "$cache/$file" "$PREFETCH_WORK/$file"
   else
-    echo "$path $file $sum ${hash#*:}" >> "$PREFETCH_WORK/queue"
+    echo "$path $file $sum $digest" >> "$PREFETCH_WORK/queue"
   fi
+  unset sum digest
 done < "$PREFETCH_WORK/uris"
 
 echo "$(wc -l < "$PREFETCH_WORK/uris") packages to install, $(wc -l < "$PREFETCH_WORK/queue") not in the cache"
-xargs -P 8 -n 4 "$0" fetch < "$PREFETCH_WORK/queue" | tee "$PREFETCH_WORK/log"
+xargs -r -P 8 -n 4 "$0" fetch < "$PREFETCH_WORK/queue" | tee "$PREFETCH_WORK/log"
 
 debs=("$PREFETCH_WORK"/*.deb)
 if [ ${#debs[@]} -gt 0 ]; then
