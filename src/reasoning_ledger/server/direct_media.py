@@ -131,7 +131,7 @@ class DirectMedia:
             body = self._bytes(db, row)
             valid = bounded_image(body, row["mime"]) if row["mime"].startswith("image/") else valid_signature(body, row["mime"])
             if not valid:
-                raise StoreError(400, "attachment content does not match its declared image/PDF format")
+                raise StoreError(400, "attachment content does not match its declared image, PDF or Markdown format")
             db.execute("UPDATE direct_media SET complete=1 WHERE id=?", (identity,))
             return view({**row, "complete": 1})
 

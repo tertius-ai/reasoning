@@ -4,7 +4,7 @@ import { ActivityDialog } from "./TopicActivity";
 import "./topic-commands.css";
 
 export const TOPIC_COMMANDS = [
-  { id: "attach", label: "Attach a picture or PDF", kinds: ["alpha", "beta", "gamma"] },
+  { id: "attach", label: "Attach a picture, PDF or Markdown file", kinds: ["alpha", "beta", "gamma"] },
   { id: "play", label: "Start or resume", kinds: ["beta", "gamma"] },
   { id: "stop", label: "Stop current work", kinds: ["beta", "gamma"] },
   { id: "goal", label: "Set or inspect a goal", kinds: ["beta"] },

@@ -121,7 +121,7 @@ test("phone toolbar retains every action and scoped navigation survives refresh"
     await composer.fill("@missing"); await composer.press("Tab");
     assert.equal(await composer.evaluate(element => element === document.activeElement), true, "an unmatched active mention keeps focus");
     await composer.fill("");
-    const attachment = page.getByLabel("Attach picture or PDF", { exact: true });
+    const attachment = page.getByLabel("Attach picture, PDF or Markdown", { exact: true });
     assert.equal(await attachment.evaluate(element => getComputedStyle(element).borderWidth), "0px");
     assert.equal(await attachment.locator("svg").count(), 1, "attaching is the drawn plus");
     assert.equal((await attachment.boundingBox()).width, 28);

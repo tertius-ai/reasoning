@@ -1,6 +1,11 @@
 // Copyright Benjamin Antieau and Deven Manam. SPDX-License-Identifier: Apache-2.0
 import React, { createContext, lazy, Suspense, useContext, useRef, useState } from "react";
+import ReactMarkdown from "react-markdown";
+import rehypeKatex from "rehype-katex";
+import remarkGfm from "remark-gfm";
+import remarkMath from "remark-math";
 import { PlusIcon } from "./ComposerIcons";
+import { normalizeMathDelimiters } from "./markdownMath";
 import { request, topicPath } from "./organization-api";
 import "./topic-media.css";
 
@@ -9,6 +14,9 @@ export type Extraction = { status: string; method?: string; error?: string | nul
 export type MediaFile = { id: string; name: string; mime: string; sha256: string; size_bytes: number; url: string; markdown: string; extraction?: Extraction };
 const PdfViewer = lazy(() => import("./PdfViewer").then(module => ({ default: module.PdfViewer })));
 const IMAGE_TYPES = new Set(["image/png", "image/jpeg", "image/webp"]);
+export const MARKDOWN_TYPE = "text/markdown";
+/** The file chooser's filter; browsers often report no type for a Markdown file, so its extensions are listed too. */
+export const ATTACHMENT_ACCEPT = "image/png,image/jpeg,image/webp,application/pdf,text/markdown,.md,.markdown";
 const REF = /^\/api\/organizations\/([a-f0-9]{32})\/topics\/([a-f0-9]{32})\/media\/([a-f0-9]{32})\/([a-f0-9]{64})\/content$/;
 export function mediaReference(url: string | undefined, organizationId?: string) {
   const match = REF.exec(url ?? "");
@@ -17,14 +25,14 @@ export function mediaReference(url: string | undefined, organizationId?: string)
 
 function EmbeddedMedia({ src, alt }: { src: string; alt: string }) {
   const scope = useContext(MediaScope);
-  const [mime, setMime] = useState("");
+  const [mime, setMime] = useState(""), [size, setSize] = useState(0);
   const [extraction, setExtraction] = useState<Extraction | null>(null), [busy, setBusy] = useState(false);
   const [failed, setFailed] = useState(false);
   const [expanded, setExpanded] = useState(false);
   React.useEffect(() => {
     const controller = new AbortController();
-    void request<{ mime: string; extraction?: Extraction }>(src.replace(/^\/api/, "").replace(/\/content$/, "/read"), { signal: controller.signal })
-      .then(value => { setMime(value.mime); setExtraction(value.extraction ?? null); }).catch(cause => { if (cause?.name !== "AbortError") setFailed(true); });
+    void request<{ mime: string; size_bytes: number; extraction?: Extraction }>(src.replace(/^\/api/, "").replace(/\/content$/, "/read"), { signal: controller.signal })
+      .then(value => { setMime(value.mime); setSize(value.size_bytes); setExtraction(value.extraction ?? null); }).catch(cause => { if (cause?.name !== "AbortError") setFailed(true); });
     return () => controller.abort();
   }, [src]);
   if (failed) return <span className="org-help">Attachment unavailable</span>;
@@ -38,8 +46,37 @@ function EmbeddedMedia({ src, alt }: { src: string; alt: string }) {
     <details onToggle={event => setExpanded(event.currentTarget.open)}><summary>{alt || "PDF"}</summary>
     {expanded && <><Suspense fallback={<span role="status">Loading PDF…</span>}><PdfViewer url={src} name={alt || "PDF"} /></Suspense>
     <a href={src} download>Download PDF</a></>}</details></div>;
+  if (mime === MARKDOWN_TYPE) return <div className="topic-pdf topic-markdown"><p role="status">{markdownLabel(size, extraction)}</p>
+    <details onToggle={event => setExpanded(event.currentTarget.open)}><summary>{alt || "Markdown"}</summary>
+    {expanded && <><MarkdownPreview url={src} /><a href={src} download={alt || true}>Download Markdown</a></>}</details></div>;
   return <span role="status">Loading attachment…</span>;
 }
+
+const previewComponents = {
+  // A previewed file never loads further media or remote images.
+  img: () => null,
+  a: ({ href, children }: { href?: string; children?: React.ReactNode }) => <a href={href} target="_blank" rel="noopener noreferrer">{children}</a>,
+};
+
+/** An attached Markdown file, rendered as messages are: GitHub-flavoured Markdown and KaTeX, without raw HTML or images. */
+export function MarkdownPreview({ url }: { url: string }) {
+  const [text, setText] = useState<string | null>(null), [failed, setFailed] = useState(false);
+  React.useEffect(() => {
+    const controller = new AbortController();
+    void fetch(url, { credentials: "same-origin", signal: controller.signal })
+      .then(response => { if (!response.ok) throw new Error(String(response.status)); return response.text(); })
+      .then(setText).catch(cause => { if (cause?.name !== "AbortError") setFailed(true); });
+    return () => controller.abort();
+  }, [url]);
+  if (failed) return <p className="org-help">Markdown preview unavailable</p>;
+  if (text === null) return <span role="status">Loading Markdown…</span>;
+  return <div className="topic-markdown-preview"><ReactMarkdown remarkPlugins={[remarkGfm, remarkMath]} rehypePlugins={[rehypeKatex]}
+    skipHtml components={previewComponents}>{normalizeMathDelimiters(text)}</ReactMarkdown></div>;
+}
+
+const kilobytes = (bytes: number) => bytes < 1024 * 1024 ? Math.max(1, Math.round(bytes / 1024)) + " KB" : (bytes / 1024 / 1024).toFixed(1) + " MB";
+export const markdownLabel = (size: number, value?: Extraction | null) => value?.truncated
+  ? `Text available for research up to its first 2 MiB · ${kilobytes(size)}.` : `Text available for research · ${kilobytes(size)}.`;
 
 export function MarkdownMedia({ src, alt }: { src?: string; alt?: string }) {
   const scope = useContext(MediaScope);
@@ -79,13 +116,14 @@ export function extractionLabel(value?: Extraction | null): string {
   return "PDF uploaded, but readable text is unavailable. Retry extraction or provide OCR, TeX, or text source.";
 }
 
-export const attachmentMime = (file: File) => file.type || (file.name.toLowerCase().endsWith(".pdf") ? "application/pdf" : "");
+export const attachmentMime = (file: File) => /\.(md|markdown)$/i.test(file.name) ? MARKDOWN_TYPE
+  : file.type || (file.name.toLowerCase().endsWith(".pdf") ? "application/pdf" : "");
 
 /** Chunked upload to a media collection (`root` ends in `/media`); `finish` supplies the body that completes it. */
 export async function uploadAttachment<T>(file: File, root: string, finish: (mime: string) => Promise<object> = async () => ({})): Promise<T> {
   const mime = attachmentMime(file);
-  if ((!IMAGE_TYPES.has(mime) && mime !== "application/pdf") || file.size < 1 || file.size > 8 * 1024 * 1024) {
-    throw new Error("Choose a PNG, JPEG, WebP or PDF of at most 8 MiB.");
+  if ((!IMAGE_TYPES.has(mime) && mime !== "application/pdf" && mime !== MARKDOWN_TYPE) || file.size < 1 || file.size > 8 * 1024 * 1024) {
+    throw new Error("Choose a PNG, JPEG, WebP, PDF or Markdown file of at most 8 MiB.");
   }
   const bytes = new Uint8Array(await file.arrayBuffer());
   const sha256 = Array.from(new Uint8Array(await crypto.subtle.digest("SHA-256", bytes)), byte => byte.toString(16).padStart(2, "0")).join("");
@@ -109,9 +147,9 @@ export function AttachmentButton({ organizationId, topicId, onInsert, onError, d
   organizationId: string; topicId: string; onInsert: (markdown: string) => void; onError?: (error: unknown) => void; disabled?: boolean;
 }) {
   const input = useRef<HTMLInputElement>(null), [busy, setBusy] = useState(false), [error, setError] = useState("");
-  return <span className="topic-attachment-control"><button type="button" className="org-upload-plus" disabled={disabled || busy} aria-label="Attach picture or PDF"
-    title="Attach picture or PDF" onClick={() => input.current?.click()}>{busy ? <span aria-hidden="true">…</span> : <PlusIcon />}</button>
-    <input hidden ref={input} type="file" accept="image/png,image/jpeg,image/webp,application/pdf" onChange={event => {
+  return <span className="topic-attachment-control"><button type="button" className="org-upload-plus" disabled={disabled || busy} aria-label="Attach picture, PDF or Markdown"
+    title="Attach picture, PDF or Markdown" onClick={() => input.current?.click()}>{busy ? <span aria-hidden="true">…</span> : <PlusIcon />}</button>
+    <input hidden ref={input} type="file" accept={ATTACHMENT_ACCEPT} onChange={event => {
       const file = event.target.files?.[0]; event.target.value = ""; if (!file) return;
       setBusy(true); setError(""); void uploadMedia(file, organizationId, topicId).then(value => {
         onInsert(value.markdown);

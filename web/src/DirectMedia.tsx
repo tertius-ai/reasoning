@@ -2,7 +2,7 @@
 import React, { lazy, Suspense, useEffect, useRef, useState } from "react";
 import { request } from "./organization-api";
 import { PlusIcon } from "./ComposerIcons";
-import { attachmentMime, uploadAttachment } from "./TopicMedia";
+import { ATTACHMENT_ACCEPT, MARKDOWN_TYPE, MarkdownPreview, attachmentMime, uploadAttachment } from "./TopicMedia";
 import "./topic-media.css";
 
 const PdfViewer = lazy(() => import("./PdfViewer").then(module => ({ default: module.PdfViewer })));
@@ -49,15 +49,17 @@ function useDirectFile(url: string) {
 export const fileSize = (bytes: number) => bytes < 1024 * 1024 ? Math.max(1, Math.round(bytes / 1024)) + " KB" : (bytes / 1024 / 1024).toFixed(1) + " MB";
 const isImage = (mime: string) => mime.startsWith("image/");
 
-function PdfRow({ reference }: { reference: DirectReference }) {
+function DocumentRow({ reference }: { reference: DirectReference }) {
   const { file, failed } = useDirectFile(reference.url), [open, setOpen] = useState(false);
+  const markdown = file?.mime === MARKDOWN_TYPE;
   return <div className="direct-file">
-    <div className="direct-file-row"><span className="direct-file-icon" aria-hidden="true">PDF</span>
+    <div className="direct-file-row"><span className="direct-file-icon" aria-hidden="true">{markdown ? "MD" : "PDF"}</span>
       <span className="direct-file-text"><strong>{reference.name}</strong>
         <small>{failed ? "Unavailable" : file ? fileSize(file.size_bytes) : "…"}
           {!failed && <> · <button type="button" className="direct-file-link" aria-expanded={open} onClick={() => setOpen(!open)}>{open ? "Close" : "Open"}</button>
             {" · "}<a className="direct-file-link" href={reference.url + "?download=true"} download={reference.name}>Download</a></>}</small></span></div>
-    {open && <div className="topic-pdf direct-file-viewer"><Suspense fallback={<span role="status">Loading PDF…</span>}><PdfViewer url={reference.url} name={reference.name} /></Suspense></div>}
+    {open && <div className="topic-pdf direct-file-viewer">{markdown ? <MarkdownPreview url={reference.url} />
+      : <Suspense fallback={<span role="status">Loading PDF…</span>}><PdfViewer url={reference.url} name={reference.name} /></Suspense>}</div>}
   </div>;
 }
 
@@ -95,7 +97,7 @@ function Tile({ reference, more, onOpen, onKind }: { reference: DirectReference;
   </button>;
 }
 
-/** Signal-style media: pictures in one grid (at most four tiles, the last showing how many more), then PDF rows. */
+/** Signal-style media: pictures in one grid (at most four tiles, the last showing how many more), then PDF and Markdown rows. */
 export function DirectAttachments({ files }: { files: DirectReference[] }) {
   const [kinds, setKinds] = useState<Record<string, boolean>>({}), [viewing, setViewing] = useState<number | null>(null);
   const known = (url: string, image: boolean) => setKinds(current => current[url] === image ? current : { ...current, [url]: image });
@@ -108,7 +110,7 @@ export function DirectAttachments({ files }: { files: DirectReference[] }) {
         onOpen={() => setViewing(index)} onKind={image => known(file.url, image)} />)}
       {images.slice(4).map(file => <HiddenKind key={file.url} reference={file} onKind={image => known(file.url, image)} />)}
     </div>}
-    {documents.map(file => <PdfRow key={file.url} reference={file} />)}
+    {documents.map(file => <DocumentRow key={file.url} reference={file} />)}
     {viewing !== null && images[viewing] && <Lightbox images={images} index={viewing} onIndex={setViewing} onClose={() => setViewing(null)} />}
   </div>;
 }
@@ -131,12 +133,12 @@ export function PendingFiles({ files, onRemove }: { files: PendingFile[]; onRemo
   </li>)}</ul>;
 }
 
-/** The composer's attach control: several pictures and PDFs at once. */
+/** The composer's attach control: several pictures, PDFs and Markdown files at once. */
 export function AttachFilesButton({ disabled, onFiles }: { disabled: boolean; onFiles: (files: File[]) => void }) {
   const input = useRef<HTMLInputElement>(null);
-  return <><button type="button" className="org-upload-plus" disabled={disabled} aria-label="Attach pictures or PDFs"
-    title="Attach pictures or PDFs" onClick={() => input.current?.click()}><PlusIcon /></button>
-    <input hidden ref={input} type="file" multiple accept="image/png,image/jpeg,image/webp,application/pdf" onChange={event => {
+  return <><button type="button" className="org-upload-plus" disabled={disabled} aria-label="Attach pictures, PDFs or Markdown"
+    title="Attach pictures, PDFs or Markdown" onClick={() => input.current?.click()}><PlusIcon /></button>
+    <input hidden ref={input} type="file" multiple accept={ATTACHMENT_ACCEPT} onChange={event => {
       const files = Array.from(event.target.files ?? []); event.target.value = ""; if (files.length) onFiles(files);
     }} /></>;
 }

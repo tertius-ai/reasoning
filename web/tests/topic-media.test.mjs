@@ -31,9 +31,20 @@ test("markdown blocks remote tracking and raw HTML, embeds only scoped uploaded 
 });
 test("attachment control offers bounded supported media without native HTML uploads", () => {
   const html = renderToStaticMarkup(React.createElement(media.AttachmentButton, { organizationId: org, topicId: topic, onInsert() {} }));
-  assert.match(html, /Attach picture or PDF/);
+  assert.match(html, /Attach picture, PDF or Markdown/);
   assert.match(html, /class="org-upload-plus"/); assert.match(html, /<svg width="18"/);
   assert.match(html, /<path d="M12 4.5v15M4.5 12h15"/, "the drawn plus shared by every upload button");
-  assert.match(html, /accept="image\/png,image\/jpeg,image\/webp,application\/pdf"/);
+  assert.match(html, /accept="image\/png,image\/jpeg,image\/webp,application\/pdf,text\/markdown,\.md,\.markdown"/);
   assert.doesNotMatch(html, /image\/svg|iframe/);
+});
+test("Markdown files are recognised by extension and described by their size", async () => {
+  const file = (name, type = "") => new File(["# Notes"], name, { type });
+  assert.equal(media.attachmentMime(file("notes.md")), "text/markdown", "browsers often report no type for .md");
+  assert.equal(media.attachmentMime(file("NOTES.Markdown", "text/x-markdown")), "text/markdown");
+  assert.equal(media.attachmentMime(file("paper.pdf")), "application/pdf");
+  await assert.rejects(media.uploadAttachment(file("notes.txt", "text/plain"), "/unused"),
+    /Choose a PNG, JPEG, WebP, PDF or Markdown file of at most 8 MiB\./);
+  assert.equal(media.markdownLabel(3 * 1024, { status: "ready", method: "text", truncated: false }), "Text available for research · 3 KB.");
+  assert.equal(media.markdownLabel(3 * 1024 * 1024, { status: "ready", method: "text", truncated: true }),
+    "Text available for research up to its first 2 MiB · 3.0 MB.");
 });

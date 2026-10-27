@@ -1,10 +1,12 @@
-# Pictures, PDFs and TeX
+# Pictures, PDFs, Markdown and TeX
 
-Attach a PNG, JPEG, WebP or PDF in an alpha, beta or gamma topic. The attachment
+Attach a PNG, JPEG, WebP, PDF or Markdown (`.md`, `.markdown`) file in an alpha, beta or gamma topic. The attachment
 control uploads the file privately and inserts a Markdown reference in the
 composer. Sending that message makes the attachment part of the conversation.
 The `/attach` command opens the same file chooser in every topic kind.
-Pictures display inline; PDFs expand into the local PDF.js canvas reader. Raw
+Pictures display inline; PDFs expand into the local PDF.js canvas reader, and Markdown
+files expand into the same Markdown and KaTeX rendering as messages, without raw HTML
+or images. Raw
 HTML, SVG, remote images, tracking pixels and remote PDF embedding are disabled.
 Research files includes the current topic's attachments alongside project text
 files, including editable `.tex` sources.
@@ -32,6 +34,9 @@ explicitly. Successful upload does not promise readable text. Writers can retry
 extraction from the original attachment through its PDF controls. Scanned pages
 need OCR or a TeX/text source. Compatible uploader text is retained as an explicitly
 partial fallback when server extraction fails.
+
+A Markdown upload must be UTF-8 without NUL characters. Its own text, up to 2 MiB, is
+what models read; there is no extraction step, and `media_read` pages through it.
 
 Extracted text and its mathematical content remain unverified. Native models
 receive text rather than original PDF bytes; authorized CLI bots can download

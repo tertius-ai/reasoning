@@ -112,7 +112,7 @@ test("a model's answer replies to its prompt, a reply to the answer asks a follo
     const dialog = page.getByRole("dialog", { name: "Thread", exact: true });
     await dialog.getByText("3 messages", { exact: true }).waitFor();
     const reply = dialog.getByLabel("Reply in thread", { exact: true });
-    const plus = dialog.getByRole("button", { name: "Attach pictures or PDFs", exact: true });
+    const plus = dialog.getByRole("button", { name: "Attach pictures, PDFs or Markdown", exact: true });
     const [plusBox, replyBox] = await Promise.all([plus.boundingBox(), reply.boundingBox()]);
     assert.equal(plusBox.width, 28); assert.equal(plusBox.height, 28);
     assert.ok(plusBox.x + plusBox.width <= replyBox.x, "the plus is left of the text");

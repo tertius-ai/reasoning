@@ -256,7 +256,7 @@ Ctrl/⌘+K searches; Alt+↑/↓ changes topics. `?` toggles help outside text f
 arrows and Enter/Tab select; Escape dismisses menus.
 On a phone, **More topic actions** reveals the compact toolbar.
 Hover or keyboard-focus a message for reaction, message actions (copy link,
-fork, edit), and single-message copy controls. The upward triangle attaches a picture or PDF.
+fork, edit), and single-message copy controls. The upward triangle attaches a picture, PDF or Markdown file.
 
 A private project is visible to its roster and to every organization owner and
 admin, who can also open its topics. If you see a project marked

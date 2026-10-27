@@ -113,7 +113,7 @@ test("thread mode adds to a running reply's timeline, Esc returns to the usual b
     const bar = page.locator(".org-adding-bar");
     await bar.getByText(/Adding to reasoner's reply to the .* question/).waitFor();
     const box = page.locator(".org-composer-box.org-composer-adding");
-    assert.equal(await box.getByRole("button", { name: "Attach picture or PDF", exact: true }).count(), 1, "the plus sits inside the box");
+    assert.equal(await box.getByRole("button", { name: "Attach picture, PDF or Markdown", exact: true }).count(), 1, "the plus sits inside the box");
     assert.equal(await page.getByRole("button", { name: "Model details", exact: true }).isVisible(), false, "the model row hides");
     assert.equal(await page.getByLabel("Message", { exact: true }).getAttribute("placeholder"), "Add to reasoner's reply…");
     // The card re-renders from the conversation's activity one effect after the box, so its pressed state is awaited.

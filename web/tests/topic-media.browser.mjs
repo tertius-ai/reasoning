@@ -20,7 +20,7 @@ function pdf() {
   return Buffer.from(body + `trailer\n<< /Size 6 /Root 1 0 R >>\nstartxref\n${xref}\n%%EOF\n`);
 }
 
-test("real browser uploads, scoped image rendering and local PDF canvas/text previews", { timeout: 60000 }, async () => {
+test("real browser uploads, scoped image rendering, local PDF canvas/text and Markdown previews", { timeout: 60000 }, async () => {
   const entry = `import React, {useState} from "react"; import {createRoot} from "react-dom/client";
 import {AttachmentButton,MediaScope} from "/src/TopicMedia.tsx"; import {ResearchMarkdown} from "/src/MathematicsBrowser.tsx";
 function Fixture(){ const [text,setText]=useState(''); return React.createElement(MediaScope.Provider,{value:{organizationId:'${org}',topicId:'${topic}'}},
@@ -54,9 +54,10 @@ createRoot(document.getElementById('root')).render(React.createElement(Fixture))
           file.bytes = Buffer.concat(file.chunks); Object.assign(file, request.postDataJSON());
           assert.equal(createHash("sha256").update(file.bytes).digest("hex"), file.sha256);
           const url = `/api/organizations/${org}/topics/${topic}/media/${match[1]}/${file.sha256}/content`;
-          file.extraction = file.mime === "application/pdf" ? { status: "ready", method: "server", pages_read: 1, total_pages: 1 } : undefined;
+          file.extraction = file.mime === "application/pdf" ? { status: "ready", method: "server", pages_read: 1, total_pages: 1 }
+            : file.mime === "text/markdown" ? { status: "ready", method: "text", truncated: false } : undefined;
           data = { ...file, chunks: undefined, bytes: undefined, id: match[1], url, markdown: `![${file.name}](${url})` };
-        } else if (action.endsWith("/read")) data = { mime: file.mime, extraction: file.extraction };
+        } else if (action.endsWith("/read")) data = { mime: file.mime, size_bytes: file.size_bytes, extraction: file.extraction };
         else if (action.endsWith("/content")) {
           await route.fulfill({ status: 200, contentType: file.mime, body: file.bytes }); return;
         }
@@ -86,11 +87,25 @@ createRoot(document.getElementById('root')).render(React.createElement(Fixture))
     await page.waitForFunction(() => document.querySelector(".topic-pdf canvas") && !document.querySelector(".topic-pdf canvas").classList.contains("loading"));
     assert.match(await page.locator(".topic-pdf").innerText(), /page 1 of 1/);
     assert.equal(await page.locator("iframe,object,embed").count(), 0);
+    // Browsers often report no type for a .md file; it is recognised by its extension.
+    const notes = "# Lemma 2\n\nIf $V$ is finite-dimensional, then $\\dim\\ker T + \\dim\\operatorname{im} T = \\dim V$.\n\n"
+      + "![remote](https://example.invalid/tracker.png) <b>raw</b>\n";
+    await input.setInputFiles({ name: "notes.md", mimeType: "", buffer: Buffer.from(notes) });
+    await page.getByText("notes.md", { exact: true }).waitFor();
+    assert.equal([...uploads.values()][2].mime, "text/markdown");
+    await page.getByText("Text available for research · 1 KB.", { exact: true }).waitFor();
+    await page.getByText("notes.md", { exact: true }).click();
+    const preview = page.locator(".topic-markdown-preview");
+    await preview.getByRole("heading", { name: "Lemma 2" }).waitFor();
+    assert.ok(await preview.locator(".katex").count() >= 1, "math renders with KaTeX");
+    assert.equal(await preview.locator("img,b").count(), 0, "a previewed file shows no images or raw HTML");
+    await page.getByRole("link", { name: "Download Markdown" }).waitFor();
+    if (process.env.MEDIA_SCREENSHOT) await page.locator(".topic-markdown").screenshot({ path: process.env.MEDIA_SCREENSHOT });
     const unavailable = `/api/organizations/${org}/topics/${topic}/media/${"f".repeat(32)}/${"a".repeat(64)}/content`;
-    await page.getByLabel("Markdown").fill(`![private](${unavailable})`);
+    await page.getByLabel("Markdown", { exact: true }).fill(`![private](${unavailable})`);
     await page.getByText("Attachment unavailable", { exact: true }).waitFor();
     assert.ok(!requested.includes(unavailable), "denied metadata must not request attachment bytes");
-    await page.getByLabel("Markdown").fill("![track](https://example.invalid/tracker.png)\n![foreign](/api/organizations/" + "e".repeat(32) + "/topics/" + topic + "/media/" + "f".repeat(32) + "/" + "a".repeat(64) + "/content)");
+    await page.getByLabel("Markdown", { exact: true }).fill("![track](https://example.invalid/tracker.png)\n![foreign](/api/organizations/" + "e".repeat(32) + "/topics/" + topic + "/media/" + "f".repeat(32) + "/" + "a".repeat(64) + "/content)");
     assert.equal(await page.locator("img.topic-image,details.topic-pdf").count(), 0);
     assert.ok(requested.every(url => !url.includes("example.invalid") && !url.includes("/organizations/" + "e".repeat(32))));
     assert.deepEqual(errors, []);

@@ -71,7 +71,7 @@ test("a member messages their own bot from People and follows, approves and reac
     await visible(owner.getByText("your bot", { exact: true }));
 
     // Under the box, as in an AI chat: plus, the bot's details, its model and the effort.
-    await visible(owner.getByRole("button", { name: "Attach pictures or PDFs", exact: true }));
+    await visible(owner.getByRole("button", { name: "Attach pictures, PDFs or Markdown", exact: true }));
     await visible(owner.getByRole("button", { name: "Bot model: gpt", exact: true }));
     await owner.getByRole("button", { name: "Reasoning effort: Default effort", exact: true }).click();
     await owner.getByRole("radio", { name: "high", exact: true }).click();

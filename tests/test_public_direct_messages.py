@@ -401,6 +401,9 @@ def test_direct_files_are_readable_only_by_the_two_participants(people):
     assert "sandbox" in content.headers["content-security-policy"]
     download = second.get(document["url"], params={"download": "true"})
     assert download.content == PDF and download.headers["content-disposition"].startswith("attachment;")
+    notes = upload(people, direct["id"], b"# Seminar notes\n\n$x^2$", "notes.md", "text/markdown")
+    assert notes.status_code == 200 and notes.json()["mime"] == "text/markdown", notes.text
+    assert upload(people, direct["id"], b"\xff\xfe", "bad.md", "text/markdown").status_code == 400
     # Organization owners and administrators are not participants, and the bytes are not topic media.
     for outsider in (people["owner"], people["admin"]):
         assert outsider.get(file["url"]).status_code == 404
