@@ -378,9 +378,9 @@ class Store:
                     ).fetchone()
                 )
             elif credential_mode == "new" and (
-                key_label is None or key is None or monthly_budget_microusd <= 0
+                key_label is None or key is None
             ):
-                raise StoreError(400, "fresh organization credentials require a key and positive budget")
+                raise StoreError(400, "fresh organization credentials require a key")
             organization_id, now = _id(), int(time.time())
             if source is None:
                 policy, budget = json.dumps(sorted(set(allowed_models))), monthly_budget_microusd
@@ -1316,11 +1316,12 @@ class Store:
         with self.transaction() as db:
             self._require(db, user_id, organization_id, admin=True)
             row = _row(
-                db.execute("SELECT model_policy_json,monthly_budget_microusd FROM organizations WHERE id=?", (organization_id,)).fetchone()
+                db.execute("SELECT model_policy_json FROM organizations WHERE id=?", (organization_id,)).fetchone()
             )
-            return {"allowed_models": json.loads(row["model_policy_json"]), "monthly_budget_microusd": row["monthly_budget_microusd"]}
+            return {"allowed_models": json.loads(row["model_policy_json"])}
 
-    def set_policy(self, user_id: str, organization_id: str, models: list[str], budget: int) -> dict[str, Any]:
+    def set_policy(self, user_id: str, organization_id: str, models: list[str], budget: int = 0) -> dict[str, Any]:
+        """Retain model suggestions and operator input; OpenRouter owns spending enforcement."""
         if budget < 0:
             raise StoreError(400, "invalid budget")
         with self.transaction(write=True) as db:
@@ -1330,7 +1331,7 @@ class Store:
                 (json.dumps(sorted(set(models))), budget, organization_id),
             )
             self._audit(db, organization_id, user_id, "organization.policy", organization_id)
-            return {"allowed_models": sorted(set(models)), "monthly_budget_microusd": budget}
+            return {"allowed_models": sorted(set(models))}
 
     def audit(self, user_id: str, organization_id: str, after: int = 0) -> list[dict[str, Any]]:
         with self.transaction() as db:

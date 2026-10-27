@@ -454,7 +454,7 @@ def test_new_organization_requires_an_explicit_isolated_credential_choice(instal
     reused_root = f"/api/organizations/{reused.json()['id']}"
     copied = client.get(reused_root + "/provider-keys").json()
     assert len(copied) == 1 and copied[0]["fingerprint"] == source_key["fingerprint"] and copied[0]["id"] != source_key["id"]
-    assert client.get(reused_root + "/policy").json() == source_policy
+    assert client.get(reused_root + "/policy").json() == {"allowed_models": source_policy["allowed_models"]}
     with store.transaction() as db:
         ciphertexts = db.execute(
             "SELECT ciphertext FROM provider_keys WHERE id IN (?,?) ORDER BY id", (source_key["id"], copied[0]["id"])
@@ -463,13 +463,13 @@ def test_new_organization_requires_an_explicit_isolated_credential_choice(instal
 
     fresh = client.post("/api/organizations", json={
         "name": "Fresh", "credential_mode": "new", "key_label": "Dedicated", "key": "brand new upstream secret",
-        "allowed_models": ["provider/new"], "monthly_budget_microusd": 10_000_000,
+        "allowed_models": ["provider/new"],
     })
     assert fresh.status_code == 201, fresh.text
     fresh_root = f"/api/organizations/{fresh.json()['id']}"
     assert client.get(fresh_root + "/provider-keys").json()[0]["fingerprint"] == digest("brand new upstream secret")[:16]
     assert client.get(fresh_root + "/policy").json() == {
-        "allowed_models": ["provider/new"], "monthly_budget_microusd": 10_000_000,
+        "allowed_models": ["provider/new"],
     }
 
 
@@ -488,14 +488,14 @@ def test_key_and_invitation_ids_are_organization_scoped(installation):
     assert administrator.delete(foreign + "/invitations/" + invitation["id"]).status_code == 404
 
 
-def test_policy_is_durable_and_defaults_closed(installation):
+def test_model_suggestions_are_durable_and_do_not_expose_a_local_budget(installation):
     config, _, client, owner = installation
     path = f"/api/organizations/{owner['organization_id']}/policy"
-    assert client.get(path).json() == {"allowed_models": [], "monthly_budget_microusd": 0}
+    assert client.get(path).json() == {"allowed_models": []}
     policy = {"allowed_models": ["provider/model", "provider/model"], "monthly_budget_microusd": 50_000_000}
-    assert client.put(path, json=policy).json() == {**policy, "allowed_models": ["provider/model"]}
+    assert client.put(path, json=policy).json() == {"allowed_models": ["provider/model"]}
     restarted = TestClient(create_app(config), base_url=PUBLIC_URL, headers=dict(client.headers))
-    assert restarted.get(path).json()["monthly_budget_microusd"] == 50_000_000
+    assert restarted.get(path).json() == {"allowed_models": ["provider/model"]}
     assert client.put(path, json={**policy, "monthly_budget_microusd": -1}).status_code == 422
 
 

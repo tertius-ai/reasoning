@@ -33,6 +33,10 @@ test("ordinary beta conversation delegates, streams roles and integrates without
   const port = socket.address().port; await new Promise(resolve => socket.close(resolve));
   const url = `http://127.0.0.1:${port}`, state = path.join(temporary, "state"), calls = [], errors = [];
   const provider = createServer(async (request, response) => {
+    if (request.url.split("?")[0] === "/api/v1/key") {
+      response.writeHead(200, { "Content-Type": "application/json" });
+      response.end(JSON.stringify({ data: { usage_daily: 0, limit: 50, limit_remaining: 50, limit_reset: "daily" } })); return;
+    }
     if (request.url.split("?")[0] === "/api/v1/models") {
       response.writeHead(200, { "Content-Type": "application/json" });
       response.end(JSON.stringify({ data: ["fixture/model", "fixture/new"].map(id => ({ id, architecture: { input_modalities: ["text"], output_modalities: ["text"] },

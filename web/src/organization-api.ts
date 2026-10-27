@@ -131,11 +131,11 @@ export function invitationEmailLabel(invitation: Invitation): string {
     rejected: "Email rejected; share the invitation link", unknown: "Email submission uncertain; no automatic resend", cancelled: "Email cancelled" };
   return invitation.email_state ? labels[invitation.email_state] : "Link sharing only";
 }
-export type Policy = { allowed_models: string[]; monthly_budget_microusd: number };
+export type Policy = { allowed_models: string[] };
 export type InferenceConfiguration = {
   routing?: RoutingPolicy;
   allowed_models: string[]; has_organization_key: boolean; enabled: boolean; worker_running: boolean;
-  budget_microusd: number; spent_microusd: number; reserved_microusd: number; uncertain_microusd: number; available_microusd: number;
+  spent_microusd: number; reserved_microusd: number; uncertain_microusd: number;
 };
 export type RoutingPolicy = { strategy: "recommended" | "cheapest" | "latency" | "throughput"; zdr: boolean; region: "global" | "us" | "eu" };
 export type ModelAttempt = {
