@@ -545,6 +545,36 @@ a.org-reference:hover, a.org-reference:focus-visible { text-decoration: underlin
 .org-message:has(> .org-reply-pointer)::after { content: ""; position: absolute; left: 6.25px; top: 10px; width: 10px; height: 11px; box-sizing: border-box;
   border: solid color-mix(in srgb, var(--speaker-tone, var(--teal)) 60%, transparent); border-width: 1.5px 0 0 1.5px; border-top-left-radius: 6px; pointer-events: none; }
 .org-message-group:has(> .org-message:first-child > .org-reply-pointer)::before { top: 42px; }
+/* Your own messages, in every chat and in the Thread view: each hugs the right edge and keeps at least an indent on
+   the left, with left-aligned text. The dot, name, guide line, reply curve, files and reply count sit on the right;
+   the toolbar and the reaction pill sit at the message's left edge. */
+.org-message-group.org-message-group-mine { width: fit-content; max-width: calc(100% - clamp(2.5rem, 16%, 8rem)); margin-left: auto; }
+.org-message-group-mine::before { left: auto; right: 6.5px; }
+.org-message-group.org-message-group-mine > .org-message { width: fit-content; max-width: 100%; margin-left: auto; padding: 2px 20px 4px 10px; border-radius: var(--radius-card) 0 0 var(--radius-card); }
+.org-message-group.org-message-group-mine > .org-message:first-child > header { flex-direction: row-reverse; margin-left: 0; margin-right: -17px; }
+/* The hover time of a later message shows in the indent beside it rather than over its first line. */
+.org-message-group-mine .org-message.org-message-continuation > header > time { right: calc(100% + 4px); left: auto; }
+.org-message-group-mine > .org-message > .chat-message-actions::before { right: auto; left: 0; }
+/* The toolbar slot rules all set `right`; your launchers use `left` instead. */
+.org-message-group-mine .chat-message-actions .chat-action-launcher { right: auto !important; }
+.org-message-group-mine .chat-message-actions .chat-copy-launcher { left: .25rem; }
+.org-message-group-mine .chat-has-fork .chat-fork-launcher { left: 2rem; }
+.org-message-group-mine .chat-has-fork .chat-reply-launcher { left: 3.75rem; }
+.org-message-group-mine .chat-has-reply:not(.chat-has-fork) .chat-reply-launcher { left: 2rem; }
+.org-message-group-mine .chat-has-react .chat-reaction-launcher { left: 2rem; }
+.org-message-group-mine .chat-has-react.chat-has-reply .chat-reaction-launcher { left: 3.75rem; }
+.org-message-group-mine .chat-has-react.chat-has-reply.chat-has-fork .chat-reaction-launcher { left: 5.5rem; }
+.org-message-group-mine .org-message .chat-reaction-pill { right: auto; left: 10px; }
+/* The pointer runs leftward from the message's right edge, so a short reply keeps a readable excerpt without widening. */
+.org-message-group.org-message-group-mine > .org-message:has(> .org-reply-pointer) { padding-top: 20px; }
+.org-app .org-message-group-mine .org-reply-pointer { position: absolute; top: 2px; right: 20px; width: max-content; max-width: min(24rem, calc(100vw - 6rem)); }
+.org-message-group-mine .org-message:has(> .org-reply-pointer)::after { left: auto; right: 6.25px; border-width: 1.5px 1.5px 0 0; border-radius: 0 6px 0 0; }
+.org-app .org-message-group-mine .org-thread-count { display: flex; width: fit-content; margin-left: auto; }
+.org-message-group-mine .reply-files { justify-content: flex-end; }
+/* Editing, or reading a message's versions, takes the full width you are allowed. */
+.org-message-group.org-message-group-mine:has(.chat-edit, .chat-edit-history) { width: 100%; }
+.org-message-group.org-message-group-mine > .org-message:has(.chat-edit, .chat-edit-history) { width: auto; margin-left: 0; }
+@media (max-width: 600px) { .org-message-group.org-message-group-mine { max-width: calc(100% - 2rem); } }
 .org-reply-bar { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; padding: 0 2px 6px; border-bottom: 1px solid var(--border); color: var(--muted); font-size: 11px; }
 .org-reply-bar > span:first-child { color: var(--teal); }
 .org-reply-bar-text { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

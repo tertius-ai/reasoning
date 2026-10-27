@@ -13,7 +13,6 @@ export function CloudBotWizard({ organizationId, onChanged }: { organizationId: 
   const [jobs, setJobs] = useState<CloudBot[]>([]);
   const [engine, setEngine] = useState<"codex" | "claude">("codex");
   const [name, setName] = useState("cloud-bot");
-  const [models, setModels] = useState("default");
   const [region, setRegion] = useState("fra1");
   const [size, setSize] = useState("s-1vcpu-2gb");
   const [token, setToken] = useState("");
@@ -57,7 +56,7 @@ export function CloudBotWizard({ organizationId, onChanged }: { organizationId: 
     {error && <p role="alert" className="org-error">{error}</p>}
     <form className="org-bot-wizard" onSubmit={(event) => { event.preventDefault(); void action(async () => {
       await request<CloudBot>(root + "/quote", { method: "POST", body: {
-        name, engine, models: models.split(",").map((item) => item.trim()), region, size, token,
+        name, engine, models: ["default"], region, size, token,
         maximum_hourly_usd: ceiling, cas, lean,
       } }); setToken("");
     }); }}>
@@ -65,7 +64,7 @@ export function CloudBotWizard({ organizationId, onChanged }: { organizationId: 
       <label>Provider<select value={engine} onChange={(event) => setEngine(event.target.value as "codex" | "claude")}>
         <option value="codex">Codex</option><option value="claude">Claude Code</option>
       </select></label>
-      <label>CLI models<input value={models} onChange={(event) => setModels(event.target.value)} required /></label>
+      <p>Model choices are discovered automatically after provider sign-in and stay up to date while the bot runs.</p>
       <label>Region<input value={region} onChange={(event) => setRegion(event.target.value)} required /></label>
       <label>CPU Droplet size<input value={size} onChange={(event) => setSize(event.target.value)} required /></label>
       <label>Maximum hardware USD/hour<input value={ceiling} onChange={(event) => setCeiling(event.target.value)} inputMode="decimal" required /></label>

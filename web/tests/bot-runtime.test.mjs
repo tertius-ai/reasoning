@@ -44,6 +44,14 @@ test("bot effort mentions retain the exact model and level", () => {
   assert.deepEqual(catalog.models[0].reasoning_efforts, ["high"]);
 });
 
+test("discovered long-context aliases and ultra effort retain exact routing", () => {
+  for (const [model, effort] of [["opus[1m]", "max"], ["gpt-discovered", "ultra"]]) {
+    const label = `@Bot-${model}!${effort}`, id = "a".repeat(32);
+    assert.equal(mentions.encodeMentions(label, [{ start: 0, end: label.length, id, label, model, effort }]),
+      `@[${id}:${model}!${effort}]`);
+  }
+});
+
 test("bot model presentation is readable and does not invent OpenRouter prices", () => {
   const id = `bot/${"a".repeat(32)}/default`;
   const catalog = models.withBotModels(null, [{ id, name: "Math Bot · default", engine: "codex" }]);

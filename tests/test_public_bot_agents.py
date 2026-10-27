@@ -304,7 +304,7 @@ def test_cli_connect_saves_locally_generated_credentials_and_uses_browser_only_f
     directory = tmp_path / "personal-bot"
     workspace = tmp_path / "workspace"
     workspace.mkdir()
-    answers = iter(["codex", "n", "default", "My Codex"])
+    answers = iter(["codex", "n", "My Codex"])
     monkeypatch.setattr("builtins.input", lambda prompt: pytest.fail("noninteractive connection prompted")
                        if noninteractive else next(answers))
     monkeypatch.setattr(
@@ -333,12 +333,13 @@ def test_cli_connect_saves_locally_generated_credentials_and_uses_browser_only_f
         assert "rnb_" not in url
         pairing.approve(owner["user_id"], owner["organization_id"], code, topics[:1], ["messages:read", "messages:write"], 3600)
 
-    settings = {"engine": "codex", "name": "My Codex", "models": "default", "local_tools": False} if noninteractive else {}
+    settings = {"engine": "codex", "name": "My Codex", "local_tools": False} if noninteractive else {}
     connect("https://server.example", directory, transport=httpx.MockTransport(handle), open_browser=browser,
             wait=lambda _: None, **settings)
     config = read_document(directory / "config.json")
     agent = read_document(directory / "agent.json")
     assert agent["local_tools"] is False and config["token"].startswith("rnb_")
+    assert "models" not in agent
     assert bots.identity(config["token"])["name"] == "My Codex"
     output = capsys.readouterr().out
     assert config["token"] not in output and "uv run --locked reasoning-bot run" in output
@@ -355,7 +356,7 @@ def test_connect_cli_prompts_for_server_pairs_then_runs_without_relocking_pairin
     _, owner, topics, _, _, bots = fixture
     pairing = BotPairing(bots)
     directory = tmp_path / "paired"
-    answers = iter(["", "server.example"] + ([] if engine_flag else ["codex", "n", "default", "My Codex"]))
+    answers = iter(["", "server.example"] + ([] if engine_flag else ["codex", "n", "My Codex"]))
     prompts, calls, steps, clients = [], [], [], []
 
     def answer(prompt):

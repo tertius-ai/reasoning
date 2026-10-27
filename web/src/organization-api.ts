@@ -314,6 +314,9 @@ export function authorLabel(message: Message, members: Member[]): string {
   if (message.author_kind === "bot") return "Bot · " + (message.bot_name ?? "Bot");
   return members.find((member) => member.id === message.author_id)?.name ?? "Departed member";
 }
+/** Whether you wrote a message yourself: a model or bot reply you asked for is not yours. */
+export const isOwnMessage = (message: Pick<Message, "author_id" | "author_kind">, userId: string) =>
+  (message.author_kind ?? "human") === "human" && message.author_id === userId;
 export const aborted = (error: unknown) => error instanceof Error && error.name === "AbortError";
 
 /**
@@ -336,7 +339,7 @@ export function mergeMessages(existing: Message[], incoming: Message[]): Message
 
 export function mentionText(content: string, members: Pick<Member, "id" | "name">[]): string {
   const names = new Map(members.map((member) => [member.id, member.name]));
-  return content.replace(/@\[([a-f0-9]{32})(?::([A-Za-z0-9][A-Za-z0-9._/-]{0,99})(?:!(low|medium|high|xhigh|max))?)?\]/g,
+  return content.replace(/@\[([a-f0-9]{32})(?::([A-Za-z0-9][A-Za-z0-9._/-]{0,99}(?:\[(?:1m|200k)\])?)(?:!(low|medium|high|xhigh|max|ultra))?)?\]/g,
     (_match, id: string, model?: string, effort?: string) => "@" + (names.get(id) ?? "departed member")
       + (model ? "-" + model : "") + (effort ? "!" + effort : ""));
 }
@@ -356,7 +359,7 @@ export function mentionQuery(content: string, cursor: number, botNames: string[]
 
 export function mentionMarkdown(content: string, members: Pick<Member, "id" | "name">[]): string {
   const names = new Map(members.map((member) => [member.id, member.name]));
-  return content.replace(/@\[([a-f0-9]{32})(?::([A-Za-z0-9][A-Za-z0-9._/-]{0,99})(?:!(low|medium|high|xhigh|max))?)?\]/g,
+  return content.replace(/@\[([a-f0-9]{32})(?::([A-Za-z0-9][A-Za-z0-9._/-]{0,99}(?:\[(?:1m|200k)\])?)(?:!(low|medium|high|xhigh|max|ultra))?)?\]/g,
     (_match, id: string, model?: string, effort?: string) => {
     const name = (names.get(id) ?? "departed member").replace(/[\r\n]/g, " ").replace(/[\\`*_{}\[\]()#+.!<>~$]/g, "\\$&");
     // A link to `#mention/ID`, rendered as a tinted mention; the label stays escaped text.
