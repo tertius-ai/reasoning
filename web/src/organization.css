@@ -586,12 +586,10 @@ a.org-reference:hover, a.org-reference:focus-visible { text-decoration: underlin
 /* Alpha's square plus at the left, the text, and the return square at the right; chosen files wait as chips above. */
 .org-thread-composer-row { display: flex; align-items: flex-end; gap: 6px; }
 .org-thread-composer > .direct-pending { margin: 2px 2px 6px; }
-/* Adding to a running reply from the Thread view: the main box's tinted bar and blue border. */
-.org-thread-composer.org-thread-composer-adding { padding-top: 0; overflow: hidden; border-color: var(--blue); }
-.org-thread-adding-bar { display: flex; align-items: center; gap: 8px; margin: 0 -4px 6px; padding: 5px 8px 5px 12px;
-  background: color-mix(in srgb, var(--blue) 14%, transparent); color: color-mix(in srgb, var(--blue) 80%, var(--foreground)); font-size: 12px; }
-.org-thread-adding-bar > span:nth-child(2) { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.org-app .org-thread-adding-bar button { width: 22px; min-height: 22px; padding: 0; border-color: transparent; background: transparent; color: inherit; }
+/* Adding to a running reply from the Thread view: the border, plus, placeholder and return turn blue. */
+.org-thread-composer.org-thread-composer-adding { border-color: var(--blue); }
+.org-thread-composer-adding textarea::placeholder { color: color-mix(in srgb, var(--blue) 75%, var(--foreground)); }
+.org-app .org-thread-composer-adding .org-upload-plus, .org-app .org-thread-composer-adding .org-composer-button { color: var(--blue); }
 .org-thread-composer:focus-within { border-color: var(--blue); }
 .org-thread-composer textarea { flex: 1; min-height: 28px; padding: 4px 2px; border: none; background: transparent; color: var(--foreground); resize: none; font: 13px/1.5 var(--font-sans); }
 .org-thread-composer textarea:focus { outline: none; }

@@ -150,19 +150,35 @@ test("a model's answer replies to its prompt, a reply to the answer asks a follo
     assert.ok(addBox.x + addBox.width <= stopBox.x && Math.abs(stopBox.x + stopBox.width - (headerBox.x + headerBox.width)) < 1,
       "+ Add sits just left of Stop at the header's right edge");
     await line.click();
-    const addingBar = dialog.locator(".org-thread-adding-bar");
-    assert.match(await addingBar.innerText(), /Adding to reasoner's reply/);
+    // Adding mode has no bar: the placeholder names the reply, and the box's border, plus and return turn blue.
+    const adding = dialog.locator("form.org-thread-composer-adding");
+    await adding.waitFor();
+    assert.equal(await adding.locator(".org-thread-adding-bar").count(), 0);
     assert.equal(await reply.getAttribute("placeholder"), "Add to reasoner's reply…");
+    assert.equal(await page.evaluate(() => document.activeElement?.id), "org-thread-reply", "the box takes focus");
+    const blue = await adding.evaluate(form => {
+      const color = element => getComputedStyle(element).color;
+      return { border: getComputedStyle(form).borderTopColor, plus: color(form.querySelector(".org-upload-plus")),
+        send: color(form.querySelector(".org-composer-button")) };
+    });
+    assert.equal(blue.plus, blue.border); assert.equal(blue.send, blue.border);
     const pressed = working.getByRole("button", { name: "Adding to this reply", exact: true });
     assert.equal(await pressed.getAttribute("aria-pressed"), "true");
     assert.equal(await pressed.innerText(), "Adding…");
+    // Escape leaves adding mode, from the box or from anywhere else in the thread, and leaves the thread open.
     await reply.press("Escape");
-    await addingBar.waitFor({ state: "detached" });
+    await adding.waitFor({ state: "detached" });
+    assert.equal(await reply.getAttribute("placeholder"), "Reply in thread…");
     assert.equal(await dialog.isVisible(), true, "Escape leaves adding mode before it closes the thread");
+    await line.click(); await adding.waitFor();
+    await working.getByRole("button", { name: "Adding to this reply", exact: true }).focus();
+    await page.keyboard.press("Escape");
+    await adding.waitFor({ state: "detached" });
+    assert.equal(await dialog.isVisible(), true);
     await line.click();
     await reply.fill("Skip French-language sources.");
     await reply.press("Enter");
-    await addingBar.waitFor({ state: "detached" });
+    await adding.waitFor({ state: "detached" });
     assert.deepEqual({ adds_to: posts.at(-1).adds_to, reply_to: posts.at(-1).reply_to }, { adds_to: "run-k3", reply_to: undefined });
     const waitingLine = working.getByLabel("Messages waiting for this reply", { exact: true }).locator("li");
     await waitingLine.filter({ hasText: "Skip French-language sources." }).waitFor({ timeout: 15000 });

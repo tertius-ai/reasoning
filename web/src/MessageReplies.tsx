@@ -104,7 +104,9 @@ export function ThreadDialog({ messagesPath, messageId, canWrite, renderMessage,
   const [error, setError] = useState("");
   const [text, setText] = useState(""), [clientId, setClientId] = useState(""), [sending, setSending] = useState(false);
   const [files, setFiles] = useState<PendingFile[]>([]), [notice, setNotice] = useState("");
-  const list = useRef<HTMLDivElement>(null);
+  const list = useRef<HTMLDivElement>(null), box = useRef<HTMLTextAreaElement>(null);
+  // Choosing to add to a reply moves you to the box, where the next message is written.
+  useEffect(() => { if (addTo) box.current?.focus(); }, [addTo?.id]);
   const shown = useMemo(() => thread ? joinThread(thread.messages, live ?? []) : [], [thread, live]);
   const uploading = files.some(file => !file.markdown);
   const path = messagesPath + "/";
@@ -168,7 +170,9 @@ export function ThreadDialog({ messagesPath, messageId, canWrite, renderMessage,
       await load(thread.root_id);
     } catch (cause) { fail(cause); } finally { setSending(false); }
   };
-  return <dialog ref={dialog} className="org-thread-dialog" aria-label="Thread" onCancel={onClose} onClose={onClose}
+  // Escape leaves adding mode first, wherever focus is in the thread; a second Escape closes it.
+  return <dialog ref={dialog} className="org-thread-dialog" aria-label="Thread" onClose={onClose}
+    onCancel={event => { if (addTo) { event.preventDefault(); onStopAdding?.(); } else onClose(); }}
     onClick={event => { if (event.target === event.currentTarget) dialog.current?.close(); }}>
     <header><strong>Thread</strong>{thread && <small>{shown.length} {shown.length === 1 ? "message" : "messages"}</small>}
       <button type="button" aria-label="Close thread" onClick={() => dialog.current?.close()}>×</button></header>
@@ -181,19 +185,15 @@ export function ThreadDialog({ messagesPath, messageId, canWrite, renderMessage,
     {error && <p className="org-error" role="alert">{error}</p>}
     {notice && <p className="org-help" role="status">{notice}</p>}
     {canWrite && thread && <form className={"org-thread-composer" + (addTo ? " org-thread-composer-adding" : "")} onSubmit={event => void send(event)}>
-      {addTo && <div className="org-thread-adding-bar" role="status"><span aria-hidden="true">↳</span>
-        <span>Adding to <strong>{addTo.label}</strong>'s reply</span>
-        <button type="button" aria-label="Send a new question instead" title="Send a new question instead · Esc"
-          onClick={() => onStopAdding?.()}>×</button></div>}
+      {addTo && <span className="org-visually-hidden" role="status">Adding to {addTo.label}'s reply. Escape sends a new question instead.</span>}
       {attach && <PendingFiles files={files} onRemove={key => { removeFile(key); setClientId(""); }} />}
       <div className="org-thread-composer-row">
         {attach && <AttachFilesButton disabled={sending} onFiles={addFiles} />}
         <label className="org-visually-hidden" htmlFor="org-thread-reply">Reply in thread</label>
-        <textarea id="org-thread-reply" rows={1} maxLength={16000} placeholder={addTo ? `Add to ${addTo.label}'s reply…` : "Reply in thread…"}
+        <textarea id="org-thread-reply" ref={box} rows={1} maxLength={16000} placeholder={addTo ? `Add to ${addTo.label}'s reply…` : "Reply in thread…"}
           value={text} disabled={sending} onChange={event => { setText(event.target.value); setClientId(""); }}
           onKeyDown={event => {
             if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) { event.preventDefault(); void send(event); }
-            // Escape leaves adding mode first; a second Escape closes the thread.
             else if (event.key === "Escape" && addTo) { event.preventDefault(); event.stopPropagation(); onStopAdding?.(); }
           }} />
         <button className="org-composer-button" disabled={sending || uploading || !content.trim()}
