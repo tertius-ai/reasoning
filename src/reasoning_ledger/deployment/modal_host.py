@@ -142,7 +142,7 @@ class ModalHostInstaller:
         release = value["release_id"]
         installed = read_document(self.root / "var/lib/reasoning-deploy/installation.json")
         if (installed.get("release_id") != release or installed.get("public_url") != value["public_url"]
-                or installed.get("phase") != "installed"):
+                or installed.get("phase") != "services_started"):
             raise InstallError("Modal setup requires the exact installed managed chat release and origin")
         for pending in ("active-server-upgrade.json", "active-server-recovery.json"):
             pending_path = self.root / "var/lib/reasoning-deploy" / pending
