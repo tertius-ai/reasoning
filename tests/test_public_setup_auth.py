@@ -182,7 +182,7 @@ def test_saved_setup_refuses_a_different_private_key_before_provisioning(tmp_pat
 def test_configuration_runs_real_key_matching_and_pkce_boundaries(tmp_path, ssh_key, account, monkeypatch, capsys):
     provider, _, calls = account
     answers = iter(["n", "", "example.org", "", str(ssh_key[0]), "upload ssh key", "", "", "",
-                    "0.10", "2.50", "browser"])
+                    "0.10", "browser"])
     monkeypatch.setattr("builtins.input", lambda prompt: next(answers))
     monkeypatch.setattr(setup.getpass, "getpass", lambda prompt: "dop_v1_" + "0" * 64)
     monkeypatch.setattr(setup, "DigitalOcean", lambda token: provider)
