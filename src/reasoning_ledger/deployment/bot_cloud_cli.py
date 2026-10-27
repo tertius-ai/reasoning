@@ -68,7 +68,7 @@ def main(argv=None):
                 engine = ask("CLI engine (codex or claude)", "codex")
                 cas = ask("Install SymPy, GAP, PARI/GP and Singular? y/n", "n").lower() == "y"
                 lean = ask("Install pinned Lean 4 and mathlib? y/n", "n").lower() == "y"
-                models = [item.strip() for item in ask("Provider CLI models, comma-separated", "default").split(",")]
+                models = ["default"]
                 # Build only the trusted Python bot artifact; no frontend/node
                 # installation and no private repository credentials on the VM.
                 artifact = directory / "artifact"

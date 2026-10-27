@@ -17,8 +17,8 @@ export function encodeMentions(text: string, bindings: MentionBinding[] = []): s
       if (/^#\[(topic|project):[a-f0-9]{32}\]$/.test(binding.wire) && text.slice(binding.start, binding.end) === binding.label)
         result = result.slice(0, binding.start) + binding.wire + result.slice(binding.end);
     } else if (/^[a-f0-9]{32}$/.test(binding.id) && text.slice(binding.start, binding.end) === binding.label) {
-      const model = binding.model && /^[A-Za-z0-9][A-Za-z0-9._/-]{0,99}$/.test(binding.model) ? ":" + binding.model : "";
-      const effort = model && binding.effort && /^(low|medium|high|xhigh|max)$/.test(binding.effort) ? "!" + binding.effort : "";
+      const model = binding.model && binding.model.length <= 100 && /^[A-Za-z0-9][A-Za-z0-9._/-]{0,99}(?:\[(?:1m|200k)\])?$/.test(binding.model) ? ":" + binding.model : "";
+      const effort = model && binding.effort && /^(low|medium|high|xhigh|max|ultra)$/.test(binding.effort) ? "!" + binding.effort : "";
       result = result.slice(0, binding.start) + `@[${binding.id}${model}${effort}]` + result.slice(binding.end);
     }
   }

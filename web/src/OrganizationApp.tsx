@@ -359,10 +359,17 @@ function CreationDialog({ kind, hierarchy, organizationId, parentId, members, us
   }, [kind, organizationId]);
   useEffect(() => {
     if (kind !== "topic" || !parent) return;
-    const controller = new AbortController(); setCreationBots([]);
-    void request<BotModel[]>(organizationPath(organizationId) + "/channels/" + encodeURIComponent(parent) + "/bot-models", {
-      signal: controller.signal }).then(setCreationBots).catch(cause => { if (!aborted(cause)) setError(errorMessage(cause)); });
-    return () => controller.abort();
+    const controller = new AbortController(); let timer: ReturnType<typeof setTimeout>; setCreationBots([]);
+    const refresh = async () => {
+      try {
+        const bots = await request<BotModel[]>(organizationPath(organizationId) + "/channels/" + encodeURIComponent(parent) + "/bot-models", {
+          signal: controller.signal });
+        if (!controller.signal.aborted) setCreationBots(current => unchanged(current, bots));
+      } catch (cause) { if (!aborted(cause)) setError(errorMessage(cause)); }
+      if (!controller.signal.aborted) timer = schedulePoll(refresh, 5000, controller.signal);
+    };
+    void refresh();
+    return () => { controller.abort(); clearTimeout(timer); };
   }, [kind, parent, organizationId]);
   useEffect(() => {
     if (!defaultModel || defaultModel.startsWith("bot/") && !creationBots.some(bot => bot.id === defaultModel)) {
