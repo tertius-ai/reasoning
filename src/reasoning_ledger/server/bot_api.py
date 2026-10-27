@@ -79,7 +79,7 @@ class BotInference(Input):
     model: Annotated[str, Field(max_length=150)]
     client_id: Annotated[str, Field(min_length=1, max_length=128)]
     through_sequence: Annotated[int, Field(ge=1, strict=True)]
-    effort: Literal["low", "medium", "high", "xhigh", "max"] | None = None
+    effort: Literal["low", "medium", "high", "xhigh", "max", "ultra"] | None = None
 
 
 class Lease(Input):

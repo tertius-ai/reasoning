@@ -40,6 +40,13 @@ class TestChecking:
         assert "Undefined control sequence" in fails[0].error
         assert fails[0].span == r"\RR"
 
+    def test_paper_operator_macros_pass(self):
+        # The chat defines \CH and similar operator names; the checker agrees.
+        assert lc.check_text(r"\(\CH^3_L(Y)\) and \[\Hom(\CH^3(Y,1), \colim_n A_n)\]") == []
+
+    def test_own_newcommand_for_a_table_macro_passes(self):
+        assert lc.check_text(r"\(\newcommand{\CH}{A} \CH^3\) then \(x\)") == []
+
     def test_unsupported_environment_fails(self):
         fails = lc.check_text(r"\[\boxed{\begin{minipage}{2in}x\end{minipage}}\]")
         assert fails and "minipage" in fails[0].error

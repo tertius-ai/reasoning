@@ -89,8 +89,10 @@ test("defers rich-text parsing until a transcript needs it", async () => {
   assert.match(markdown, /import\("\.\/MarkdownRenderer"\)/);
   assert.match(markdown, /Rich-text rendering failed; showing plain text/);
   assert.doesNotMatch(markdown, /from "react-markdown"/);
+  // rehypeMath, which wraps rehype-katex, lives in markdownMath.
+  assert.doesNotMatch(markdown, /from "\.\/markdownMath"/);
   assert.match(renderer, /from "react-markdown"/);
-  assert.match(renderer, /from "rehype-katex"/);
+  assert.match(renderer, /rehypePlugins=\{\[rehypeMath\]\}/);
   assert.match(renderer, /remarkPlugins=/);
 });
 

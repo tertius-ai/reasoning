@@ -51,6 +51,8 @@ test("progress follows its human message, retained failures stay inspectable, an
           diagnostics: { message: "Check provider credit.", action: "Inspect the provider account.", http_status: 402 } },
         { ...base, id: "waiting-review", status: "succeeded", answer_state: { status: "waiting", reason: "independent review",
           checkpoint: { summary: "The finite case is settled.", remaining: "Check the infinite case.", sources: ["Lemma 2"] } } },
+        { ...base, id: "continued-coordinator", status: "succeeded", agent: { role: "coordinator", root_run: "continued-coordinator" },
+          answer_state: { status: "continued", reason: "delegated work", next_run: "handoff", checkpoint: null } },
       ];
       else if (path.endsWith("/bot-runs")) data = [{ id: "working", bot_id: bot, model: "default", status: "running", phase: "thinking",
         created_at: base.created_at, context_through_sequence: 1, requested_by: user, activity: [] }];
@@ -82,6 +84,12 @@ test("progress follows its human message, retained failures stay inspectable, an
     await waiting.locator("summary").first().click();
     await waiting.getByText("The finite case is settled.", { exact: true }).waitFor();
     await waiting.getByText("Remaining: Check the infinite case.", { exact: true }).waitFor();
+    // A coordinator that waited for delegates stops saying so once a later reply continued its work.
+    const continued = page.locator('[data-run-id="continued-coordinator"]');
+    await continued.getByText("Continued in a later reply", { exact: true }).waitFor();
+    assert.equal(await continued.getByText("Waiting · answer incomplete", { exact: true }).count(), 0);
+    await continued.locator("summary").first().click();
+    await continued.getByText("Waited for delegated work. A later reply continued this work and carries the answer.", { exact: true }).waitFor();
     // The box has one button at its right, and it never stops: the running reply has Stop in its own card header,
     // so beside a paused request the box's button resumes.
     const resume = page.getByRole("button", { name: "Start or resume", exact: true });

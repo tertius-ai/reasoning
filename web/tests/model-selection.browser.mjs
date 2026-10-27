@@ -15,8 +15,9 @@ test("beta creation selects a bot model then effort, persists the choice, and fa
   try {
     const org = "c".repeat(32), user = "a".repeat(32), bot = "b".repeat(32), topic = "d".repeat(32);
     const model = `bot/${bot}/example`;
+    const nextModel = `bot/${bot}/next-model`;
     const errors = [], writes = [], favoriteSets = new Map();
-    let holdConfiguration = false, failConfiguration = false, releaseConfiguration;
+    let holdConfiguration = false, failConfiguration = false, releaseConfiguration, discovered = false, nextDiscovered = false;
     const configurationGate = new Promise(resolve => { releaseConfiguration = resolve; });
     const hierarchy = { projects: [{ id: "project", name: "Project", visibility: "organization" }],
       channels: [{ id: "channel", name: "research", project_id: "project" }],
@@ -43,7 +44,11 @@ test("beta creation selects a bot model then effort, persists the choice, and fa
         else if (path.endsWith("/members")) data = [{ id: principal, name: "Alice", role: "owner" }];
         else if (path.endsWith("/presence")) data = { humans: [], bots: [] };
         else if (path.endsWith("/bots")) data = [{ id: bot, name: "My Codex" }];
-        else if (path.endsWith("/bot-models")) data = [{ id: model, bot_id: bot, name: "My Codex · example", engine: "codex", owner_user_id: principal, efforts: ["high", "xhigh"], online: true }];
+        else if (path.endsWith("/bot-models")) data = [
+          { id: `bot/${bot}/default`, bot_id: bot, name: "My Codex · CLI default", engine: "codex", owner_user_id: principal, efforts: [], online: true },
+          ...(discovered ? [{ id: model, bot_id: bot, name: "My Codex · example", engine: "codex", owner_user_id: principal, efforts: ["high", "xhigh"], online: true }] : []),
+          ...(nextDiscovered ? [{ id: nextModel, bot_id: bot, name: "My Codex · Newly discovered", engine: "codex", owner_user_id: principal, efforts: ["ultra"], online: true }] : []),
+        ];
         else if (path.endsWith("/inference-configuration")) data = { allowed_models: ["fixture/openrouter"], tools: [] };
         else if (path.endsWith("/model-prices")) data = { models: [], allowed_models: [] };
         else if (path.endsWith("/research-instructions")) data = { system_prompt: "Research safely.", prompt_version: "fixture" };
@@ -51,6 +56,9 @@ test("beta creation selects a bot model then effort, persists the choice, and fa
         else if (path.endsWith("/navigation-usage")) data = { projects: {}, channels: {}, topics: {} };
         else if (path.endsWith("/message-updates")) data = { after: 0, messages: [] };
         else if (path.endsWith("/goal")) data = null;
+        else if (path.endsWith("/messages") && request.method() === "POST") data = { ...body, id: "message", sequence: 1,
+          author_id: principal, author_kind: "human", topic_id: topic, created_at: 1_800_000_000 };
+        else if (path.endsWith("/bot-runs") && request.method() === "POST") data = { id: "run", model: body.model, status: "queued" };
         else if (path.endsWith("/topics") && request.method() === "POST") {
           data = { ...body, id: "e".repeat(32), knowledge_tools: body.knowledge_tools ?? [] }; hierarchy.topics.push(data);
         }
@@ -66,6 +74,8 @@ test("beta creation selects a bot model then effort, persists the choice, and fa
     await dialog.getByLabel("Topic name", { exact: true }).fill("Bot-led work");
     await dialog.getByRole("radio", { name: /AI chat/ }).check();
     await dialog.getByRole("button", { name: "Model", exact: true }).click();
+    await dialog.getByRole("radio", { name: `bot/${bot}/default`, exact: true }).waitFor();
+    discovered = true; // Discovery completes while the dialog stays open; its picker must refresh.
     await dialog.getByRole("radio", { name: model, exact: true }).click();
     const efforts = dialog.getByRole("radiogroup", { name: "Reasoning effort", exact: true });
     await efforts.getByRole("radio", { name: "Default effort", exact: true }).waitFor();
@@ -89,6 +99,23 @@ test("beta creation selects a bot model then effort, persists the choice, and fa
     const effort = page.getByRole("button", { name: "Reasoning effort: High", exact: true });
     await effort.waitFor();
     assert.equal(await effort.evaluate(node => document.activeElement === node), true);
+    // A subsequent CLI refresh reaches the existing chat and can actually be selected and submitted.
+    nextDiscovered = true;
+    await picker.click();
+    await page.getByRole("radio", { name: nextModel, exact: true }).click();
+    await page.getByRole("button", { name: "Reasoning effort: Default effort", exact: true }).click();
+    await page.getByRole("radio", { name: "ultra", exact: true }).click();
+    await picker.filter({ hasText: "My Codex · Newly discovered" }).waitFor();
+    await page.getByRole("textbox", { name: "Message", exact: true }).fill("Answer using the selected CLI model");
+    const accepted = page.waitForResponse(response => response.url().endsWith("/bot-runs") && response.request().method() === "POST");
+    await page.getByRole("button", { name: "Send", exact: true }).click();
+    await accepted;
+    const invocation = writes.find(write => write.path.endsWith("/bot-runs"));
+    assert.equal(invocation.body.model, nextModel); assert.equal(invocation.body.effort, "ultra");
+    assert.equal(writes.filter(write => write.path.endsWith("/inference-runs")).length, 0);
+    await picker.click(); await page.getByRole("radio", { name: model, exact: true }).click();
+    await page.getByRole("button", { name: "Reasoning effort: High", exact: true }).click();
+    await page.getByRole("radio", { name: "high", exact: true }).click();
     await picker.click(); await page.getByRole("button", { name: `Favorite ${model}`, exact: true }).click();
     await page.getByRole("button", { name: `Favorite ${model}`, exact: true }).filter({ hasText: "★" }).waitFor();
     // Bot routes and their effort must be usable independently of provider catalogue availability.

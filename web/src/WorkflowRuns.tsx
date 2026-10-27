@@ -6,9 +6,8 @@ import { RunProgress, runFailureMessage } from "./BetaConversation";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import remarkMath from "remark-math";
-import rehypeKatex from "rehype-katex";
 import { ComputeJobDetail } from "./ComputeConversation";
-import { normalizeMathDelimiters } from "./markdownMath";
+import { normalizeMathDelimiters, rehypeMath } from "./markdownMath";
 import { ApiError, BotRun, ModelRun, aborted, errorMessage, organizationPath, request, topicPath, usd } from "./organization-api";
 import { WorkflowDefinition, WorkflowVersion, workflowPath } from "./workflow-api";
 import "./workflow-conversation.css";
@@ -96,7 +95,7 @@ export function ComparisonAnswer({ organizationId, topicId, node, model, canWrit
       {botRun && ["running", "waiting_approval"].includes(status) && <p role="status" className="org-working">{botRun.phase.replaceAll("_", " ")}…</p>}
       {botRun && <BotRunTiming run={botRun} />}
       {!output ? (!["queued", "running"].includes(status) && <p role="status">{["pending", "ready", "dispatched"].includes(status) ? "Waiting for answer…" : "No answer returned."}</p>)
-        : <ReactMarkdown remarkPlugins={[remarkGfm, remarkMath]} rehypePlugins={[rehypeKatex]} components={{ img: () => null }} skipHtml>{normalizeMathDelimiters(output)}</ReactMarkdown>}
+        : <ReactMarkdown remarkPlugins={[remarkGfm, remarkMath]} rehypePlugins={[rehypeMath]} components={{ img: () => null }} skipHtml>{normalizeMathDelimiters(output)}</ReactMarkdown>}
       {run && <MessageUsageDetails usage={run.usage} />}
       {output && <OutputActions organizationId={organizationId} topicId={topicId} targetKind="node"
         targetId={node.run_id} nodeId={node.node_id} canWrite={canWrite} onAuthLost={onAuthLost} text={output} />}

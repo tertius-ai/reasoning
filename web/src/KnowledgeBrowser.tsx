@@ -2,11 +2,10 @@ import React, { useEffect, useMemo, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import remarkMath from "remark-math";
-import rehypeKatex from "rehype-katex";
 import {
   ApiError, Hierarchy, KnowledgeEntry, KnowledgeKind, aborted, errorMessage, organizationPath, request,
 } from "./organization-api";
-import { normalizeMathDelimiters } from "./markdownMath";
+import { normalizeMathDelimiters, rehypeMath } from "./markdownMath";
 import { MathematicsBrowser, ResearchMarkdown } from "./MathematicsBrowser";
 import { MarkdownReferenceAnchor, remarkReferences } from "./references";
 import { ResearchBibliography } from "./ResearchBibliography";
@@ -136,7 +135,7 @@ export function KnowledgeBrowser({ organizationId, hierarchy, canWrite, onAuthLo
           <header><div><small>{selected.state} · {scopeLabel(selected, hierarchy)}</small><h2>{selected.title}</h2>
             <p>Revision {selected.revision} · {selected.author_name} · {new Date(selected.revised_at * 1000).toLocaleString()}</p></div>
             {canWrite && selected.revision === selected.head_revision && <button onClick={startEdit}>Edit</button>}</header>
-          <div className="org-knowledge-markdown"><ReactMarkdown remarkPlugins={[remarkGfm, remarkMath, remarkReferences]} rehypePlugins={[rehypeKatex]} skipHtml
+          <div className="org-knowledge-markdown"><ReactMarkdown remarkPlugins={[remarkGfm, remarkMath, remarkReferences]} rehypePlugins={[rehypeMath]} skipHtml
             components={{ a: MarkdownReferenceAnchor }}>{normalizeMathDelimiters(selected.body)}</ReactMarkdown></div>
           {selected.head_revision > 1 && <nav aria-label="Revision history">{Array.from({ length: Math.min(selected.head_revision, 10) }, (_, index) => selected.head_revision - index)
             .map((revision) => <button key={revision} aria-current={revision === selected.revision ? "true" : undefined}

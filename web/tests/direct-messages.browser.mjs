@@ -158,13 +158,22 @@ test("a member messages a colleague from People, who finds, reads and replies, t
     await owner.keyboard.press("Escape");
     await thread.waitFor({ state: "detached" });
 
-    // Your own groups are mirrored: dot and line on the right, toolbar on the left; each person keeps one color in both browsers.
+    // Your own messages hug the right edge with left-aligned text: dot and line on the right, toolbar on the left;
+    // each person keeps one color in both browsers.
     // The reply quotes "section 3" in its pointer, so match only the messages without one.
     const ownOriginal = conversation.locator(".org-message").filter({ hasText: "Could you read section 3", hasNot: owner.locator(".org-reply-pointer") });
     const theirCopy = reply.locator(".org-message").filter({ hasText: "Could you read section 3", hasNot: member.locator(".org-reply-pointer") });
     const mine = ownOriginal.locator("xpath=..");
     assert.match(await mine.getAttribute("class"), /org-message-group-mine/);
     assert.doesNotMatch(await answered.locator("xpath=..").getAttribute("class"), /org-message-group-mine/);
+    const placement = await ownOriginal.evaluate(element => {
+      const transcript = element.closest(".org-transcript"), area = transcript.getBoundingClientRect(), box = element.getBoundingClientRect();
+      return { align: getComputedStyle(element.querySelector("p")).textAlign,
+        left: box.left - area.left - parseFloat(getComputedStyle(transcript).paddingLeft),
+        right: area.right - parseFloat(getComputedStyle(transcript).paddingRight) - box.right };
+    });
+    assert.equal(placement.align, "start");
+    assert.ok(placement.right < 1 && placement.left > 100, `your message hugs the right edge: ${JSON.stringify(placement)}`);
     await ownOriginal.hover();
     const [box, launcher] = await Promise.all([ownOriginal.boundingBox(), ownOriginal.getByRole("button", { name: "Add reaction", exact: true }).boundingBox()]);
     assert.ok(launcher.x + launcher.width / 2 < box.x + box.width / 2, "the toolbar of your own message is on the left");

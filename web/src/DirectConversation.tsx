@@ -249,7 +249,7 @@ export function DirectConversationView({ organizationId, conversation, user, mem
   }, [linked]);
 
   // The same layout as topic chats: speaker groups in each person's color, a floating toolbar, a reaction pill,
-  // and reply pointers that open the whole thread. Your own groups are mirrored to the right.
+  // and reply pointers that open the whole thread. Your own groups hug the right edge, as in every chat.
   const transcript = useMemo(() => {
     const groups = alphaMessageGroups(messages);
     const byId = new Map(messages.map(message => [message.id, message]));
@@ -333,10 +333,13 @@ export function DirectConversationView({ organizationId, conversation, user, mem
     {threadFor && <ThreadDialog key={threadFor} messagesPath={root + "/messages"} messageId={threadFor} canWrite={writable}
       onClose={() => setThreadFor(null)} onAuthLost={onAuthLost} onPosted={message => setMessages(existing => mergeMessages(existing, [message]))}
       live={messages} attach={writable ? file => uploadDirectFile(file, root) : undefined}
-      renderMessage={message => <div className={"org-message-group org-speaker-human " + speakerTone(message, tones)}><article className="org-message">
-        <header><strong>{authorName(message)}</strong>
-          <time dateTime={new Date(message.created_at * 1000).toISOString()}>{new Date(message.created_at * 1000).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" })}</time></header>
-        {messageBody(message)}</article></div>} />}
+      renderGroup={group => <div className={"org-message-group org-speaker-human " + speakerTone(group[0], tones)
+        + (group[0].author_id === user.id ? " org-message-group-mine" : "")}>{group.map((message, index) =>
+        <article key={message.id} className={"org-message" + (index ? " org-message-continuation" : "")}>
+        <header>{!index && <strong>{authorName(message)}</strong>}
+          <time dateTime={new Date(message.created_at * 1000).toISOString()}>{index ? new Date(message.created_at * 1000).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" })
+            : new Date(message.created_at * 1000).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" })}</time></header>
+        {messageBody(message)}</article>)}</div>} />}
     <form className="org-composer" onSubmit={event => void send(event)}>
       <div className="org-composer-box">
       {draft.replyTo && <ReplyBar original={replyOriginal} label={replyOriginal && authorName(replyOriginal)} onCancel={cancelReply} />}

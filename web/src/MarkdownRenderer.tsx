@@ -1,7 +1,6 @@
 import ReactMarkdown, { defaultUrlTransform } from "react-markdown";
 import { useContext } from "react";
 import { RichTextPolicy } from "./RichTextPolicy";
-import rehypeKatex from "rehype-katex";
 import remarkGfm from "remark-gfm";
 import remarkMath from "remark-math";
 import "katex/dist/katex.min.css";
@@ -11,7 +10,7 @@ import {
   artifactNameFromPath,
   remarkArtifactLinks,
 } from "./artifactLinks";
-import { normalizeMathDelimiters } from "./markdownMath";
+import { normalizeMathDelimiters, rehypeMath } from "./markdownMath";
 import { openArtifact } from "./workbenchEvents";
 
 const SLUG = /\b(?:clm|prf|ref)_[0-9a-f]{4,}\b/g;
@@ -150,7 +149,7 @@ export function RichTextRenderer({
       remarkPlugins={inline
         ? [remarkMath, remarkArtifactLinks]
         : [remarkGfm, remarkMath, remarkArtifactLinks]}
-      rehypePlugins={[[rehypeKatex, { throwOnError: false }]]}
+      rehypePlugins={[rehypeMath]}
       urlTransform={urlTransform}
       allowedElements={inline
         ? INLINE_ELEMENTS

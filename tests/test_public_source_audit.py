@@ -7,6 +7,7 @@ import json
 import os
 import re
 import secrets
+import string
 import subprocess
 import tempfile
 import tomllib
@@ -14,6 +15,19 @@ import unittest
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
+
+
+def canary_value():
+    """A fresh value that the default generic-api-key rule always reports.
+
+    Ten distinct letters alternate with ten distinct digits. The value's Shannon entropy is therefore always
+    log2(20), about 4.32 bits, above the rule's 3.5-bit threshold. No stopword of the rule alternates letters
+    and digits, so none can occur in it. A random hex value missed about 1% of the time: it fell below the
+    threshold or contained a stopword such as "dead".
+    """
+    rng = secrets.SystemRandom()
+    letters, digits = rng.sample(string.ascii_lowercase, 10), rng.sample(string.digits, 10)
+    return "".join(letter + digit for letter, digit in zip(letters, digits, strict=True))
 
 
 class SourceAuditConfiguration(unittest.TestCase):
@@ -43,13 +57,15 @@ class SourceAuditConfiguration(unittest.TestCase):
             candidate = root / "tests/test_cloud_client.py"
             candidate.parent.mkdir()
             # Generated only for this scanner test; never a provider credential.
-            candidate.write_text('api_key = "' + secrets.token_hex(24) + '"\n')
+            candidate.write_text('api_key = "' + canary_value() + '"\n')
             report = root / "report.json"
-            result = subprocess.run([os.environ["REASONING_GITLEAKS"], "dir", str(root), "--config", str(ROOT / ".gitleaks.toml"),
+            # Scan "." from the root so the finding's path is the repository-relative one the exempt paths match.
+            result = subprocess.run([os.environ["REASONING_GITLEAKS"], "dir", ".", "--config", str(ROOT / ".gitleaks.toml"),
                                      "--redact=100", "--no-banner", "--log-level", "error", "--report-format", "json",
-                                     "--report-path", str(report)], capture_output=True, timeout=30)
+                                     "--report-path", str(report)], capture_output=True, timeout=30, cwd=root)
             self.assertEqual(result.returncode, 1)
-            self.assertTrue(any(row["RuleID"] == "generic-api-key" for row in json.loads(report.read_text())))
+            self.assertTrue(any(row["RuleID"] == "generic-api-key" and row["File"] == "tests/test_cloud_client.py"
+                                for row in json.loads(report.read_text())))
 
 
 if __name__ == "__main__":

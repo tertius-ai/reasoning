@@ -80,14 +80,36 @@ export function joinThread(messages: Message[], live: Message[]): Message[] {
   return [...byId.values()].sort((a, b) => a.sequence - b.sequence);
 }
 
+/** Whether a message continues its predecessor's run: same person or bot, not a model, within five minutes on the same day. */
+export function continuesRun(last: Message, message: Message): boolean {
+  return last.author_id === message.author_id && last.author_kind === message.author_kind && message.author_kind !== "assistant"
+    && message.created_at >= last.created_at && message.created_at - last.created_at <= 300
+    && new Date(last.created_at * 1000).toDateString() === new Date(message.created_at * 1000).toDateString();
+}
+
+/**
+ * A thread's messages in runs, as in a direct conversation: the root alone, then each reply joins the run before it when
+ * it continues that run. Every reply answers the root, so unlike in a conversation a reply does not start a run of its own.
+ */
+export function threadGroups(messages: Message[]): Message[][] {
+  const groups: Message[][] = [];
+  for (const [index, message] of messages.entries()) {
+    const last = groups.at(-1)?.at(-1);
+    if (index > 1 && last && continuesRun(last, message)) groups.at(-1)!.push(message);
+    else groups.push([message]);
+  }
+  return groups;
+}
+
 /**
  * The whole thread over a dimmed conversation: the root, then every reply in order, with a box to reply in the thread.
  * A reply written here answers the thread's root. Escape or a click outside closes it.
  */
-export function ThreadDialog({ messagesPath, messageId, canWrite, renderMessage, onPosted, onClose, onAuthLost, live, working, attach, addTo, onStopAdding }: {
+export function ThreadDialog({ messagesPath, messageId, canWrite, renderGroup, onPosted, onClose, onAuthLost, live, working, attach, addTo, onStopAdding }: {
   /** The conversation's messages endpoint: a topic's or a direct conversation's. */
   messagesPath: string; messageId: string; canWrite: boolean;
-  renderMessage: (message: Message, first: boolean) => React.ReactNode;
+  /** One run of the thread (see `threadGroups`) as a speaker group. */
+  renderGroup: (messages: Message[]) => React.ReactNode;
   onPosted: (message: Message) => void; onClose: () => void; onAuthLost: () => void;
   /** The conversation's current messages: replies that arrive while the thread is open join it. */
   live?: Message[];
@@ -178,7 +200,7 @@ export function ThreadDialog({ messagesPath, messageId, canWrite, renderMessage,
       <button type="button" aria-label="Close thread" onClick={() => dialog.current?.close()}>×</button></header>
     <div className="org-thread-messages" ref={list}>
       {!thread && !error && <p role="status">Loading the thread…</p>}
-      {shown.map((message, index) => <React.Fragment key={message.id}>{renderMessage(message, index === 0)}</React.Fragment>)}
+      {threadGroups(shown).map(group => <React.Fragment key={group[0].id}>{renderGroup(group)}</React.Fragment>)}
       {thread && working?.(shown)}
       {thread?.truncated && <p className="org-help">Only the first 200 messages of this thread are shown.</p>}
     </div>
