@@ -161,7 +161,8 @@ export type ModelRun = {
     message_ids?: string[]; step?: number | null;
     /** For tool events: what the call did, in a short phrase ("searched arXiv for “x” · 4 results"). */
     detail?: string }[];
-  answer_state?: { status: "working" | "waiting" | "partial" | "response_ready"; reason?: string | null;
+  /** "continued": the run waited and the server then handed its work to next_run, which carries the answer. */
+  answer_state?: { status: "working" | "waiting" | "continued" | "partial" | "response_ready"; reason?: string | null; next_run?: string;
     checkpoint?: { summary: string; remaining?: string; sources?: string[] } | null } | null;
   diagnostics?: ProviderDiagnostics | null;
   usage?: MessageUsage;

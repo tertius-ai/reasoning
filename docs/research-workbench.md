@@ -227,8 +227,10 @@ web search are distinct, and missing grants are not a source-reader failure.
 For substantial work, `answer_checkpoint` retains a readable provisional answer,
 remaining gap and source locators without completing a goal. Run detail exposes
 the latest checkpoint and an `answer_state` separate from execution/accounting:
-working, waiting, partial, or response_ready. A successful review/delegate
-handoff remains waiting and incomplete. Interruption, timeout and budget refusal
+working, waiting, continued, partial, or response_ready. A turn that suspends
+for a review or delegates remains waiting and incomplete until the server hands
+its work to a continuation turn; it is then continued, names that `next_run`,
+and the continuation carries the answer. Interruption, timeout and budget refusal
 retain useful output/checkpoints in the transcript with the stop reason; no
 automatic replay of uncertain paid calls is authorized. Execution success and a
 visible response do not certify the mathematics or satisfy a goal's criteria.
