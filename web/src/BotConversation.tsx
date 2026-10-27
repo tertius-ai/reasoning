@@ -47,7 +47,7 @@ export function BotConversation({ organizationId, topicId, names, userId, canWri
     const controller = new AbortController(), backoff = new PollBackoff(2000, 8000);
     // A live topic event stream delivers invocations; polling then only runs as a slow safety net, and a poll's
     // result is dropped if the stream delivered anything since that poll started.
-    let live = false, streamed = 0, poller: { wake(): void } | null = null;
+    let live = false, streamed = 0, healthy = false, poller: ReturnType<typeof startPolling> | null = null;
     const poll = async (): Promise<number | null> => {
       let active = true, failed = false;
       const version = streamed;
@@ -63,10 +63,16 @@ export function BotConversation({ organizationId, topicId, names, userId, canWri
           body: <p className="org-help" role="status">Bot activity unavailable: {errorMessage(cause)}</p> }]);
         failed = true;
       }
+      healthy = !failed;
       return controller.signal.aborted ? null : live && !failed ? LIVE_SAFETY_POLL_MS : backoff.next(active);
     };
     const unsubscribe = subscribeTopicEvents(organizationId, topicId, {
-      status: status => { const next = status === "live"; if (live && !next) poller?.wake(); live = next; },
+      // Becoming live defers a poll scheduled at the ordinary cadence: the stream delivers the current state at once.
+      status: status => {
+        const next = status === "live";
+        if (live && !next) poller?.wake(); else if (!live && next && healthy) poller?.defer(LIVE_SAFETY_POLL_MS);
+        live = next;
+      },
       bots: runs => { streamed += 1; setRuns(runs); setConnected(true); },
     });
     poller = startPolling(poll, controller.signal, live && streamed ? LIVE_SAFETY_POLL_MS : 0);
