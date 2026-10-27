@@ -53,7 +53,9 @@ apt-cache show --no-all-versions $packages |
 : > "$PREFETCH_WORK/queue"
 while read -r uri file _; do
   uri=${uri//\'/}
+  # The URI is percent-encoded (a "+" in a version is "%2b"); the index's Filename is not.
   path=pool/${uri#*/pool/}
+  path=$(printf '%b' "${path//%/\\x}")
   read -r sum digest < <(awk -v path="$path" '$1 == path {print $2, $3; exit}' "$PREFETCH_WORK/index")
   if [ -z "${digest:-}" ]; then
     echo "left $file to apt: no SHA-256 or SHA-512 in the index for $uri"
