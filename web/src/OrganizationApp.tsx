@@ -17,7 +17,7 @@ import { ComputeConversation } from "./ComputeConversation";
 import { DirectConversation, DirectMessageMarks, DirectMessagePicker, NewDirectMessageButton, directPath, directUnread, directUnreadTotal, peopleInbox } from "./DirectMessages";
 import { KnowledgeLinks, KnowledgeView } from "./KnowledgeLinks";
 import { ReplyBar, ReplyPointer, ThreadCount, ThreadDialog, threadReplyCounts } from "./MessageReplies";
-import { additionReceipt, modelName, moveBlocked, moveTarget, replyThreads, shownInReply, threadAnswering } from "./ReplyAdditions";
+import { additionReceipt, modelName, moveBlocked, moveTarget, replyThreads, shownInReply, stepCount, threadAnswering } from "./ReplyAdditions";
 import { MentionMirror, MentionSelf, MentionTag, chatTones, mentionFromHref, mentionInitials, speakerKey, speakerTone, toneClass } from "./mentions";
 import { LazyView } from "./LazyView";
 import { WorkflowConversation } from "./WorkflowConversation";
@@ -611,7 +611,7 @@ export const BetaModelMenu = React.memo(function BetaModelMenu({ configuration, 
 
 /** The folded line under a model answer: how many steps its reply took and how many later messages it read. */
 export function replyRecordSummary(message: Pick<Message, "steps" | "additions">): string {
-  const steps = message.steps?.filter(step => step.phase === "round").length ?? 0, added = message.additions?.length ?? 0;
+  const steps = stepCount(message.steps ?? []), added = message.additions?.length ?? 0;
   return [steps ? `${steps} ${steps === 1 ? "step" : "steps"}` : "",
     added ? `took ${added} later ${added === 1 ? "message" : "messages"} into account` : ""].filter(Boolean).join(" · ")
     .replace(/^./, letter => letter.toUpperCase());

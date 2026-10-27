@@ -67,6 +67,13 @@ const iconFor = (detail: string): StepIcon => detail.startsWith("searched") ? "s
       : detail.startsWith("submitted") || detail.startsWith("checked") ? "compute" : "think";
 
 /**
+ * How many steps a reply took. Its recorded activity keeps only the latest events, so the count is the highest step
+ * number rather than the number of steps kept.
+ */
+export const stepCount = (activity: Activity) =>
+  activity.filter(event => event.phase === "round").reduce((most, event, index) => Math.max(most, event.round ?? index + 1), 0);
+
+/**
  * A reply's steps in order, each described by what its tool calls did, and every addition where the reply read it:
  * an addition is read just before the provider call that starts a step. While the reply runs, unread additions follow
  * the last step, waiting for the next one. `unplaced` also lists read additions whose read event is not among these
@@ -105,6 +112,10 @@ export function replyTimeline(activity: Activity, additions: ReplyAddition[], ac
     }
   }
   close();
+  // The recorded activity keeps only the latest events; say so when the earliest steps fell outside it.
+  const first = activity.find(event => event.phase === "round")?.round ?? 1;
+  if (first > 1) entries.unshift({ kind: "step", key: "earlier", current: false, icon: "summary",
+    label: first === 2 ? "Step 1 not shown" : `Steps 1–${first - 1} not shown` });
   const last = entries.map(entry => entry.kind).lastIndexOf("step");
   if (active && last >= 0) entries[last] = { ...entries[last], current: true } as TimelineEntry;
   if (unplaced) {

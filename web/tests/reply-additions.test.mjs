@@ -67,6 +67,21 @@ test("the timeline describes each step and places additions where the reply read
   assert.equal(record.at(-1).addition.content, "Read by another run.", "the folded record also lists additions read by other runs");
 });
 
+test("a record that kept only the latest steps counts every step and says the earliest are not shown", () => {
+  // The recorded activity of an 18-step reply keeps its latest events, from part of step 8 to step 18.
+  const kept = [event(40, "tool_completed", { tool: "web_fetch", detail: "fetched en.wikipedia.org" })];
+  for (let round = 9; round <= 18; round++) kept.push(event(40 + round * 2, "round", { round }),
+    event(41 + round * 2, "tool_completed", { tool: "scientific_calculate", detail: "scientific calculate" }));
+  assert.equal(additions.stepCount(kept), 18, "the count is the highest step number, not the steps kept");
+  const entries = additions.replyTimeline(kept, [], false).map(entry => entry.label);
+  assert.deepEqual(entries.slice(0, 3), ["Steps 1–8 not shown", "Step 9 · scientific calculate", "Step 10 · scientific calculate"]);
+  assert.equal(entries.length, 11);
+  assert.equal(additions.replyTimeline([event(1, "round", { round: 2 })], [], false)[0].label, "Step 1 not shown");
+  assert.equal(additions.stepCount([event(1, "round", { round: 1 }), event(2, "round", { round: 2 })]), 2);
+  assert.equal(additions.replyTimeline([event(1, "round", { round: 1 })], [], false).length, 1, "a complete record has no marker");
+  assert.equal(additions.stepCount([]), 0);
+});
+
 test("an added message leaves the transcript only while its reply runs or once an answer lists it", () => {
   const folded = new Set(["a"]);
   assert.equal(additions.shownInReply(undefined, true, folded), false);
