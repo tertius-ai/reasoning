@@ -1,3 +1,8 @@
+import rehypeKatex from "rehype-katex";
+import type { Root } from "hast";
+import type { VFile } from "vfile";
+import { messageMacros } from "./katexMacros";
+
 /** A delimiter counts only when its backslash is not itself escaped, so a LaTeX row break with spacing such as
  * `\\[2mm]` is `\\` followed by `[2mm]`, not the start of display math. Matching `\\` first keeps pairs together. */
 const DELIMITER = /\\\\|\\([()[\]])/g;
@@ -13,4 +18,9 @@ export function normalizeMathDelimiters(text: string): string {
         bracket === undefined ? match : bracket === "(" || bracket === ")" ? "$" : "\n$$\n");
     })
     .join("");
+}
+
+/** rehype-katex with the shared macro table, for every Markdown view that renders math. */
+export function rehypeMath() {
+  return (tree: Root, file: VFile) => rehypeKatex({ macros: messageMacros(String(file.value ?? "")) })(tree, file);
 }

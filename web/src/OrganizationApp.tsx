@@ -5,7 +5,6 @@ import React, { lazy, useCallback, useEffect, useMemo, useRef, useState } from "
 import ReactMarkdown, { Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import remarkMath from "remark-math";
-import rehypeKatex from "rehype-katex";
 import { BetaConversation, definitiveRejection, pausedRun, requestModelReply } from "./BetaConversation";
 import { Feedback, ForkOrigin, MessageActions } from "./ChatFeedback";
 import { BotApprovalDialog, useBotApprovals } from "./BotApprovals";
@@ -29,7 +28,7 @@ import { ComputeAttempt } from "./compute-api";
 import { MessageUsageDetails } from "./MessageUsageDetails";
 import { ReplyFiles } from "./ReplyFiles";
 import { ReplyTimeline, WorkingCard } from "./ReplyTimeline";
-import { normalizeMathDelimiters } from "./markdownMath";
+import { normalizeMathDelimiters, rehypeMath } from "./markdownMath";
 import { catalogModel, modelOptionGroups } from "./modelRecommendations";
 import { EffortPicker, ModelPicker, compactTokens } from "./ModelBrowser";
 import { ResearchControls, RESEARCH_TOOLS, ResearchTool, TOOL_LABELS, goalCommand } from "./ResearchControls";
@@ -80,7 +79,7 @@ const newDraft = (): Draft => ({ text: "", clientId: crypto.randomUUID(), attemp
 /** Keep the current value when a refresh returns equal data, so dependent views and effects do not restart. */
 export const unchanged = <T,>(current: T, next: T): T => JSON.stringify(current) === JSON.stringify(next) ? current : next;
 // Stable renderer types and plugin lists preserve DOM selection across activity and message polling.
-const messageRemarkPlugins = [remarkGfm, remarkMath, remarkReferences], messageRehypePlugins = [rehypeKatex];
+const messageRemarkPlugins = [remarkGfm, remarkMath, remarkReferences], messageRehypePlugins = [rehypeMath];
 const messageMarkdownComponents: Components = {
   a: ({ children, href }) => {
     const mentioned = mentionFromHref(href);

@@ -2,9 +2,8 @@ import React, { Suspense, lazy, useCallback, useEffect, useRef, useState } from 
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import remarkMath from "remark-math";
-import rehypeKatex from "rehype-katex";
 import { ApiError, aborted, errorMessage, organizationPath, request } from "./organization-api";
-import { normalizeMathDelimiters } from "./markdownMath";
+import { normalizeMathDelimiters, rehypeMath } from "./markdownMath";
 import "./mathematics-browser.css";
 import { GraphView } from "./Graph";
 import type { ClaimDetail, ClaimSummary, GraphPayload, ReferenceSummary } from "./api";
@@ -23,7 +22,7 @@ type Claim = ClaimSummary;
 type Detail = ClaimDetail;
 const label = (claim: Claim) => claim.authority === "review" ? "LLM-reviewed" : claim.kind === "definition" ? "Definition" : claim.status;
 export function ResearchMarkdown({ children }: { children: string }) {
-  return <ReactMarkdown remarkPlugins={[remarkGfm, remarkMath, remarkReferences]} rehypePlugins={[rehypeKatex]} components={{ img: MarkdownMedia,
+  return <ReactMarkdown remarkPlugins={[remarkGfm, remarkMath, remarkReferences]} rehypePlugins={[rehypeMath]} components={{ img: MarkdownMedia,
     a: MarkdownReferenceAnchor,
     p: ({ node, children }) => node?.children.some(child => child.type === "element" && child.tagName === "img")
       ? <div className="topic-media-paragraph">{children}</div> : <p>{children}</p>,

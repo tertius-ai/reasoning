@@ -817,7 +817,11 @@ Beta creation then requires a default model when models are enabled and keeps
 its default knowledge tools in a collapsed disclosure. The primary conversation
 renders Markdown and KaTeX mathematics
 delimited by `$…$`, `$$…$$`, `\(…\)`, or `\[…\]`, while leaving delimiters in
-inline and fenced code unchanged. Author labels and timestamps accompany every
+inline and fenced code unchanged. KaTeX also knows a small table of operator
+names that papers define as macros, such as `\CH` for `\operatorname{CH}`
+(`web/src/katexMacros.ts`); the ledger's TeX checker and the static blog use the
+same table, and a message that defines one of these names with `\newcommand` keeps
+its own definition. Author labels and timestamps accompany every
 message. Private uploaded pictures and PDFs render through authenticated attachment
 references; `/attach` opens the file chooser. Raw HTML and external images are not rendered;
 member names inserted by mentions are escaped as Markdown text.

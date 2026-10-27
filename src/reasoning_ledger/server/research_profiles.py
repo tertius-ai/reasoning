@@ -7,7 +7,7 @@ import hashlib
 import json
 from importlib import resources
 
-PROMPT_VERSION = "topic-agents-v9"
+PROMPT_VERSION = "topic-agents-v10"
 SYSTEM_PROMPT = (resources.files("reasoning_ledger") / "prompts" / "beta-research.md").read_text(encoding="utf8")
 PROFILES = {
     "workbench": ("Conversation and research", "Answer the question; use durable knowledge and review when useful.", ""),
