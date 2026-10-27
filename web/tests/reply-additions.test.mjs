@@ -42,6 +42,18 @@ test("receipts say where an addition went and whether the reply has read it", ()
 
 const event = (sequence, phase, extra = {}) => ({ sequence, phase, ...extra });
 
+test("temporary provider credit waits remain visible until the next step starts", () => {
+  const activity = [event(1, "round", { round: 1 }), event(2, "provider_credit_wait", {
+    summary: "Waiting for OpenRouter credits or recent charges to settle",
+  })];
+  const waiting = additions.replyTimeline(activity, [], true);
+  assert.match(waiting.at(-1).label, /Waiting for OpenRouter credits/);
+  assert.equal(waiting.at(-1).current, true);
+  const resumed = additions.replyTimeline([...activity, event(3, "round", { round: 2 })], [], true);
+  assert.equal(resumed.at(-2).current, false);
+  assert.match(resumed.at(-1).label, /Step 2/);
+});
+
 test("the timeline describes each step and places additions where the reply read them", () => {
   const activity = [event(1, "round", { round: 1 }),
     event(2, "tool_requested", { tool: "arxiv_search", detail: "searched arXiv for “regulators”" }),

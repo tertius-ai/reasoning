@@ -7,14 +7,14 @@ succeeds. Responses and progress
 are visible to the organization's members, including viewers. No desktop or
 member-owned API key is needed. Alpha topics do not execute models. Gamma
 [workflow runs](server.md#durable-workflow-runs) use this same inference executor
-and organization budget with captured node prompts/dependency data instead of
+and provider spending limits with captured node prompts/dependency data instead of
 beta topic history. Their paid child admission and attempt linkage are atomic.
 
 ## Configure and request
 
 An owner or administrator uses **Administration → Inference** to add one or more
-OpenRouter keys and set a positive monthly USD
-budget. The closed Add key form always creates a new credential; stored secret
+OpenRouter keys. Configure a daily spending limit on a dedicated key in OpenRouter;
+the provider enforces that limit. The closed Add key form always creates a new credential; stored secret
 values are never placed in its fields or returned to the browser. A new key
 can use every available text-to-text model or router; new catalog entries require
 no organization policy update. Chat selectors omit batch-only, embedding, and
@@ -27,6 +27,16 @@ key identifier is pinned internally; disabling it cancels affected queued or
 running work rather than silently switching an accepted request to another key.
 Provider-key values are decrypted only in the server executor and never included
 in run records, progress events, client responses, or error messages.
+
+The small bar beside **Reasoning** shows the active key's provider-reported daily
+spend and daily limit to every organization member. Open it for exact amounts,
+the last successful check and the next midnight UTC reset. The read-only
+`GET /api/organizations/{organization_id}/provider-daily-spend` endpoint shares
+a 30-second cache per active key and UTC day; failed lookups retry after five
+seconds. Rotation invalidates the cached selection. Missing keys, missing daily
+limits, and unavailable metadata are explicit states, never a zero balance.
+This status lookup does not admit or block inference. Shared keys share the
+same upstream allowance across every application and organization using them.
 
 Choose the initial model and knowledge access when creating a beta topic.
 Sending a human message captures context through that committed message and
@@ -114,7 +124,7 @@ stream fragments and output-limit continuations are concatenated unchanged.
 Beta and gamma model steps use this loop. When an answer or provider-supplied
 reasoning stops at an output limit, the executor can continue it, preserving
 answer segments and opaque reasoning metadata. These are new paid
-submissions, admitted against organization and goal budgets before execution,
+submissions, checked against explicit goal budgets before execution and provider limits at submission,
 not retries of failed or ambiguous calls. There is no fixed continuation count
 or cumulative output-token quota. Organization research turns have no implicit
 tool-count ceiling and have a bounded execution deadline. Goal turns and their
@@ -462,7 +472,9 @@ Under `/api/organizations/{organization_id}/topics/{topic_id}`:
 `GET /api/organizations/{organization_id}/inference-configuration` returns
 current catalog model choices (the compatibility field `allowed_models`),
 `model_access: "all_available"`, whether an active key exists, execution/worker availability, and
-budget/spent/reserved/uncertain/available balances. It never returns a key value.
+today's local confirmed charges plus reserved and uncertain accounting estimates.
+It never returns a key value. Provider daily limits are reported separately by
+`GET /api/organizations/{organization_id}/provider-daily-spend`.
 All routes enforce tenant membership and the same Origin/CSRF rules as human
 message writes. There can be at most eight queued/running child model runs per
 organization and twenty new requests per requester/organization in fifteen
@@ -499,7 +511,7 @@ executor crash. Valid Unicode and split UTF-8 bytes retain their exact text.
 The transport accepts content-free accounting frames that repeat a terminal
 finish reason, as described in [OpenRouter's streaming format](https://openrouter.ai/docs/api_reference/streaming).
 
-The worker checks cancellation, membership, budget reductions, and
+The worker checks cancellation, membership, explicit goal budgets, and
 key disabling while waiting for the provider, including when its stream is
 silent. Completed replies are saved once. Failed, cancelled, or interrupted
 partial text is saved with an explicit incomplete-response label. A stale
@@ -543,13 +555,15 @@ chosen output allowance or the 8,192-token reservation estimate. This estimate
 is not a tokenizer measurement or an invoice cap and is never sent as a default
 output-token limit. A running hold covers confirmed calls plus outstanding-call
 estimates, not accumulated obsolete estimates. All selected models'
-reservations are checked and committed in one write transaction, so competing
-requests cannot independently reserve the same available balance.
+estimates are committed in one write transaction. These records support
+accounting and explicit task budgets; OpenRouter owns organization spending enforcement.
 
-Known charges settled during the current UTC calendar month count as spent.
-Outstanding reservations and uncertain charges remain held across month
-boundaries. Admission is blocked when their sum plus known spending cannot
-cover a new request. Valid final usage settles the actual provider cost;
+Reasoning retains confirmed charges, outstanding estimates and uncertain
+charges for accounting. Local spend summaries cover the current UTC day;
+outstanding and uncertain records remain visible across day boundaries.
+Organization spending is enforced by OpenRouter, with no additional local
+monthly or daily admission cap. Explicit research-goal and work-assignment
+budgets remain part of their authorized task. Valid final usage settles the actual provider cost;
 definite pre-submission refusals and HTTP 400/401/402/403/404/413/422 refusals
 before streaming release the rejected call's reservation: the provider refused
 the request itself and produced no generation. A timeout (408), rate limit (429)
@@ -559,14 +573,24 @@ cost of zero and is released. Earlier successful calls in the same turn retain
 their actual charges. An error inside an accepted stream, including 402,
 without trustworthy usage retains its reservation as uncertain. Validated usage
 and generation IDs in an error event are retained before the error is raised;
-accounting can settle while execution remains failed. The executor performs no
-automatic paid retries.
+accounting can settle while execution remains failed. Ambiguous paid calls are
+never retried automatically.
+
+Native beta/gamma turns and compaction can wait and resubmit a definite HTTP 402
+refusal when `limit_source` is `openrouter_in_flight_budget`, or
+`openrouter_credits` without a permanent rejection reason. The waits are 5, 15
+and 30 seconds, extended by a numeric `Retry-After` up to 60 seconds, within the
+turn deadline. Each refused attempt has a released accounting receipt, and
+progress says it is waiting for provider credits or recent charges to settle.
+Cancellation and authority are rechecked. Daily/key-limit refusals, requests
+whose estimate exceeds the provider budget, errors inside accepted streams,
+and requests with unknown outcomes are not automatically resubmitted.
 
 Without an explicit output ceiling, a call can exceed its output/cost estimate.
 Known usage is settled in full even when it exceeds the reservation; budgets
-then govern further admission. Local admission cannot guarantee an upstream invoice ceiling: provider billing,
+remain recorded in full. Provider billing,
 tokenization, fees, other uses of the key, and cancellation behavior are outside
-this ledger. Set spending limits on the OpenRouter credential and monitor its
+this ledger. Set a daily spending limit on the OpenRouter credential and monitor its
 activity. Usage includes the provider-reported total charged cost, not merely
 the upstream inference cost; see [OpenRouter usage accounting](https://openrouter.ai/docs/cookbook/administration/usage-accounting).
 
@@ -581,6 +605,10 @@ Credit refusals can also include allowlisted
 `limit_source` and `reason` enums distinguishing key limits, balance/oversized
 request estimates, and temporary concurrent spending limits. These follow
 [OpenRouter's credit-limit contract](https://openrouter.ai/docs/api_reference/limits).
+HTTP 403 budget refusals identify key, guardrail or workspace limits through
+allowlisted `limit_source` values and explain that credit top-ups do not reset
+the provider allowance. These refusals release the rejected call's estimate and
+are not automatically retried.
 A 404, when OpenRouter finds no endpoint for the model and request, can include
 an `unmatched` enum read from its message: `data_policy` (the account's privacy
 settings or zero-data-retention routing exclude every endpoint; free models

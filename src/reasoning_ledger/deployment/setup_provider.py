@@ -68,15 +68,20 @@ def configure_openrouter(config: dict, owner: dict, organization: str, directory
         complete = False
         try:
             endpoint = "/api/organizations/" + organization
-            actual = request("GET", endpoint + "/policy")
-            if actual != desired:
-                if actual != {"allowed_models": [], "monthly_budget_microusd": 0} or journal["policy_phase"] != "not_requested":
+            policy = {"allowed_models": desired["allowed_models"]}
+            def current_policy():
+                value = request("GET", endpoint + "/policy")
+                return {"allowed_models": value["allowed_models"]}
+
+            actual = current_policy()
+            if actual != policy:
+                if actual != {"allowed_models": []} or journal["policy_phase"] != "not_requested":
                     raise InstallError("organization policy has changed; setup will not overwrite administrator edits")
                 journal["policy_phase"] = "setting"
                 write_document(path, journal)
-                if request("PUT", endpoint + "/policy", desired) != desired:
+                if request("PUT", endpoint + "/policy", policy) != policy:
                     raise InstallError("organization LLM policy is unverified")
-            if request("GET", endpoint + "/policy") != desired:
+            if current_policy() != policy:
                 raise InstallError("organization LLM policy is unverified")
             journal["policy_phase"] = "ready"
             write_document(path, journal)

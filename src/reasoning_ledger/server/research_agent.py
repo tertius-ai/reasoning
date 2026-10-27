@@ -373,7 +373,7 @@ class ResearchAgent:
     def _compaction_complete(self, payload, timeout):
         import asyncio
 
-        return asyncio.run(self.client.submit(payload, timeout=timeout, purpose="compaction"))
+        return asyncio.run(self.client.submit_with_credit_retry(payload, timeout=timeout, purpose="compaction"))
 
     def _stopped(self):
         self.cancelled = bool(self.stop_requested() or time.monotonic() >= self.deadline or self.inference.stopped(self.row))

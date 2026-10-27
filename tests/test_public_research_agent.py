@@ -290,14 +290,16 @@ def test_final_admission_revocation_is_cancelled_even_without_another_native_cal
     def refused(executor, prepared, emit, *, cancelled):
         from reasoning_ledger.server.store import Store
 
-        Store(config.data_dir).set_policy(owner["user_id"], owner["organization_id"], MODELS, 0)
+        store = Store(config.data_dir)
+        key = store.keys(owner["user_id"], owner["organization_id"])[0]
+        store.disable_key(owner["user_id"], owner["organization_id"], key["id"])
         return AgentRunResult(prepared.run_id, native_status, output_text="Not authorized for publication", error="admission refused")
 
     monkeypatch.setattr("reasoning_ledger.server.research_agent.ReasoningNativeExecutor.execute", refused)
     fixture = ResearchFixture()
     state, owner, _, row = turn(installation, fixture)
     run = state.run(owner["user_id"], owner["organization_id"], row["id"])
-    assert run["status"] == "cancelled" and run["error_code"] == "model_policy_changed"
+    assert run["status"] == "cancelled" and run["error_code"] == "key_disabled"
     assert not fixture.requests
 
 

@@ -49,6 +49,11 @@ for (const loss of ["network", "gateway-timeout"]) test(`shared beta responses s
   const calls = [], errors = [];
   let closedSlow = false, catalogRequests = 0;
   const provider = createServer(async (request, response) => {
+    if (request.url.split("?")[0] === "/api/v1/key") {
+      response.writeHead(200, { "Content-Type": "application/json" });
+      response.end(JSON.stringify({ data: { usage_daily: calls.length * 0.000008,
+        limit: 50, limit_remaining: 50 - calls.length * 0.000008, limit_reset: "daily" } })); return;
+    }
     if (request.url.split("?")[0] === "/api/v1/models") {
       catalogRequests++;
       response.writeHead(200, { "Content-Type": "application/json" });
@@ -184,9 +189,27 @@ for (const loss of ["network", "gateway-timeout"]) test(`shared beta responses s
     assert.equal(await settings.getByLabel("OpenRouter API key").count(), 0);
     await visible(settings.locator("li").filter({ hasText: "Shared key" }));
     assert.equal(await settings.getByLabel("Allowed OpenRouter models").count(), 0);
-    await settings.getByLabel("Monthly budget (USD)").fill("1"); await settings.getByRole("button", { name: "Save budget" }).click();
-    await visible(settings.getByRole("button", { name: "Save budget" }).and(settings.locator(":enabled")));
+    assert.equal(await settings.getByLabel("Monthly budget (USD)").count(), 0);
+    await visible(settings.getByRole("heading", { name: "Daily spending limit" }));
     await settings.getByRole("button", { name: "Close dialog" }).click();
+    await owner.bringToFront();
+    await owner.evaluate(() => window.dispatchEvent(new Event("focus")));
+    const daily = owner.locator(".org-daily-spend");
+    await visible(daily.getByLabel(/^OpenRouter daily spend:/));
+    assert.equal(await owner.locator(".org-daily-spend").count(), 1);
+    assert.ok((await daily.locator(".org-daily-meter").boundingBox()).height <= 5);
+    await daily.locator("summary").click();
+    await visible(daily.getByText("Daily spending · OpenRouter", { exact: true }));
+    assert.match(await daily.innerText(), /00:00 UTC/);
+    await daily.locator("summary").click();
+    if (process.env.REASONING_DAILY_SPEND_SCREENSHOT) await owner.screenshot({ path: process.env.REASONING_DAILY_SPEND_SCREENSHOT });
+    // A failed read clears the displayed figures rather than inventing a zero balance.
+    await owner.route("**/provider-daily-spend", route => route.abort("failed"));
+    await owner.evaluate(() => window.dispatchEvent(new Event("focus")));
+    await visible(daily.getByText("Spend unavailable", { exact: true }));
+    await owner.unroute("**/provider-daily-spend");
+    await owner.evaluate(() => window.dispatchEvent(new Event("focus")));
+    await visible(daily.getByLabel(/^OpenRouter daily spend:/));
     await owner.getByRole("button", { name: "Account menu", exact: true }).click();
     await owner.getByRole("button", { name: "Usage and energy", exact: true }).click();
     const usagePanel = owner.getByRole("dialog", { name: "Usage and energy" });

@@ -32,6 +32,7 @@ from .store import StoreError
 from .usage_store import UsageStore
 
 REASONING_TEXT_FIELDS = ("text", "summary", "data", "signature")
+CREDIT_RETRY_DELAYS = (5, 15, 30)
 logger = logging.getLogger(__name__)
 
 
@@ -127,12 +128,44 @@ class ResearchCompletion:
             payload = self.context_transform(payload)
         spans.mark("context_transform")
         try:
-            return asyncio.run(self.submit(payload, timeout=timeout, spans=spans))
+            return asyncio.run(self.submit_with_credit_retry(payload, timeout=timeout, spans=spans))
         except StoreError:
             # Admission failed before a submission receipt. Earlier paid calls
             # stay in aggregate(); do not reserve or replay the refused call.
             self.failure_code = "execution_not_authorized"
             raise ProviderError(self.failure_code, no_charge=True) from None
+
+    async def submit_with_credit_retry(self, payload, *, timeout, purpose=None, spans=None):
+        """Only known temporary pre-generation credit refusals are safe to submit again."""
+        deadline = time.monotonic() + timeout
+        for attempt in range(len(CREDIT_RETRY_DELAYS) + 1):
+            try:
+                result = await self.submit(payload, timeout=max(1, deadline - time.monotonic()), purpose=purpose, spans=spans)
+                self.failure_code = None
+                return result
+            except ProviderError as error:
+                diagnostic = error.diagnostics or {}
+                transient = diagnostic.get("limit_source") == "openrouter_in_flight_budget" or (
+                    diagnostic.get("limit_source") == "openrouter_credits" and not diagnostic.get("reason"))
+                if (not error.no_charge or self.partial_generation is not None or diagnostic.get("phase") != "http"
+                        or diagnostic.get("http_status") != 402 or not transient or attempt == len(CREDIT_RETRY_DELAYS)):
+                    raise
+                delay = max(CREDIT_RETRY_DELAYS[attempt], getattr(error, "retry_after_seconds", 0))
+                if time.monotonic() + delay >= deadline:
+                    raise
+                with self.inference.store.transaction(write=True) as db:
+                    self.inference._event(db, self.row["organization_id"], self.row["id"], {
+                        "type": "agent", "phase": "provider_credit_wait", "attempt": attempt + 1, "seconds": delay,
+                        "summary": "Waiting for OpenRouter credits or recent charges to settle", "diagnostics": diagnostic,
+                    })
+                await self._wait_for_credit(delay)
+
+    async def _wait_for_credit(self, delay):
+        deadline = time.monotonic() + delay
+        while time.monotonic() < deadline:
+            self._check_cancel()
+            await asyncio.sleep(min(0.1, max(0, deadline - time.monotonic())))
+        self._check_cancel()
 
     async def submit(self, payload, *, timeout, purpose=None, spans=None):
         """``spans`` times this call's preparation; values are durations only, never request content."""
@@ -307,7 +340,9 @@ class ResearchCompletion:
                 error_code=code,
                 diagnostics=diagnostics,
             )
-            raise ProviderError(code, no_charge=free, diagnostics=diagnostics) from None
+            failure = ProviderError(code, no_charge=free, diagnostics=diagnostics)
+            failure.retry_after_seconds = getattr(exc, "retry_after_seconds", 0)
+            raise failure from None
 
     def _goal_admission(self, reserve, db):
         """Goal time and cost admission, inside the caller's reservation transaction."""

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from contextlib import contextmanager
-from decimal import Decimal
 from pathlib import PurePath
 from time import monotonic
 
@@ -374,8 +373,7 @@ def deployment_review(config: dict, plan: dict, state_path: str, modal: dict | N
     rows.add_row("Server", f"{escape(plan['size'])} · {escape(plan['region'])}")
     rows.add_row("Compute", f"${escape(quote['compute_hourly_usd'])}/hour · ${escape(quote['estimated_730_hours_usd'])}/730 hours")
     rows.add_row("Models", "Any available OpenRouter text model or router")
-    budget = Decimal(config["monthly_budget_microusd"]) / Decimal(1_000_000)
-    rows.add_row("LLM budget", f"${budget}/month in Reasoning")
+    rows.add_row("LLM spending", "Daily key limit configured and enforced in OpenRouter")
     rows.add_row("State", escape(state_path))
     if ssh_cidr is not None:
         rows.add_row("SSH", f"{escape(ssh_cidr)} · temporary")

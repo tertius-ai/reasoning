@@ -1,3 +1,4 @@
+import { ProviderDailySpend } from "./ProviderDailySpend";
 import { schedulePoll, startPolling } from "./polling";
 import { LIVE_SAFETY_POLL_MS, subscribeTopicEvents } from "./topicEvents";
 import React, { lazy, useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -49,7 +50,7 @@ import { ReferenceCandidate, ReferenceContext, ReferenceLink, ReferenceResolver,
   referenceCandidates, referenceFromHref, referenceQuery, referenceToken, remarkReferences, topicLink } from "./references";
 import {
   Account, ApiError, Channel, EMPTY_HIERARCHY, Hierarchy, InferenceConfiguration, Invitation, InvitationMail, KeyMetadata, KIND_LABEL, KIND_SYMBOL, KnowledgeTool,
-  BotModel, Member, MentionQuery, Message, ModelAttempt, ModelRun, Organization, ReplyAddition, OrganizationPrices, Policy, Presence, Project, ProjectMember, SearchResult, Session, Topic, TopicKind, aborted,
+  BotModel, Member, MentionQuery, Message, ModelAttempt, ModelRun, Organization, ReplyAddition, OrganizationPrices, Presence, Project, ProjectMember, SearchResult, Session, Topic, TopicKind, aborted,
   authorLabel, decimalBudget, errorMessage, invitationEmailLabel, mentionMarkdown, mentionQuery, mentionText, mergeMessages, modelCatalog as sharedModelCatalog, organizationPath, readTopicSnapshot, rememberTopicSnapshot, request, sharedRequest, topicPath, PendingModelAttempt,
 } from "./organization-api";
 
@@ -517,7 +518,7 @@ function TopicRenameControl({ organizationId, topic, onChanged }: { organization
     {error && <p role="alert" className="org-error">{error}</p>}<button disabled={busy || name === topic.name}>Save name</button></form>;
 }
 
-type CredentialSource = { organization: Organization; key: KeyMetadata; policy: Policy };
+type CredentialSource = { organization: Organization; key: KeyMetadata };
 
 function OrganizationCreationDialog({ organizations, onClose, onCreate }: {
   organizations: Organization[]; onClose: () => void; onCreate: (body: Record<string, unknown>) => Promise<void>;
@@ -527,7 +528,6 @@ function OrganizationCreationDialog({ organizations, onClose, onCreate }: {
   const [mode, setMode] = useState<"new" | "reuse" | "none">("new");
   const [label, setLabel] = useState("Primary");
   const [key, setKey] = useState("");
-  const [budget, setBudget] = useState("");
   const [sources, setSources] = useState<CredentialSource[]>([]);
   const [source, setSource] = useState("");
   const [busy, setBusy] = useState(false);
@@ -536,14 +536,13 @@ function OrganizationCreationDialog({ organizations, onClose, onCreate }: {
     let alive = true;
     void Promise.all(administrators.map(async (organization) => {
       const root = organizationPath(organization.id);
-      const [keys, policy] = await Promise.all([request<KeyMetadata[]>(root + "/provider-keys"), request<Policy>(root + "/policy")]);
-      return keys.filter((item) => item.disabled_at === null).map((item) => ({ organization, key: item, policy }));
+      const keys = await request<KeyMetadata[]>(root + "/provider-keys");
+      return keys.filter((item) => item.disabled_at === null).map((item) => ({ organization, key: item }));
     })).then((groups) => {
       if (!alive) return;
       const available = groups.flat(); setSources(available);
       if (available[0]) {
         setSource(available[0].organization.id + ":" + available[0].key.id);
-        setBudget((available[0].policy.monthly_budget_microusd / 1_000_000).toFixed(6).replace(/\.?0+$/, ""));
       }
     }).catch((cause) => { if (alive) setError(errorMessage(cause)); });
     return () => { alive = false; };
@@ -552,8 +551,7 @@ function OrganizationCreationDialog({ organizations, onClose, onCreate }: {
     event.preventDefault(); setBusy(true); setError("");
     try {
       let body: Record<string, unknown> = { name, credential_mode: mode };
-      if (mode === "new") body = { ...body, key_label: label, key,
-        monthly_budget_microusd: decimalBudget(budget) };
+      if (mode === "new") body = { ...body, key_label: label, key };
       if (mode === "reuse") {
         const [source_organization_id, source_key_id] = source.split(":");
         body = { ...body, source_organization_id, source_key_id };
@@ -573,16 +571,15 @@ function OrganizationCreationDialog({ organizations, onClose, onCreate }: {
       <p className="org-help">Create a separate upstream key for clear billing and revocation boundaries.</p>
       <label>Key label<input required maxLength={200} value={label} onChange={(event) => setLabel(event.target.value)} /></label>
       <label>OpenRouter API key<input required type="password" minLength={8} maxLength={4096} autoComplete="off" value={key} onChange={(event) => setKey(event.target.value)} /></label>
-      <p className="org-help">This key can use any available OpenRouter model or router, subject to its upstream restrictions and your organization budget.</p>
-      <label>Monthly LLM budget (USD)<input required inputMode="decimal" value={budget} onChange={(event) => setBudget(event.target.value)} /></label>
+      <p className="org-help">This key can use any available OpenRouter model or router, subject to its upstream restrictions and daily key limit.</p>
     </div>}
-    {mode === "reuse" && <div className="org-credential-choice"><p className="org-help">This copies the selected credential and budget into a separate encrypted organization record.</p>
+    {mode === "reuse" && <div className="org-credential-choice"><p className="org-help">This shares the selected OpenRouter key and its provider spending allowance with another organization.</p>
       <label>Existing key<select required value={source} onChange={(event) => setSource(event.target.value)}>
         {sources.map((item) => <option key={item.organization.id + item.key.id} value={item.organization.id + ":" + item.key.id}>
           {item.organization.name} · {item.key.label} · {item.key.fingerprint}
         </option>)}
       </select></label></div>}
-    {mode === "none" && <p className="org-help">The organization starts without provider credentials or an LLM budget.</p>}
+    {mode === "none" && <p className="org-help">The organization starts without provider credentials.</p>}
     {error && <p role="alert" className="org-error">{error}</p>}
     <button className="org-primary" disabled={busy || (mode === "reuse" && !source)}>{busy ? "Creating…" : "Create organization"}</button>
   </form></Dialog>;
@@ -1499,7 +1496,6 @@ function Administration({ organization, onClose, onRefresh, onAuthLost }: { orga
   const inviteAttempt = useRef<{ email: string; role: string; client_id: string } | null>(null);
   const resendAttempts = useRef<Record<string, string>>({});
   const [keys, setKeys] = useState<KeyMetadata[]>([]);
-  const [budget, setBudget] = useState("0");
   const [email, setEmail] = useState("");
   const [role, setRole] = useState("member");
   const [keyValue, setKeyValue] = useState("");
@@ -1516,7 +1512,6 @@ function Administration({ organization, onClose, onRefresh, onAuthLost }: { orga
     ]);
     else if (tab === "ai") await Promise.all([
       request<KeyMetadata[]>(root + "/provider-keys").then(setKeys),
-      request<Policy>(root + "/policy").then(policy => setBudget((policy.monthly_budget_microusd / 1_000_000).toFixed(6).replace(/\.?0+$/, ""))),
     ]);
   }, [root, tab]);
   useEffect(() => { void reload().catch((cause) => setError(errorMessage(cause))); }, [reload]);
@@ -1590,18 +1585,18 @@ function Administration({ organization, onClose, onRefresh, onAuthLost }: { orga
           value={keyLabel} onChange={(event) => setKeyLabel(event.target.value)} /></label>
         <label>OpenRouter API key<input type="password" required disabled={busy} name="reasoning-new-openrouter-key" placeholder="Paste a new OpenRouter key" minLength={8} maxLength={4096}
           autoComplete="new-password" autoCapitalize="none" spellCheck={false} value={keyValue} onChange={(event) => setKeyValue(event.target.value)} /></label>
-        <p className="org-help">Keys can use any available OpenRouter model or router. Upstream key restrictions, routing policy, and organization spending limits still apply.</p>
+        <p className="org-help">Keys can use any available OpenRouter model or router. OpenRouter key limits and routing policy apply. Set a daily spending limit on the key in OpenRouter.</p>
         <p className="org-help">Enabled by default. Adding the key replaces the model allowlist with the current text-to-text catalog; you can narrow it below.</p>
         <button className="org-primary" disabled={busy}>{busy ? "Adding…" : "Add OpenRouter key"}</button></form>}
       {!keys.length && <p className="org-help">No OpenRouter keys are stored.</p>}
       <ul className="org-admin-list">{keys.map((key) => <li key={key.id}><div><strong>{key.label}</strong><small>{key.provider} · {key.fingerprint} · {key.disabled_at ? "Disabled" : "Active"}</small></div>
         {!key.disabled_at && <button disabled={busy} onClick={() => { if (window.confirm("Disable this stored key? Add a replacement first if needed. This does not revoke the upstream OpenRouter credential.")) void action(() => request(root + "/provider-keys/" + key.id, { method: "DELETE" })); }}>Disable</button>}
-      </li>)}</ul><ProviderKeyUsage key={keys.map(key => key.id).join(",")} organizationId={organization.id} /></section><section><h3>Spending limit</h3><form onSubmit={(event) => { event.preventDefault(); void action(() => request(root + "/policy", { method: "PUT", body: {
-      monthly_budget_microusd: decimalBudget(budget),
-    } })); }}><p className="org-help">Beta conversations reserve this budget before execution. Known charges and unresolved reservations reduce the available balance. Set upstream OpenRouter key limits too; local reservations do not guarantee the provider bill.</p>
-      <label>Monthly budget (USD)<input required inputMode="decimal" value={budget} onChange={(event) => setBudget(event.target.value)} /></label>
-      <button className="org-primary" disabled={busy}>Save budget</button>
-    </form></section></div>}
+      </li>)}</ul><ProviderKeyUsage key={keys.map(key => key.id).join(",")} organizationId={organization.id} /></section><section><h3>Daily spending limit</h3>
+      <p className="org-help">OpenRouter enforces spending limits. Set this organization's dedicated key to a daily limit in
+        <a href="https://openrouter.ai/settings/keys" target="_blank" rel="noreferrer"> OpenRouter key settings ↗</a>.
+        The bar beside Reasoning shows the active key's daily spend and limit for everyone in this organization.
+        Reusing a key shares its allowance across organizations. Automatic credit top-ups do not reset that allowance.</p>
+    </section></div>}
   </Dialog>;
 }
 
@@ -1920,7 +1915,7 @@ export function OrganizationApp({ user, onAccount, onAuthenticated, onSignedOut,
     <header className="org-appbar org-topic-color"><div className={"org-appbar-brand" + (navOpen ? " org-appbar-brand-open" : "")}><button type="button" className="org-icon-button org-nav-toggle" aria-label="Toggle project navigation"
       title="Toggle project navigation · Ctrl/⌘B" aria-controls="org-project-navigation" aria-expanded={navOpen} onClick={() => setNavOpen(open => !open)}>
       <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2" /><path d="M9 4v16" /></svg></button>
-      <Brand /></div>
+      <Brand />{organizationId && <ProviderDailySpend key={organizationId} organizationId={organizationId} onAuthLost={authLost} />}</div>
       {knowledgeView ? <h1 className="org-workspace-title">{knowledgeView === "journal" ? "Research blog editor" : knowledgeView === "ledger" ? "Ledger" : "Bibliography"}</h1>
         : directConversation && organization ? <DirectTitle key={directConversation.id} organizationId={organization.id} conversation={directConversation} members={members}
           userId={user.id} onChanged={preferenceRefresh} onAuthLost={authLost} onShowMessage={target => setDirectJump(previous => ({ ...target, nonce: (previous?.nonce ?? 0) + 1 }))}

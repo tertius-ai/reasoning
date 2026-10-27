@@ -48,7 +48,7 @@ Cloudflare. The wizard then prints the three NS records to add at the child
 label in Cloudflare.
 
 Before provisioning, the wizard shows the selected Droplet, current hourly
-price, 730-hour estimate, exclusions, and organization LLM budget. It proceeds
+price, 730-hour estimate, exclusions, and provider-owned LLM spending limits. It proceeds
 only after the exact `launch HOSTNAME` confirmation. Failed or interrupted
 launches can leave billable resources; always resume with `make deploy` rather
 than starting a second state directory.
@@ -357,15 +357,17 @@ propagation or DNSSEC correctness.
 ### Organization policy activation
 
 After actual HTTPS/owner readiness, the CLI signs in temporarily over verified
-HTTPS, sets the approved monthly app budget, uploads the
+HTTPS, verifies the approved model suggestions, uploads the
 OpenRouter key into encrypted organization storage, and revokes its temporary
 session. The key can use any available OpenRouter text model or router; setup
-does not ask for or install a model whitelist. It checks actual server budget
-policy and key metadata. Provider-key creation
+does not ask for or install a model whitelist. It checks actual server model
+policy and key metadata. Configure the key's daily spending limit in OpenRouter;
+the application displays provider-reported daily usage without a second local
+organization cap. Provider-key creation
 is journaled before submission; a lost reply is reconciled through reads, not
 blindly repeated. Changed administrator policy, duplicate/revoked setup keys,
-and mismatched saved inputs are refused. The monthly app budget does not limit
-other applications using the same provider key or the provider's entire invoice.
+and mismatched saved inputs are refused. Reusing the key shares its provider
+allowance with every application using it. Credit top-ups do not reset its daily limit.
 The private operator directory retains credential inputs; do not publish it.
 
 `organization_ready` establishes server/provider configuration, not live

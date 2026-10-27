@@ -12,7 +12,7 @@ import re
 from urllib.parse import urlsplit
 
 PHASES = ("round", "tool_requested", "tool_completed", "compacting", "compaction_failed", "compaction_skipped",
-          "answer_ready", "reasoning_summary", "delegated", "additions_read")
+          "answer_ready", "reasoning_summary", "delegated", "additions_read", "provider_credit_wait")
 SOURCES = {"arxiv": "arXiv", "crossref": "Crossref", "web": "the web", "messages": "messages", "tool": "tools",
            "knowledge": "knowledge", "ledger": "the ledger", "topics": "topics", "references": "references",
            "blog": "the blog", "media": "attachments", "account": "the account"}

@@ -116,7 +116,7 @@ def test_worker_context_can_exceed_chat_body_limit_but_stale_or_wrong_worker_can
     assert len(posts(fixture)) == 1
 
 
-def test_organization_budget_serializes_work_reservations_across_program_scope(installation):
+def test_work_accounting_retains_concurrent_estimates_without_a_second_provider_cap(installation):
     env, first, _ = prepared(installation, budget=100)
     new = env["client"].post(env["path"], json={"client_id": "other-program", "specification": specification(resources=env["resources"])})
     assert new.status_code == 201, new.text
@@ -140,12 +140,12 @@ def test_organization_budget_serializes_work_reservations_across_program_scope(i
 
     with ThreadPoolExecutor(max_workers=2) as pool:
         replies = list(pool.map(reserve, [first, second]))
-    assert sum(isinstance(reply, dict) for reply in replies) == 1
-    assert balance(env)["reserved_microusd"] == 70 and balance(env)["available_microusd"] == 30
+    assert sum(isinstance(reply, dict) for reply in replies) == 2
+    assert balance(env)["reserved_microusd"] == 140
 
 
 @pytest.mark.parametrize("first", ["chat", "work"])
-def test_chat_and_work_cannot_each_spend_the_same_organization_credit(installation, first):
+def test_chat_and_work_accounting_share_estimates_without_local_org_admission(installation, first):
     env, row, _ = prepared(installation, budget=100)
     state = InferenceStore(env["store"])
     org, user = env["owner"]["organization_id"], env["owner"]["user_id"]
@@ -166,9 +166,8 @@ def test_chat_and_work_cannot_each_spend_the_same_organization_credit(installati
 
     operations = [chat, work] if first == "chat" else [work, chat]
     operations[0]()
-    with pytest.raises(StoreError) as error:
-        operations[1]()
-    assert error.value.status == 409 and balance(env)["reserved_microusd"] == (40 if first == "chat" else 70)
+    operations[1]()
+    assert balance(env)["reserved_microusd"] == 110
 
 
 def test_usage_received_before_invalid_stream_is_charged_not_invented_or_reserved(installation):

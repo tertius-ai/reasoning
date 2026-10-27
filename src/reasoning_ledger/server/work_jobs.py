@@ -771,11 +771,7 @@ class WorkJobs:
             self._authorized_task(db, row)
             if body.kind == "inference":
                 from .inference_credit import lock as credit_lock
-                from .inference_store import InferenceStore
-
                 credit_lock(self.store, db, row["organization_id"])
-                if body.held_microusd > InferenceStore._balance(db, row["organization_id"])["available_microusd"]:
-                    raise StoreError(409, "organization inference budget cannot cover this work call")
             ancestors = db.execute(
                 "SELECT t.id,t.body_json FROM work_task_ancestors a JOIN work_tasks t ON t.id=a.ancestor_id "
                 "WHERE a.task_id=? ORDER BY a.depth",

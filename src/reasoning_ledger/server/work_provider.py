@@ -12,6 +12,7 @@ import httpx
 from .inference_credit import lock as credit_lock
 from .inference_store import InferenceStore
 from .openrouter import ProviderError, protocol_diagnostics, safe_diagnostics
+from .provider_keys import active_key
 from .research_context import encoded
 from .research_provider import ResearchCompletion
 from .security import digest
@@ -104,11 +105,7 @@ class WorkProvider:
             choice.get("type") != "function" or not isinstance(choice.get("function"), dict) or choice["function"].get("name") not in names
         ):
             raise StoreError(403, "forced completion tool is not granted")
-        key = db.execute(
-            "SELECT * FROM provider_keys WHERE organization_id=? AND provider='openrouter' AND disabled_at IS NULL "
-            "ORDER BY created_at DESC,id DESC LIMIT 1",
-            (row["organization_id"],),
-        ).fetchone()
+        key = active_key(db, row["organization_id"])
         if key is None:
             raise StoreError(409, "an administrator must enable an organization OpenRouter key")
         return row, root, dict(policy), dict(key)

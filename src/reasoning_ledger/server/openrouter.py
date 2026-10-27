@@ -135,6 +135,16 @@ def rejection_error(status: int, metadata: object = None) -> ProviderError:
     if status == 404 and isinstance(metadata, dict) and metadata.get("unmatched") in UNMATCHED:
         diagnostics["unmatched"] = metadata["unmatched"]
         diagnostics["message"], diagnostics["action"] = UNMATCHED[metadata["unmatched"]]
+    if status == 403 and isinstance(metadata, dict) and metadata.get("limit_source") in (
+        "openrouter_key_limit", "openrouter_guardrail_budget", "openrouter_workspace_budget",
+    ):
+        source = metadata["limit_source"]
+        diagnostics.update(category="budget", limit_source=source,
+            message={"openrouter_key_limit": "The OpenRouter key's spending limit was reached.",
+                     "openrouter_guardrail_budget": "An OpenRouter guardrail spending limit was reached.",
+                     "openrouter_workspace_budget": "The OpenRouter workspace spending limit was reached."}[source],
+            action="Wait for the provider budget to reset or ask an administrator to change its limit in OpenRouter. "
+                   "Adding account credits does not reset this allowance.")
     if status == 402 and isinstance(metadata, dict):
         source, reason = metadata.get("limit_source"), metadata.get("reason")
         if source in ("openrouter_key_limit", "openrouter_credits", "openrouter_in_flight_budget"):
@@ -304,11 +314,15 @@ async def response_rejection(response: httpx.Response) -> ProviderError:
                     restriction = "region" if any(word in text for word in ("region", "country", "geograph")) else (
                         "privacy" if any(word in text for word in ("privacy", "zdr", "data policy", "data collection")) else (
                         "model" if any(word in text for word in ("model access", "permission", "not allowed")) else None))
-                    metadata = {"restriction": restriction}
+                    metadata = {**(metadata if isinstance(metadata, dict) else {}), "restriction": restriction}
         except (TimeoutError, httpx.HTTPError, ValueError, RecursionError):
             # Optional diagnostic text cannot undo the known HTTP refusal.
             pass
-    return rejection_error(response.status_code, metadata)
+    error = rejection_error(response.status_code, metadata)
+    retry_after = response.headers.get("retry-after", "")
+    if retry_after.isascii() and retry_after.isdigit():
+        error.retry_after_seconds = min(60, max(1, int(retry_after[:6])))
+    return error
 
 
 def provider_origin(value: str) -> str:
@@ -511,6 +525,23 @@ class OpenRouter:
             if len(result) > maximum:
                 raise ProviderError("provider_protocol")
         return bytes(result)
+
+    async def key_usage(self, key: str) -> dict:
+        """Account metadata only; this never creates a model generation."""
+        if any(ord(char) < 32 or ord(char) > 126 for char in key):
+            raise ProviderError("key_status_unavailable")
+        try:
+            async with asyncio.timeout(8), self.client() as client, client.stream(
+                "GET", self.base_url + "/key", headers={"Authorization": "Bearer " + key}, timeout=5,
+            ) as response:
+                if response.status_code != 200:
+                    raise ProviderError("key_status_unavailable")
+                body = json.loads(await self._bounded(response, 65536), parse_float=Decimal)
+            if not isinstance(body, dict) or not isinstance(body.get("data"), dict):
+                raise ProviderError("key_status_unavailable")
+            return body["data"]
+        except (TimeoutError, httpx.HTTPError, ValueError, TypeError, RecursionError) as exc:
+            raise ProviderError("key_status_unavailable") from exc
 
     async def quotes(self, models: list[str]) -> list[Quote]:
         try:

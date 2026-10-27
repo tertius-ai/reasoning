@@ -461,13 +461,14 @@ key retains its encrypted record for audit; it does not revoke the upstream
 OpenRouter credential. AES-256-GCM encryption binds ciphertext to the organization,
 provider, and key ID. The server refuses startup if its encryption key is missing
 for an existing database, or cannot authenticate an existing credential.
-The initial monthly budget is zero.
-Budget units are millionths of a US dollar; `50000000` denotes $50.
-Beta inference requires an active organization key and a positive budget.
+Spending limits are configured and enforced on the OpenRouter key.
+Accounting units are millionths of a US dollar; `50000000` denotes $50.
+Beta inference requires an active organization key.
 Every currently available OpenRouter text model or router can be selected;
-there is no organization model whitelist. Concurrent requests reserve the available balance
-atomically. These are local admission controls, not a guarantee of the upstream
-invoice; configure OpenRouter key limits as well. See [beta execution and
+there is no organization model whitelist. Concurrent requests retain accounting
+estimates atomically; these do not impose another organization spending cap.
+The sidebar shows the active key's provider-reported daily usage and limit.
+See [beta execution and
 accounting](inference.md) for context capture, failure recovery, and reconciliation.
 
 ## API surface
@@ -553,7 +554,8 @@ Use the prefix `/api/organizations/{organization_id}` for organization resources
 | `{prefix}/invitation-mail` | GET | Admin-only email availability and limits |
 | `{prefix}/provider-keys` | GET, POST | Key metadata and encrypted storage for all available OpenRouter text models |
 | `{prefix}/provider-keys/{key_id}` | DELETE | Key disabling |
-| `{prefix}/policy` | GET, PUT | Monthly budget configuration; legacy model suggestions do not restrict admission |
+| `{prefix}/policy` | GET, PUT | Model suggestions; these do not restrict admission |
+| `{prefix}/provider-daily-spend` | GET | Member-visible, read-only daily usage and limit reported by OpenRouter |
 | `{prefix}/inference-configuration` | GET | Current model catalogue, worker availability, and budget balances |
 | `{prefix}/model-prices` | GET | Member-only OpenRouter public text-model capabilities/prices; no inference or organization credential use |
 | `{prefix}/model-benchmarks` | GET | Member-only cached Artificial Analysis indices via the organization OpenRouter key; metadata only, no inference |
@@ -759,8 +761,8 @@ Provider-call receipts replace, rather than duplicate, legacy run-level totals.
 The response includes no credential or fingerprint and does not cover usage
 outside this installation or externally billed bot CLI accounts.
 Creation requires an explicit AI-access choice: a fresh OpenRouter credential
-with its own budget, deliberate reuse copied into a separately encrypted
-organization record, or no credential, models, or budget. Members and viewers
+with its provider-owned daily allowance, deliberate reuse copied into a separately encrypted
+organization record sharing the same provider allowance, or no credential or models. Members and viewers
 cannot create organizations. Bot and compute credentials are never inherited.
 The left navigation groups projects, alternating-color #channels, and typed
 topics with unread counts and an `@` marker for unread personal mentions. The
