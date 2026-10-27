@@ -2,12 +2,16 @@
 
 import copy
 import fcntl
+import hashlib
 import json
 import os
 from types import SimpleNamespace
 
 import pytest
 from test_public_compute import IMAGE
+from test_public_deployment import bootstrap as bootstrap
+from test_public_deployment import pack
+from test_public_deployment import payload as payload
 
 from reasoning_ledger.deployment.host import InstallError
 from reasoning_ledger.deployment.modal_host import ModalHostInstaller, relay_unit, validate_request
@@ -27,7 +31,7 @@ def host(tmp_path):
         if path.is_dir():
             path.chmod(0o755)
     write_document(root / "var/lib/reasoning-deploy/installation.json",
-                   {"release_id": release, "public_url": "https://chat.example.org", "phase": "installed"}, new=True)
+                   {"release_id": release, "public_url": "https://chat.example.org", "phase": "services_started"}, new=True)
     write_private(root / "var/lib/reasoning-deploy/bootstrap.lock", b"")
     (root / "etc/reasoning/compute-images.json").write_text("[]\n")
     (root / "etc/reasoning/compute-images.json").chmod(0o644)
@@ -77,6 +81,37 @@ def test_prepare_and_activate_create_credential_isolated_relays_without_docker_o
     assert "as_fixture_secret" not in str(calls)
     unit = (root / "etc/systemd/system" / ("reasoning-modal-" + worker["enrollment"]["id"] + ".service")).read_text()
     assert "User=reasoning-modal" in unit and "InaccessiblePaths=/var/lib/reasoning" in unit
+
+
+def test_modal_preparation_accepts_the_actual_completed_bootstrap_journal(tmp_path, payload, bootstrap):
+    chat, _ = bootstrap
+    bundle = pack(tmp_path / "release.tar.gz", payload)
+    completed = chat.install(bundle, hashlib.sha256(bundle.read_bytes()).hexdigest(), "https://chat.example.org", skip_platform=True)
+    original = chat.state_path.read_bytes()
+    request = {"format": 1, "release_id": completed["release_id"], "setup_id": "b" * 64,
+               "public_url": completed["public_url"], "images": [IMAGE], "workers": []}
+    calls = []
+    modal = ModalHostInstaller(chat.root, command=lambda arguments, **options: calls.append(arguments))
+
+    result = modal.install(request, "prepare")
+
+    assert result == {"setup_id": request["setup_id"], "catalog_installed": True, "relays_active": False}
+    assert json.loads((chat.root / "etc/reasoning/compute-images.json").read_text()) == [IMAGE]
+    assert calls == [["systemctl", "restart", "reasoning-server"]]
+    assert chat.state_path.read_bytes() == original
+
+
+@pytest.mark.parametrize("phase", ["packages", "installed"])
+def test_incomplete_or_provider_receipt_phase_cannot_enable_modal(host, phase):
+    root, payload, _, installer, calls, _ = host
+    path = root / "var/lib/reasoning-deploy/installation.json"
+    state = json.loads(path.read_text())
+    write_document(path, {**state, "phase": phase})
+
+    with pytest.raises(InstallError, match="exact installed"):
+        installer.install(payload, "prepare")
+
+    assert calls == [] and not (root / "var/lib/reasoning-deploy/modal-setup").exists()
 
 
 def test_changed_release_catalog_credentials_and_drained_enrollment_cannot_be_adopted(host):
