@@ -301,7 +301,7 @@ def test_group_models_use_one_immutable_scoped_context_and_organization_key(inst
             assert KEY not in str([dict(row) for row in db.execute(f"SELECT * FROM {table}")])
 
 
-def test_budget_reservations_are_atomic_under_competing_requests(installation):
+def test_competing_requests_retain_estimates_without_a_local_spending_cap(installation):
     _, state, _, owner, topics = prepare(installation)
     first = enqueue(state, owner, topics[1]["id"], models=MODELS[:1])[0]
     reserve = first["reserved_microusd"]
@@ -316,8 +316,8 @@ def test_budget_reservations_are_atomic_under_competing_requests(installation):
             return error.status
 
     with ThreadPoolExecutor(max_workers=2) as pool:
-        assert sorted(pool.map(attempt, range(2))) == [202, 409]
-    assert state.balance(owner["user_id"], owner["organization_id"])["available_microusd"] == 0
+        assert sorted(pool.map(attempt, range(2))) == [202, 202]
+    assert state.balance(owner["user_id"], owner["organization_id"])["reserved_microusd"] == 2 * reserve
 
 
 def test_replay_is_idempotent_and_cannot_change_models_or_context(installation):
@@ -411,7 +411,7 @@ def test_authorization_changes_stop_queued_work_before_provider_submission(insta
         state.store.set_policy(
             owner["user_id"], owner["organization_id"], [] if mutation == "policy" else MODELS, 0 if mutation == "budget" else 1_000_000
         )
-    if mutation == "policy":
+    if mutation in {"policy", "budget"}:
         assert state.claim()["id"] == run["id"]
         assert state.run(owner["user_id"], owner["organization_id"], run["id"])["status"] == "running"
         return
@@ -526,7 +526,7 @@ def test_authorization_changes_close_an_already_running_stream(installation, mut
             state.store.disable_key(user, org, state.store.keys(user, org)[0]["id"])
         else:
             state.store.set_policy(user, org, [] if mutation == "policy" else MODELS, 0 if mutation == "budget" else 1_000_000)
-        if mutation == "policy":
+        if mutation in {"policy", "budget"}:
             time.sleep(0.2)
             assert state.run(user, org, run["id"])["status"] == "running"
             return

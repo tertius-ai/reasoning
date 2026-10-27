@@ -281,16 +281,16 @@ def test_identical_tool_schemas_are_checked_once_and_invalid_schemas_always_fail
     assert len(checked) == 3
 
 
-def test_balance_reads_only_holds_and_this_months_charges_through_indexes(installation):
+def test_balance_reads_only_holds_and_todays_charges_through_indexes(installation):
     from datetime import UTC, datetime
 
     _, state, _, owner, topics = prepare(installation)
     org = owner["organization_id"]
     row = enqueue(state, owner, topics[1]["id"], models=["test/one"])[0]
-    month = int(datetime.now(UTC).replace(day=1, hour=0, minute=0, second=0, microsecond=0).timestamp())
+    day = int(datetime.now(UTC).replace(hour=0, minute=0, second=0, microsecond=0).timestamp())
     with state.store.transaction(write=True) as db:
         request = db.execute("SELECT request_id,key_id,quote_json FROM llm_runs WHERE id=?", (row["id"],)).fetchone()
-        cases = [("settled", 100, 7, month + 1), ("settled", 100, 11, month - 1), ("settled", 100, None, month + 2),
+        cases = [("settled", 100, 7, day + 1), ("settled", 100, 11, day - 1), ("settled", 100, None, day + 2),
                  ("reserved", 13, None, None), ("uncertain", 17, None, None), ("released", 19, None, None)]
         for index, (accounting, reserved, actual, settled) in enumerate(cases):
             db.execute("INSERT INTO llm_runs(id,organization_id,request_id,model,key_id,quote_json,status,reserved_microusd,"

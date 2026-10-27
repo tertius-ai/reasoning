@@ -105,10 +105,12 @@ export function replyTimeline(activity: Activity, additions: ReplyAddition[], ac
         const addition = byId.get(id);
         if (addition) { entries.push({ kind: "addition", key: "addition-" + id, addition, waiting: false }); placed.add(id); }
       }
-    } else if (["compacting", "compaction_failed", "compaction_skipped", "delegated"].includes(event.phase)) {
+    } else if (["compacting", "compaction_failed", "compaction_skipped", "delegated", "provider_credit_wait"].includes(event.phase)) {
       close();
-      entries.push({ kind: "step", key: "event-" + event.sequence, current: false, icon: event.phase === "delegated" ? "delegate" : "summary",
-        label: event.summary ?? (event.phase === "delegated" ? "Delegated work" : "Summarizing earlier messages") });
+      entries.push({ kind: "step", key: "event-" + event.sequence, current: false,
+        icon: event.phase === "provider_credit_wait" ? "think" : event.phase === "delegated" ? "delegate" : "summary",
+        label: event.summary ?? (event.phase === "provider_credit_wait" ? "Waiting for OpenRouter credits"
+          : event.phase === "delegated" ? "Delegated work" : "Summarizing earlier messages") });
     }
   }
   close();

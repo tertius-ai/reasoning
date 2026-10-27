@@ -89,7 +89,7 @@ test("a model's answer replies to its prompt, a reply to the answer asks a follo
     await article(answer.id).waitFor();
 
     // The answer points at its prompt, even with a teammate's message between them, and the prompt counts the reply.
-    assert.match(await article(answer.id).locator(".org-reply-pointer").innerText(), /Elden\s+Survey what is known about higher regulators\./);
+    assert.match(await article(answer.id).locator(".org-reply-pointer").innerText(), /You\s+Survey what is known about higher regulators\./);
     assert.equal(await article(prompt.id).locator(".org-thread-count").textContent(), "↩1 reply");
     assert.equal(await article(aside.id).locator(".org-thread-count").count(), 0);
 

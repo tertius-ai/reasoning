@@ -294,9 +294,9 @@ class OrganizationCreation(Organization):
         fresh = self.key_label is not None or self.key is not None or bool(self.allowed_models) or self.monthly_budget_microusd != 0
         source = self.source_organization_id is not None or self.source_key_id is not None
         if self.credential_mode == "new" and (
-            self.key_label is None or self.key is None or self.monthly_budget_microusd <= 0 or source
+            self.key_label is None or self.key is None or source
         ):
-            raise ValueError("a fresh key and positive budget are required")
+            raise ValueError("a fresh key is required")
         if self.credential_mode == "reuse" and (self.source_organization_id is None or self.source_key_id is None or fresh):
             raise ValueError("an existing organization key is required without fresh-key fields")
         if self.credential_mode == "none" and (fresh or source):
@@ -372,7 +372,8 @@ class ProviderKey(Input):
 
 class Policy(Input):
     allowed_models: Annotated[list[Annotated[str, Field(min_length=1, max_length=200)]], Field(max_length=10000)] = []
-    monthly_budget_microusd: Annotated[int, Field(ge=0, le=10**15)]
+    # Bound operator requests can carry this value; it does not authorize or limit spending.
+    monthly_budget_microusd: Annotated[int, Field(ge=0, le=10**15)] = 0
 
 
 class Subscription(Input):
@@ -440,6 +441,9 @@ def create_app(config: Config, *, provider: OpenRouter | None = None, mail_provi
 
     compute = ComputeStore(store, load_catalog(config.compute_images))
     provider = provider or OpenRouter(config.openrouter_url)
+    from .provider_budget import ProviderBudget
+
+    provider_budget = ProviderBudget(store, provider)
     benchmarks = ModelBenchmarks(provider)
     worker = InferenceWorker(inference, provider, concurrency=config.agent_concurrency)
     mail = MailStore(store, config.mail, config.public_url)
@@ -1051,6 +1055,11 @@ def create_app(config: Config, *, provider: OpenRouter | None = None, mail_provi
     @app.get("/api/organizations/{organization_id}/provider-keys")
     def keys(organization_id: str, user: User):
         return store.keys(user, organization_id)
+
+    @app.get("/api/organizations/{organization_id}/provider-daily-spend")
+    async def daily_spend(organization_id: str, user: User, response: Response):
+        response.headers["Cache-Control"] = "no-store"
+        return await provider_budget.read(user, organization_id)
 
     @app.post("/api/organizations/{organization_id}/provider-keys", status_code=201)
     def add_key(organization_id: str, body: ProviderKey, user: User):

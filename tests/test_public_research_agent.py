@@ -13,6 +13,7 @@ from reasoning_ledger.server.openrouter import OpenRouter, Quote
 from reasoning_ledger.server.research_agent import ResearchAgent
 from reasoning_ledger.server.research_context import MEMORY_FIELDS, ResearchContext
 from reasoning_ledger.server.research_goals import ResearchGoals
+from reasoning_ledger.server.research_provider import cache_breakpoints
 from reasoning_ledger.server.usage_store import UsageStore
 
 
@@ -290,14 +291,16 @@ def test_final_admission_revocation_is_cancelled_even_without_another_native_cal
     def refused(executor, prepared, emit, *, cancelled):
         from reasoning_ledger.server.store import Store
 
-        Store(config.data_dir).set_policy(owner["user_id"], owner["organization_id"], MODELS, 0)
+        store = Store(config.data_dir)
+        key = store.keys(owner["user_id"], owner["organization_id"])[0]
+        store.disable_key(owner["user_id"], owner["organization_id"], key["id"])
         return AgentRunResult(prepared.run_id, native_status, output_text="Not authorized for publication", error="admission refused")
 
     monkeypatch.setattr("reasoning_ledger.server.research_agent.ReasoningNativeExecutor.execute", refused)
     fixture = ResearchFixture()
     state, owner, _, row = turn(installation, fixture)
     run = state.run(owner["user_id"], owner["organization_id"], row["id"])
-    assert run["status"] == "cancelled" and run["error_code"] == "model_policy_changed"
+    assert run["status"] == "cancelled" and run["error_code"] == "key_disabled"
     assert not fixture.requests
 
 
@@ -323,6 +326,62 @@ def test_beta_tool_loop_records_each_call_and_returns_exact_sources(installation
         ResearchContext(state.store).inspect(owner["user_id"], owner["organization_id"], topics[1]["id"])["snapshot"]["policy"]
         == "token-budgeted-cited-memory"
     )
+
+
+def cached(message):
+    return isinstance(message.get("content"), list) and any("cache_control" in part for part in message["content"])
+
+
+def test_cache_breakpoints_mark_a_copy_at_the_system_prompt_and_conversation_ends():
+    messages = [
+        {"role": "system", "content": "Instructions."},
+        {"role": "user", "content": [{"type": "text", "text": "Question."}, {"type": "image_url", "image_url": {"url": "data:"}}]},
+        {"role": "assistant", "content": None, "tool_calls": [{"id": "call", "type": "function"}]},
+        {"role": "tool", "tool_call_id": "call", "content": "Result."},
+        {"role": "assistant", "content": "", "tool_calls": [{"id": "next", "type": "function"}]},
+    ]
+    original = json.loads(json.dumps(messages))
+    marked, end = cache_breakpoints(messages)
+    assert messages == original, "the agent's own messages are never changed"
+    assert end == 3 and [index for index, message in enumerate(marked) if cached(message)] == [0, 3]
+    assert marked[0]["content"] == [{"type": "text", "text": "Instructions.", "cache_control": {"type": "ephemeral"}}]
+    assert marked[3]["tool_call_id"] == "call" and marked[3]["content"][0]["text"] == "Result."
+    later, end = cache_breakpoints([*messages, {"role": "tool", "tool_call_id": "next", "content": "More."}], previous=1)
+    assert end == 5 and [index for index, message in enumerate(later) if cached(message)] == [0, 1, 5]
+    assert "cache_control" in later[1]["content"][0] and "cache_control" not in later[1]["content"][1]
+
+
+def test_cache_write_price_bounds_an_anthropic_reservation():
+    pricing = {"input_cache_write": "0.00000125", "input_cache_read": "0.0000001"}
+    messages = [{"role": "user", "content": "x" * 30_000}]
+    plain = Quote("test/one", "0.000001", "0.000002", "0", 200000, 8192, pricing).reservation(messages, 0)
+    anthropic = Quote("anthropic/fixture", "0.000001", "0.000002", "0", 200000, 8192, pricing).reservation(messages, 0)
+    assert anthropic == pytest.approx(plain * 1.25, rel=0.001)
+    assert Quote("anthropic/fixture", "0.000001", "0.000002", "0", 200000, 8192).reservation(messages, 0) == plain
+
+
+@pytest.mark.parametrize("model", ["anthropic/fixture", MODELS[0]])
+def test_anthropic_research_rounds_send_cache_breakpoints_and_retain_unmarked_sessions(installation, model):
+    _, state, client, owner, topics = prepare(installation)
+    org = owner["organization_id"]
+    client.put(f"/api/organizations/{org}/policy",
+               json={"allowed_models": [*MODELS, "anthropic/fixture"], "monthly_budget_microusd": 1_000_000}).raise_for_status()
+    quote = Quote(model, "0.000001", "0.000002", "0", 200000, 8192, {"input_cache_write": "0.00000125"}, supports_tools=True)
+    state.enqueue(owner["user_id"], org, topics[1]["id"], "cache-" + model, state.parameters([model], 256, 50, None), [quote])
+    fixture, row = ResearchFixture(), state.claim()
+    ResearchAgent(state, fixture.provider, row, quote).execute()
+    assert state.run(owner["user_id"], org, row["id"])["status"] == "succeeded" and len(fixture.requests) == 2
+    first, second = ([index for index, message in enumerate(request["messages"]) if cached(message)] for request in fixture.requests)
+    if model != "anthropic/fixture":
+        assert first == second == [], "other models cache automatically or not at all"
+        return
+    assert first == [0, len(fixture.requests[0]["messages"]) - 1]
+    # The second round re-reads the first round's conversation, then marks the tool result that ends it.
+    assert second == [0, first[1], len(fixture.requests[1]["messages"]) - 1]
+    assert fixture.requests[1]["messages"][-1]["role"] == "tool"
+    with state.store.transaction() as db:
+        session = json.loads(db.execute("SELECT state_json FROM research_sessions WHERE run_id=?", (row["id"],)).fetchone()[0])
+    assert "cache_control" not in json.dumps(session)
 
 
 class ManyToolRounds(ResearchFixture):

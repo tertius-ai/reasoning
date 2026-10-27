@@ -313,15 +313,14 @@ def collect_configuration(directory, release, *, detect_public_ipv4=None):
     ceiling = ask("Maximum Droplet hourly USD (excludes tax, transfer, storage, and other services)")
     selection(name=name, region=region, size=size, origin=origin, dns_zone=zone, ssh_key_id=key_id,
               admin_cidr=admin, maximum_hourly_usd=ceiling)
-    setup_ui.section("Models and budget", "Connect OpenRouter and set the organization's initial spending policy.")
+    setup_ui.section("OpenRouter", "Connect a dedicated key with a daily spending limit configured in OpenRouter.")
     models = []
     print("The organization key can use any available OpenRouter text model or router.")
-    monthly = dollar_budget(ask("Organization monthly LLM budget in USD (does not cap other uses of this provider key)"))
     router = openrouter_login(directory)
     return {
         "format": 1, "release_id": release, "public_url": origin, "zone": zone, "name": name, "region": region, "size": size,
         "ssh_key_id": key_id, "identity": str(identity), "admin_cidr": admin, "maximum_hourly_usd": ceiling,
-        "token_file": str(token), "models": models, "monthly_budget_microusd": monthly, "openrouter_file": str(router),
+        "token_file": str(token), "models": models, "monthly_budget_microusd": 0, "openrouter_file": str(router),
     }
 
 
@@ -341,7 +340,7 @@ def validate_configuration(config, release):
         or any(not isinstance(model, str) or not re.fullmatch(r"[A-Za-z0-9._:/-]{1,200}", model) for model in config["models"])
         or not isinstance(config["monthly_budget_microusd"], int)
         or isinstance(config["monthly_budget_microusd"], bool)
-        or not 0 < config["monthly_budget_microusd"] <= 10**15
+        or not 0 <= config["monthly_budget_microusd"] <= 10**15
     ):
         raise InstallError("invalid saved organization LLM policy")
     for field, maximum in (("token_file", 4096), ("identity", 65536), ("openrouter_file", 4096)):

@@ -383,7 +383,7 @@ def test_confirmation_asks_for_hostname_without_scheme_and_keeps_exact_target(mo
 def test_credentials_are_prompted_privately_and_budget_inputs_are_saved_without_values(tmp_path, monkeypatch, capsys):
     identity = tmp_path / "identity"
     write_private(identity, b"key-fixture")
-    answers = iter(["n", "", "example.org", "", "", "", "", "0.10", "2.50", "manual", ""])
+    answers = iter(["n", "", "example.org", "", "", "", "", "0.10", "manual", ""])
     token = "dop_v1_" + "0" * 64
     secrets = iter([token, "secret-router-key"])
     monkeypatch.setattr("builtins.input", lambda prompt: next(answers))
@@ -395,7 +395,7 @@ def test_credentials_are_prompted_privately_and_budget_inputs_are_saved_without_
     })())
     config = setup.collect_configuration(tmp_path, "a" * 64, detect_public_ipv4=lambda: "203.0.113.10/32")
     setup.validate_configuration(config, "a" * 64)
-    assert config["monthly_budget_microusd"] == 2500000
+    assert config["monthly_budget_microusd"] == 0
     assert config["ssh_key_id"] == 123 and config["public_url"] == "https://chat.example.org"
     assert "secret-router-key" not in json.dumps(config)
     assert token not in capsys.readouterr().out
@@ -435,7 +435,7 @@ def test_actual_policy_encrypted_key_and_session_revocation_are_replay_safe(orga
     configure()
     configure()
     assert store.policy(initial["user_id"], initial["organization_id"]) == {
-        "allowed_models": config["models"], "monthly_budget_microusd": config["monthly_budget_microusd"],
+        "allowed_models": config["models"],
     }
     keys = store.keys(initial["user_id"], initial["organization_id"])
     assert len(keys) == len(posts) == 1
@@ -467,7 +467,7 @@ def test_later_administrator_policy_and_key_revocation_are_not_overwritten(organ
     store.set_policy(initial["user_id"], initial["organization_id"], [], 0)
     with pytest.raises(InstallError, match="administrator edits"):
         configure()
-    assert len(posts) == 1 and store.policy(initial["user_id"], initial["organization_id"])["monthly_budget_microusd"] == 0
+    assert len(posts) == 1 and store.policy(initial["user_id"], initial["organization_id"]) == {"allowed_models": []}
 
 
 DO_TOKEN = "dop_v1_" + "6" * 64

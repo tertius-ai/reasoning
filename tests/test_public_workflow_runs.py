@@ -668,11 +668,12 @@ def test_llm_child_link_and_reservation_roll_back_together(installation, monkeyp
     assert env.inference.claim() is not None
 
 
-def test_changed_policy_between_quote_and_dispatch_refuses_without_charge(installation):
+def test_revoked_key_between_quote_and_dispatch_refuses_without_charge(installation):
     env = installation
     run = env.start([llm_node()])
     action = env.runs.advance(run["id"])
-    env.store.set_policy(env.user, env.org, [], 0)
+    key = env.store.keys(env.user, env.org)[0]
+    env.store.disable_key(env.user, env.org, key["id"])
     env.runs.advance(run["id"], quote_action=action, quotes=[QUOTE])
     assert env.view(run)["status"] == "failed"
     assert env.inference.balance(env.user, env.org)["reserved_microusd"] == 0

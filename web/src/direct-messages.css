@@ -55,27 +55,6 @@
 .org-direct-files-text a { color: var(--foreground); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .org-direct-files-text small { color: var(--muted); font-size: 11px; }
 .org-direct-conversation .org-message { position: relative; }
-/* Your own messages in a direct conversation, mirrored: dot and guide line on the right, text right-aligned,
-   and the toolbar, reaction pill and reply curve on the left. */
-.org-message-group-mine::before { left: auto; right: 6.5px; }
-.org-message-group.org-message-group-mine > .org-message { padding: 2px 20px 4px 10px; text-align: right; border-radius: var(--radius-card) 0 0 var(--radius-card); }
-.org-message-group.org-message-group-mine > .org-message:first-child > header { flex-direction: row-reverse; margin-left: 0; margin-right: -17px; }
-.org-message-group-mine .org-message pre, .org-message-group-mine .org-message .katex-display, .org-message-group-mine .org-message table,
-.org-message-group-mine .org-message ul, .org-message-group-mine .org-message ol { text-align: left; }
-.org-message-group-mine .org-message.org-message-continuation > header > time { right: auto; left: .5rem; }
-.org-message-group-mine > .org-message > .chat-message-actions::before { right: auto; left: 0; }
-/* The topic slot rules all set `right`; mirrored launchers use `left` instead. */
-.org-message-group-mine .chat-message-actions .chat-action-launcher { right: auto !important; }
-.org-message-group-mine .chat-message-actions .chat-copy-launcher { left: .25rem; }
-.org-message-group-mine .chat-has-fork .chat-fork-launcher { left: 2rem; }
-.org-message-group-mine .chat-has-fork .chat-reply-launcher { left: 3.75rem; }
-.org-message-group-mine .chat-has-reply:not(.chat-has-fork) .chat-reply-launcher { left: 2rem; }
-.org-message-group-mine .chat-has-react .chat-reaction-launcher { left: 2rem; }
-.org-message-group-mine .chat-has-react.chat-has-reply .chat-reaction-launcher { left: 3.75rem; }
-.org-message-group-mine .chat-has-react.chat-has-reply.chat-has-fork .chat-reaction-launcher { left: 5.5rem; }
-.org-message-group-mine .org-message .chat-reaction-pill { right: auto; left: 10px; }
-.org-app .org-message-group-mine .org-reply-pointer { margin-left: auto; }
-.org-message-group-mine .org-message:has(> .org-reply-pointer)::after { left: auto; right: 6.25px; border-width: 1.5px 1.5px 0 0; border-radius: 0 6px 0 0; }
 .org-direct-status { margin: 0 max(16px, calc((100% - 900px) / 2)) 6px; }
 .org-presence .org-presence-message { width: 100%; min-height: 0; text-align: left; border: 0; padding: 0; background: transparent; color: inherit; font: inherit; font-weight: inherit; cursor: pointer; overflow: hidden; text-overflow: ellipsis; }
 .org-presence .org-presence-message:hover, .org-presence .org-presence-message:focus-visible { text-decoration: underline; }

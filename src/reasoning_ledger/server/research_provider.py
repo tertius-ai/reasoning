@@ -32,7 +32,40 @@ from .store import StoreError
 from .usage_store import UsageStore
 
 REASONING_TEXT_FIELDS = ("text", "summary", "data", "signature")
+CACHE_BREAKPOINT = {"type": "ephemeral"}
+CREDIT_RETRY_DELAYS = (5, 15, 30)
 logger = logging.getLogger(__name__)
+
+
+def cache_breakpoints(messages: list[dict], previous: int | None = None) -> tuple[list[dict], int | None]:
+    """Mark prompt-cache breakpoints on a copy of the request messages; return it and the last marked index.
+
+    The system prompt is marked, so instructions and tool schemas are read from the cache, and so is the
+    last message with text, so the next round re-reads this round's conversation at the cache price. The
+    previous round's last mark is kept as well, because a provider looks back only a bounded number of
+    blocks from a breakpoint for an earlier cache entry. Messages without text cannot carry a mark.
+    """
+
+    def marked(message):
+        content = message.get("content")
+        if isinstance(content, str) and content:
+            return {**message, "content": [{"type": "text", "text": content, "cache_control": CACHE_BREAKPOINT}]}
+        if isinstance(content, list):
+            last = next((index for index in range(len(content) - 1, -1, -1) if isinstance(content[index], dict)
+                         and content[index].get("type") == "text" and content[index].get("text")), None)
+            if last is not None:
+                parts = list(content)
+                parts[last] = {**parts[last], "cache_control": CACHE_BREAKPOINT}
+                return {**message, "content": parts}
+        return None
+
+    end = next((index for index in range(len(messages) - 1, -1, -1) if marked(messages[index]) is not None), None)
+    system = next((index for index, message in enumerate(messages) if message.get("role") == "system"), None)
+    previous = previous if previous is not None and previous < len(messages) else None
+    result = list(messages)
+    for index in {system, previous, end} - {None}:
+        result[index] = marked(messages[index]) or messages[index]
+    return result, end
 
 
 class ReasoningFieldError(Exception):
@@ -118,6 +151,7 @@ class ResearchCompletion:
         self._last_visible_finish = None
         self.worker_spans, self._dispatch = None, None
         self._reviewer, self._prefix = None, None
+        self._cache_end = None
 
     def complete(self, payload, *, timeout):
         if self.worker_spans is not None and "executor_start" not in self.worker_spans.values:
@@ -127,12 +161,44 @@ class ResearchCompletion:
             payload = self.context_transform(payload)
         spans.mark("context_transform")
         try:
-            return asyncio.run(self.submit(payload, timeout=timeout, spans=spans))
+            return asyncio.run(self.submit_with_credit_retry(payload, timeout=timeout, spans=spans))
         except StoreError:
             # Admission failed before a submission receipt. Earlier paid calls
             # stay in aggregate(); do not reserve or replay the refused call.
             self.failure_code = "execution_not_authorized"
             raise ProviderError(self.failure_code, no_charge=True) from None
+
+    async def submit_with_credit_retry(self, payload, *, timeout, purpose=None, spans=None):
+        """Only known temporary pre-generation credit refusals are safe to submit again."""
+        deadline = time.monotonic() + timeout
+        for attempt in range(len(CREDIT_RETRY_DELAYS) + 1):
+            try:
+                result = await self.submit(payload, timeout=max(1, deadline - time.monotonic()), purpose=purpose, spans=spans)
+                self.failure_code = None
+                return result
+            except ProviderError as error:
+                diagnostic = error.diagnostics or {}
+                transient = diagnostic.get("limit_source") == "openrouter_in_flight_budget" or (
+                    diagnostic.get("limit_source") == "openrouter_credits" and not diagnostic.get("reason"))
+                if (not error.no_charge or self.partial_generation is not None or diagnostic.get("phase") != "http"
+                        or diagnostic.get("http_status") != 402 or not transient or attempt == len(CREDIT_RETRY_DELAYS)):
+                    raise
+                delay = max(CREDIT_RETRY_DELAYS[attempt], getattr(error, "retry_after_seconds", 0))
+                if time.monotonic() + delay >= deadline:
+                    raise
+                with self.inference.store.transaction(write=True) as db:
+                    self.inference._event(db, self.row["organization_id"], self.row["id"], {
+                        "type": "agent", "phase": "provider_credit_wait", "attempt": attempt + 1, "seconds": delay,
+                        "summary": "Waiting for OpenRouter credits or recent charges to settle", "diagnostics": diagnostic,
+                    })
+                await self._wait_for_credit(delay)
+
+    async def _wait_for_credit(self, delay):
+        deadline = time.monotonic() + delay
+        while time.monotonic() < deadline:
+            self._check_cancel()
+            await asyncio.sleep(min(0.1, max(0, deadline - time.monotonic())))
+        self._check_cancel()
 
     async def submit(self, payload, *, timeout, purpose=None, spans=None):
         """``spans`` times this call's preparation; values are durations only, never request content."""
@@ -241,7 +307,12 @@ class ResearchCompletion:
                 }
             else:
                 submitted = True
-                response = await self._agent_stream(key, request, timeout)
+                wire = request
+                if self.quote.prompt_caching:
+                    # Breakpoints go on the wire only; the retained session keeps the agent's own messages.
+                    marked, self._cache_end = cache_breakpoints(request["messages"], self._cache_end)
+                    wire = {**request, "messages": marked}
+                response = await self._agent_stream(key, wire, timeout)
                 generation = response.get("id")
                 if response.get("usage"):
                     usage = Usage.parse(response["usage"])
@@ -307,7 +378,9 @@ class ResearchCompletion:
                 error_code=code,
                 diagnostics=diagnostics,
             )
-            raise ProviderError(code, no_charge=free, diagnostics=diagnostics) from None
+            failure = ProviderError(code, no_charge=free, diagnostics=diagnostics)
+            failure.retry_after_seconds = getattr(exc, "retry_after_seconds", 0)
+            raise failure from None
 
     def _goal_admission(self, reserve, db):
         """Goal time and cost admission, inside the caller's reservation transaction."""

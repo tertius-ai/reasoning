@@ -257,8 +257,9 @@ class UsageStore:
     def diagnostics(db, run_id: str) -> dict | None:
         row = db.execute(
             """SELECT e.data_json FROM inference_calls i JOIN inference_call_events e ON e.call_id=i.id
-            WHERE i.run_id=? AND json_extract(e.data_json,'$.diagnostics') IS NOT NULL ORDER BY e.sequence DESC LIMIT 1""",
-            (run_id,),
+            WHERE i.run_id=? AND i.sequence=(SELECT MAX(sequence) FROM inference_calls WHERE run_id=?)
+            AND e.kind IN ('completion','historical') ORDER BY e.sequence DESC LIMIT 1""",
+            (run_id, run_id),
         ).fetchone()
         return json.loads(row[0]).get("diagnostics") if row else None
 

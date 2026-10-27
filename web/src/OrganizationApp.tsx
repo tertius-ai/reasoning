@@ -1,3 +1,4 @@
+import { ProviderDailySpend } from "./ProviderDailySpend";
 import { schedulePoll, startPolling } from "./polling";
 import { LIVE_SAFETY_POLL_MS, subscribeTopicEvents } from "./topicEvents";
 import React, { lazy, useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -16,7 +17,7 @@ import { Brand } from "./Brand";
 import { ComputeConversation } from "./ComputeConversation";
 import { DirectConversation, DirectMessageMarks, DirectMessagePicker, NewDirectMessageButton, directPath, directUnread, directUnreadTotal, peopleInbox } from "./DirectMessages";
 import { KnowledgeLinks, KnowledgeView } from "./KnowledgeLinks";
-import { ReplyBar, ReplyPointer, ThreadCount, ThreadDialog, threadReplyCounts } from "./MessageReplies";
+import { ReplyBar, ReplyPointer, ThreadCount, ThreadDialog, continuesRun, threadReplyCounts } from "./MessageReplies";
 import { additionReceipt, modelName, moveBlocked, moveTarget, replyThreads, shownInReply, stepCount, threadAnswering } from "./ReplyAdditions";
 import { MentionMirror, MentionSelf, MentionTag, chatTones, mentionFromHref, mentionInitials, speakerKey, speakerTone, toneClass } from "./mentions";
 import { LazyView } from "./LazyView";
@@ -49,8 +50,8 @@ import { ReferenceCandidate, ReferenceContext, ReferenceLink, ReferenceResolver,
   referenceCandidates, referenceFromHref, referenceQuery, referenceToken, remarkReferences, topicLink } from "./references";
 import {
   Account, ApiError, Channel, EMPTY_HIERARCHY, Hierarchy, InferenceConfiguration, Invitation, InvitationMail, KeyMetadata, KIND_LABEL, KIND_SYMBOL, KnowledgeTool,
-  BotModel, Member, MentionQuery, Message, ModelAttempt, ModelRun, Organization, ReplyAddition, OrganizationPrices, Policy, Presence, Project, ProjectMember, SearchResult, Session, Topic, TopicKind, aborted,
-  authorLabel, decimalBudget, errorMessage, invitationEmailLabel, mentionMarkdown, mentionQuery, mentionText, mergeMessages, modelCatalog as sharedModelCatalog, organizationPath, readTopicSnapshot, rememberTopicSnapshot, request, sharedRequest, topicPath, PendingModelAttempt,
+  BotModel, Member, MentionQuery, Message, ModelAttempt, ModelRun, Organization, ReplyAddition, OrganizationPrices, Presence, Project, ProjectMember, SearchResult, Session, Topic, TopicKind, aborted,
+  authorLabel, decimalBudget, errorMessage, invitationEmailLabel, isOwnMessage, mentionMarkdown, mentionQuery, mentionText, mergeMessages, modelCatalog as sharedModelCatalog, organizationPath, readTopicSnapshot, rememberTopicSnapshot, request, sharedRequest, topicPath, PendingModelAttempt,
 } from "./organization-api";
 
 // Views opened by deliberate navigation load on first use.
@@ -118,10 +119,8 @@ export function alphaMessageGroups(messages: Message[]): Message[][] {
   const groups: Message[][] = [];
   for (const message of messages) {
     const last = groups.at(-1)?.at(-1);
-    const sameDay = last && new Date(last.created_at * 1000).toDateString() === new Date(message.created_at * 1000).toDateString();
     // A reply starts its own group, so its pointer sits above the speaker's name.
-    if (last && last.author_id === message.author_id && last.author_kind === message.author_kind && !message.reply_to
-      && message.author_kind !== "assistant" && message.created_at >= last.created_at && message.created_at - last.created_at <= 300 && sameDay) groups.at(-1)!.push(message);
+    if (last && !message.reply_to && continuesRun(last, message)) groups.at(-1)!.push(message);
     else groups.push([message]);
   }
   return groups;
@@ -524,7 +523,7 @@ function TopicRenameControl({ organizationId, topic, onChanged }: { organization
     {error && <p role="alert" className="org-error">{error}</p>}<button disabled={busy || name === topic.name}>Save name</button></form>;
 }
 
-type CredentialSource = { organization: Organization; key: KeyMetadata; policy: Policy };
+type CredentialSource = { organization: Organization; key: KeyMetadata };
 
 function OrganizationCreationDialog({ organizations, onClose, onCreate }: {
   organizations: Organization[]; onClose: () => void; onCreate: (body: Record<string, unknown>) => Promise<void>;
@@ -534,7 +533,6 @@ function OrganizationCreationDialog({ organizations, onClose, onCreate }: {
   const [mode, setMode] = useState<"new" | "reuse" | "none">("new");
   const [label, setLabel] = useState("Primary");
   const [key, setKey] = useState("");
-  const [budget, setBudget] = useState("");
   const [sources, setSources] = useState<CredentialSource[]>([]);
   const [source, setSource] = useState("");
   const [busy, setBusy] = useState(false);
@@ -543,14 +541,13 @@ function OrganizationCreationDialog({ organizations, onClose, onCreate }: {
     let alive = true;
     void Promise.all(administrators.map(async (organization) => {
       const root = organizationPath(organization.id);
-      const [keys, policy] = await Promise.all([request<KeyMetadata[]>(root + "/provider-keys"), request<Policy>(root + "/policy")]);
-      return keys.filter((item) => item.disabled_at === null).map((item) => ({ organization, key: item, policy }));
+      const keys = await request<KeyMetadata[]>(root + "/provider-keys");
+      return keys.filter((item) => item.disabled_at === null).map((item) => ({ organization, key: item }));
     })).then((groups) => {
       if (!alive) return;
       const available = groups.flat(); setSources(available);
       if (available[0]) {
         setSource(available[0].organization.id + ":" + available[0].key.id);
-        setBudget((available[0].policy.monthly_budget_microusd / 1_000_000).toFixed(6).replace(/\.?0+$/, ""));
       }
     }).catch((cause) => { if (alive) setError(errorMessage(cause)); });
     return () => { alive = false; };
@@ -559,8 +556,7 @@ function OrganizationCreationDialog({ organizations, onClose, onCreate }: {
     event.preventDefault(); setBusy(true); setError("");
     try {
       let body: Record<string, unknown> = { name, credential_mode: mode };
-      if (mode === "new") body = { ...body, key_label: label, key,
-        monthly_budget_microusd: decimalBudget(budget) };
+      if (mode === "new") body = { ...body, key_label: label, key };
       if (mode === "reuse") {
         const [source_organization_id, source_key_id] = source.split(":");
         body = { ...body, source_organization_id, source_key_id };
@@ -580,16 +576,15 @@ function OrganizationCreationDialog({ organizations, onClose, onCreate }: {
       <p className="org-help">Create a separate upstream key for clear billing and revocation boundaries.</p>
       <label>Key label<input required maxLength={200} value={label} onChange={(event) => setLabel(event.target.value)} /></label>
       <label>OpenRouter API key<input required type="password" minLength={8} maxLength={4096} autoComplete="off" value={key} onChange={(event) => setKey(event.target.value)} /></label>
-      <p className="org-help">This key can use any available OpenRouter model or router, subject to its upstream restrictions and your organization budget.</p>
-      <label>Monthly LLM budget (USD)<input required inputMode="decimal" value={budget} onChange={(event) => setBudget(event.target.value)} /></label>
+      <p className="org-help">This key can use any available OpenRouter model or router, subject to its upstream restrictions and daily key limit.</p>
     </div>}
-    {mode === "reuse" && <div className="org-credential-choice"><p className="org-help">This copies the selected credential and budget into a separate encrypted organization record.</p>
+    {mode === "reuse" && <div className="org-credential-choice"><p className="org-help">This shares the selected OpenRouter key and its provider spending allowance with another organization.</p>
       <label>Existing key<select required value={source} onChange={(event) => setSource(event.target.value)}>
         {sources.map((item) => <option key={item.organization.id + item.key.id} value={item.organization.id + ":" + item.key.id}>
           {item.organization.name} · {item.key.label} · {item.key.fingerprint}
         </option>)}
       </select></label></div>}
-    {mode === "none" && <p className="org-help">The organization starts without provider credentials or an LLM budget.</p>}
+    {mode === "none" && <p className="org-help">The organization starts without provider credentials.</p>}
     {error && <p role="alert" className="org-error">{error}</p>}
     <button className="org-primary" disabled={busy || (mode === "reuse" && !source)}>{busy ? "Creating…" : "Create organization"}</button>
   </form></Dialog>;
@@ -1262,6 +1257,7 @@ function Conversation({ organizationId, topic, members, user, canWrite, canManag
   const groups = topic.kind === "alpha" ? alphaMessageGroups(visibleMessages) : visibleMessages.map(message => [message]);
   const byId = new Map(messages.map(message => [message.id, message]));
   const replyCounts = threadReplyCounts(messages);
+  const speaker = (message: Message) => isOwnMessage(message, user.id) ? "You" : authorLabel(message, members);
   const markUnread = (message: Message) => {
     holdRead.current = true; setUnreadFrom(message.sequence);
     void request(root + "/unread", { method: "PUT", body: { message_id: message.id } }).then(() => onPreference()).catch(cause => {
@@ -1273,7 +1269,8 @@ function Conversation({ organizationId, topic, members, user, canWrite, canManag
       id: "message:" + group[0].id, created_at: group[0].created_at, sequence: group[0].sequence, body: <>
       {topic.kind === "alpha" && (groupIndex === 0 || new Date(groups[groupIndex - 1][0].created_at * 1000).toDateString() !== new Date(group[0].created_at * 1000).toDateString())
         && <div className="org-message-day"><time dateTime={new Date(group[0].created_at * 1000).toISOString().slice(0, 10)}>{new Date(group[0].created_at * 1000).toLocaleDateString(undefined, { weekday: "long", month: "short", day: "numeric", year: "numeric" })}</time></div>}
-      <div className={"org-message-group org-speaker-" + (group[0].author_kind ?? "human") + " " + speakerTone(group[0], tones)}>{group.map((message, index) => {
+      <div className={"org-message-group org-speaker-" + (group[0].author_kind ?? "human") + " " + speakerTone(group[0], tones)
+        + (isOwnMessage(group[0], user.id) ? " org-message-group-mine" : "")}>{group.map((message, index) => {
         const { threads } = runsNow.current;
         const answering = topic.kind === "beta" && canWrite ? threadAnswering(threads, message.sequence) : undefined;
         const addition = topic.kind === "beta" ? threads.flatMap(thread => thread.additions).find(item => item.message_id === message.id)
@@ -1286,8 +1283,8 @@ function Conversation({ organizationId, topic, members, user, canWrite, canManag
         key={message.id} id={"message-" + message.sequence} data-sequence={message.sequence} data-message-id={message.id}
         tabIndex={message.id === focus ? -1 : undefined} aria-current={message.id === highlighted ? "location" : undefined}>
         {message.reply_to && <ReplyPointer original={byId.get(message.reply_to)} onOpen={() => setThreadFor(message.id)}
-          label={byId.get(message.reply_to) && authorLabel(byId.get(message.reply_to)!, members)} />}
-        <header>{!index && <strong>{authorLabel(message, members)}</strong>}
+          label={byId.get(message.reply_to) && speaker(byId.get(message.reply_to)!)} />}
+        <header>{!index && <strong>{speaker(message)}</strong>}
           <time dateTime={new Date(message.created_at * 1000).toISOString()} title={new Date(message.created_at * 1000).toLocaleString()}>{topic.kind === "alpha" ? new Date(message.created_at * 1000).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" }) : new Date(message.created_at * 1000).toLocaleString()}</time></header>
         <MessageMarkdown markdown={normalizeMathDelimiters(mentionMarkdown(message.content, mentionPeople))} />
         {!!message.files?.length && <ReplyFiles topicId={topic.id} files={message.files} />}
@@ -1361,11 +1358,14 @@ function Conversation({ organizationId, topic, members, user, canWrite, canManag
           onAdd={canWrite ? () => setThreadAdding(current => current === id ? undefined : id) : undefined}
           onStop={online && (canManage || answering.root.requested_by === user.id) ? () => void stopReply.current?.(id) : undefined} />;
       })}
-      renderMessage={message => <div className={"org-message-group org-speaker-" + (message.author_kind ?? "human") + " " + speakerTone(message, tones)}><article className="org-message">
-        <header><strong>{authorLabel(message, members)}</strong>
-          <time dateTime={new Date(message.created_at * 1000).toISOString()}>{new Date(message.created_at * 1000).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" })}</time></header>
+      renderGroup={group => <div className={"org-message-group org-speaker-" + (group[0].author_kind ?? "human") + " " + speakerTone(group[0], tones)
+        + (isOwnMessage(group[0], user.id) ? " org-message-group-mine" : "")}>{group.map((message, index) =>
+        <article key={message.id} className={"org-message" + (index ? " org-message-continuation" : "")}>
+        <header>{!index && <strong>{isOwnMessage(message, user.id) ? "You" : authorLabel(message, members)}</strong>}
+          <time dateTime={new Date(message.created_at * 1000).toISOString()}>{index ? new Date(message.created_at * 1000).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" })
+            : new Date(message.created_at * 1000).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" })}</time></header>
         <MessageMarkdown markdown={normalizeMathDelimiters(mentionMarkdown(message.content, mentionPeople))} />
-        <ReplyFooter message={message} userId={user.id} names={memberNames} /></article></div>} />}
+        <ReplyFooter message={message} userId={user.id} names={memberNames} /></article>)}</div>} />}
     {topic.kind === "beta" && <ForkOrigin organizationId={organizationId} topicId={topic.id} />}
     {focusMissing && <p role="status" className="org-link-notice">The linked message is unavailable. It may have been removed, or you may not have access to it.
       <button type="button" aria-label="Dismiss notice" onClick={() => setFocusMissing(false)}>×</button></p>}
@@ -1506,7 +1506,6 @@ function Administration({ organization, onClose, onRefresh, onAuthLost }: { orga
   const inviteAttempt = useRef<{ email: string; role: string; client_id: string } | null>(null);
   const resendAttempts = useRef<Record<string, string>>({});
   const [keys, setKeys] = useState<KeyMetadata[]>([]);
-  const [budget, setBudget] = useState("0");
   const [email, setEmail] = useState("");
   const [role, setRole] = useState("member");
   const [keyValue, setKeyValue] = useState("");
@@ -1523,7 +1522,6 @@ function Administration({ organization, onClose, onRefresh, onAuthLost }: { orga
     ]);
     else if (tab === "ai") await Promise.all([
       request<KeyMetadata[]>(root + "/provider-keys").then(setKeys),
-      request<Policy>(root + "/policy").then(policy => setBudget((policy.monthly_budget_microusd / 1_000_000).toFixed(6).replace(/\.?0+$/, ""))),
     ]);
   }, [root, tab]);
   useEffect(() => { void reload().catch((cause) => setError(errorMessage(cause))); }, [reload]);
@@ -1597,18 +1595,18 @@ function Administration({ organization, onClose, onRefresh, onAuthLost }: { orga
           value={keyLabel} onChange={(event) => setKeyLabel(event.target.value)} /></label>
         <label>OpenRouter API key<input type="password" required disabled={busy} name="reasoning-new-openrouter-key" placeholder="Paste a new OpenRouter key" minLength={8} maxLength={4096}
           autoComplete="new-password" autoCapitalize="none" spellCheck={false} value={keyValue} onChange={(event) => setKeyValue(event.target.value)} /></label>
-        <p className="org-help">Keys can use any available OpenRouter model or router. Upstream key restrictions, routing policy, and organization spending limits still apply.</p>
+        <p className="org-help">Keys can use any available OpenRouter model or router. OpenRouter key limits and routing policy apply. Set a daily spending limit on the key in OpenRouter.</p>
         <p className="org-help">Enabled by default. Adding the key replaces the model allowlist with the current text-to-text catalog; you can narrow it below.</p>
         <button className="org-primary" disabled={busy}>{busy ? "Adding…" : "Add OpenRouter key"}</button></form>}
       {!keys.length && <p className="org-help">No OpenRouter keys are stored.</p>}
       <ul className="org-admin-list">{keys.map((key) => <li key={key.id}><div><strong>{key.label}</strong><small>{key.provider} · {key.fingerprint} · {key.disabled_at ? "Disabled" : "Active"}</small></div>
         {!key.disabled_at && <button disabled={busy} onClick={() => { if (window.confirm("Disable this stored key? Add a replacement first if needed. This does not revoke the upstream OpenRouter credential.")) void action(() => request(root + "/provider-keys/" + key.id, { method: "DELETE" })); }}>Disable</button>}
-      </li>)}</ul><ProviderKeyUsage key={keys.map(key => key.id).join(",")} organizationId={organization.id} /></section><section><h3>Spending limit</h3><form onSubmit={(event) => { event.preventDefault(); void action(() => request(root + "/policy", { method: "PUT", body: {
-      monthly_budget_microusd: decimalBudget(budget),
-    } })); }}><p className="org-help">Beta conversations reserve this budget before execution. Known charges and unresolved reservations reduce the available balance. Set upstream OpenRouter key limits too; local reservations do not guarantee the provider bill.</p>
-      <label>Monthly budget (USD)<input required inputMode="decimal" value={budget} onChange={(event) => setBudget(event.target.value)} /></label>
-      <button className="org-primary" disabled={busy}>Save budget</button>
-    </form></section></div>}
+      </li>)}</ul><ProviderKeyUsage key={keys.map(key => key.id).join(",")} organizationId={organization.id} /></section><section><h3>Daily spending limit</h3>
+      <p className="org-help">OpenRouter enforces spending limits. Set this organization's dedicated key to a daily limit in
+        <a href="https://openrouter.ai/settings/keys" target="_blank" rel="noreferrer"> OpenRouter key settings ↗</a>.
+        The bar beside Reasoning shows the active key's daily spend and limit for everyone in this organization.
+        Reusing a key shares its allowance across organizations. Automatic credit top-ups do not reset that allowance.</p>
+    </section></div>}
   </Dialog>;
 }
 
@@ -1927,7 +1925,7 @@ export function OrganizationApp({ user, onAccount, onAuthenticated, onSignedOut,
     <header className="org-appbar org-topic-color"><div className={"org-appbar-brand" + (navOpen ? " org-appbar-brand-open" : "")}><button type="button" className="org-icon-button org-nav-toggle" aria-label="Toggle project navigation"
       title="Toggle project navigation · Ctrl/⌘B" aria-controls="org-project-navigation" aria-expanded={navOpen} onClick={() => setNavOpen(open => !open)}>
       <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2" /><path d="M9 4v16" /></svg></button>
-      <Brand /></div>
+      <Brand />{organizationId && <ProviderDailySpend key={organizationId} organizationId={organizationId} onAuthLost={authLost} />}</div>
       {knowledgeView ? <h1 className="org-workspace-title">{knowledgeView === "journal" ? "Research blog editor" : knowledgeView === "ledger" ? "Ledger" : "Bibliography"}</h1>
         : directConversation && organization ? <DirectTitle key={directConversation.id} organizationId={organization.id} conversation={directConversation} members={members}
           userId={user.id} onChanged={preferenceRefresh} onAuthLost={authLost} onShowMessage={target => setDirectJump(previous => ({ ...target, nonce: (previous?.nonce ?? 0) + 1 }))}

@@ -11,6 +11,7 @@ from datetime import UTC, datetime
 
 from .inference_credit import lock as credit_lock
 from .openrouter import OUTPUT_RESERVATION_TOKENS, Quote, Usage
+from .provider_keys import active_key
 from .store import Store, StoreError, _id, _row
 
 TERMINAL = {"succeeded", "failed", "cancelled", "interrupted"}
@@ -61,7 +62,7 @@ class InferenceStore:
     def _preflight(
         self, db: sqlite3.Connection, user: str, org: str, topic: str, *, topic_kind: str = "beta", target: dict | None = None
     ) -> tuple[dict, dict]:
-        """Topic kind, key and budget; ``target`` is the topic a caller already resolved with write access."""
+        """Topic kind and key; ``target`` is the topic a caller already resolved with write access."""
         if target is None:
             target = self.store._topic_access(db, user, org, topic, write=True)[4]
         if target["kind"] != topic_kind:
@@ -69,21 +70,15 @@ class InferenceStore:
                 400, "model responses require a beta topic" if topic_kind == "beta" else "workflow responses require a gamma topic"
             )
         policy = _row(db.execute("SELECT * FROM organizations WHERE id=?", (org,)).fetchone())
-        key = db.execute(
-            "SELECT p.id FROM provider_keys p LEFT JOIN audit_events a ON a.organization_id=p.organization_id "
-            "AND a.target_id=p.id AND a.action='provider-key.create' "
-            "WHERE p.organization_id=? AND p.provider='openrouter' AND p.disabled_at IS NULL "
-            "ORDER BY a.sequence DESC,p.created_at DESC,p.id DESC LIMIT 1",
-            (org,),
-        ).fetchone()
-        if key is None or policy["monthly_budget_microusd"] <= 0:
-            raise StoreError(409, "an administrator must configure an organization key and a positive budget")
+        key = active_key(db, org)
+        if key is None:
+            raise StoreError(409, "an administrator must configure an organization OpenRouter key")
         return policy, dict(key)
 
     @staticmethod
     def _balance(db: sqlite3.Connection, org: str) -> dict:
-        month = int(datetime.now(UTC).replace(day=1, hour=0, minute=0, second=0, microsecond=0).timestamp())
-        # Only holds and this month's settled charges contribute; each sum reads
+        day = int(datetime.now(UTC).replace(hour=0, minute=0, second=0, microsecond=0).timestamp())
+        # Only holds and today's settled charges contribute; each sum reads
         # its accounting-index range rather than the organization's whole history.
         row = db.execute(
             """SELECT
@@ -93,7 +88,7 @@ class InferenceStore:
                 AS reserved_microusd,
             COALESCE((SELECT SUM(reserved_microusd) FROM llm_runs WHERE organization_id=? AND accounting_state='uncertain'),0)
                 AS uncertain_microusd""",
-            (org, month, org, org),
+            (org, day, org, org),
         ).fetchone()
         result = dict(row)
         work = db.execute(
@@ -101,13 +96,9 @@ class InferenceStore:
             "COALESCE(SUM(CASE WHEN e.state='intent' THEN e.held_microusd ELSE 0 END),0) AS reserved_microusd,"
             "COALESCE(SUM(CASE WHEN e.state='unknown' THEN e.held_microusd ELSE 0 END),0) AS uncertain_microusd "
             "FROM work_effects e JOIN work_jobs j ON j.id=e.job_id WHERE j.organization_id=? AND e.kind='inference'",
-            (month, org),
+            (day, org),
         ).fetchone()
         result = {key: result[key] + work[key] for key in result}
-        result["budget_microusd"] = db.execute("SELECT monthly_budget_microusd FROM organizations WHERE id=?", (org,)).fetchone()[0]
-        result["available_microusd"] = max(
-            0, result["budget_microusd"] - sum(result[key] for key in ("spent_microusd", "reserved_microusd", "uncertain_microusd"))
-        )
         return result
 
     def balance(self, user: str, org: str) -> dict:
@@ -278,8 +269,6 @@ class InferenceStore:
         reserves = [
             quote.reservation(context, self.output_capacity(quote, context, parameters["max_completion_tokens"])) for quote in quotes
         ]
-        if sum(reserves) > self._balance(db, org)["available_microusd"]:
-            raise StoreError(409, "organization inference budget cannot cover this reservation")
         spans.mark("reservation")
         runs = []
         request_id = _id()
@@ -344,12 +333,9 @@ class InferenceStore:
         with self.store.transaction(write=True) as db:
             credit_lock(self.store, db, row["organization_id"])
             current = _row(db.execute(self._joined() + "WHERE r.id=?", (row["id"],)).fetchone())
-            balance = self._balance(db, row["organization_id"])
             if (current["status"] != "running" or current["attempt_id"] != row["attempt_id"]
-                    or self._stop_reason(db, current, balance=balance)):
+                    or self._stop_reason(db, current)):
                 raise StoreError(409, "execution no longer authorized")
-            if amount > balance["available_microusd"]:
-                raise StoreError(409, "organization inference budget cannot cover the next agent call")
             from .research_goals import ResearchGoals
 
             goal = db.execute(
@@ -376,10 +362,8 @@ class InferenceStore:
                 if spans is not None:
                     spans.mark("goal_admission")
             current = _row(db.execute(self._joined() + "WHERE r.id=?", (row["id"],)).fetchone())
-            # One balance read serves the stop check and the reservation in this transaction.
-            balance = self._balance(db, row["organization_id"])
             if (current["status"] != "running" or current["attempt_id"] != row["attempt_id"]
-                    or self._stop_reason(db, current, balance=balance)):
+                    or self._stop_reason(db, current)):
                 raise StoreError(409, "execution no longer authorized")
             prior = db.execute(
                 "SELECT COALESCE(SUM(CASE json_extract(e.data_json,'$.accounting_state') "
@@ -391,8 +375,6 @@ class InferenceStore:
                 (row["organization_id"], row["id"]),
             ).fetchone()[0]
             target = prior + estimate
-            if target > current["reserved_microusd"] + balance["available_microusd"]:
-                raise StoreError(409, "organization inference budget cannot cover the next agent call")
             db.execute("UPDATE llm_runs SET reserved_microusd=? WHERE id=?", (target, row["id"]))
 
     @staticmethod
@@ -592,7 +574,7 @@ class InferenceStore:
             db.execute("UPDATE llm_runs SET cancel_requested=1 WHERE organization_id=? AND id=?", (org, row["id"]))
             self._event(db, org, row["id"], {"type": "cancel_requested"})
 
-    def _stop_reason(self, db: sqlite3.Connection, row: dict, *, balance: dict | None = None) -> str | None:
+    def _stop_reason(self, db: sqlite3.Connection, row: dict) -> str | None:
         if row["cancel_requested"]:
             return "cancel_requested"
         from .topic_agents import TopicAgents
@@ -625,14 +607,6 @@ class InferenceStore:
             self.store._topic_access(db, row["requested_by"], row["organization_id"], row["topic_id"], write=True)
         except StoreError:
             return "requester_unavailable"
-        policy = db.execute(
-            "SELECT model_policy_json,monthly_budget_microusd FROM organizations WHERE id=?", (row["organization_id"],)
-        ).fetchone()
-        if policy[1] <= 0:
-            return "model_policy_changed"
-        balance = balance or self._balance(db, row["organization_id"])
-        if sum(balance[field] for field in ("spent_microusd", "reserved_microusd", "uncertain_microusd")) > policy[1]:
-            return "budget_changed"
         if (
             db.execute(
                 "SELECT disabled_at FROM provider_keys WHERE organization_id=? AND id=?", (row["organization_id"], row["key_id"])
