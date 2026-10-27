@@ -16,9 +16,13 @@ def answer_state(db, row, *, status=None, error=None):
         latest[phase] = json.loads(event[0]) if event else None
     waiting, checkpoint = latest["waiting"], latest["answer_checkpoint"]
     status = status or row["status"]
-    state = "waiting" if waiting and status in {"running", "succeeded"} else "working" if status in {"queued", "running"} \
-        else "response_ready" if status == "succeeded" else "partial"
-    return {"status": state, "reason": waiting.get("reason") if state == "waiting" else error or row["error_code"],
+    # A turn that waited stays incomplete only until the server hands its work to the next turn, which owns the answer.
+    handoff = waiting and status == "succeeded" and db.execute(
+        "SELECT next_run FROM topic_agent_handoffs WHERE parent_run=?", (row["id"],)).fetchone()
+    state = "continued" if handoff else "waiting" if waiting and status in {"running", "succeeded"} \
+        else "working" if status in {"queued", "running"} else "response_ready" if status == "succeeded" else "partial"
+    return {"status": state, "reason": waiting.get("reason") if state in {"waiting", "continued"} else error or row["error_code"],
+            **({"next_run": handoff[0]} if handoff else {}),
             "checkpoint": {key: checkpoint[key] for key in ("summary", "remaining", "sources") if key in checkpoint}
             if checkpoint else None}
 

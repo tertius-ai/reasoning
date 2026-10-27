@@ -106,7 +106,8 @@ make bot-connect
 ```
 
 The wizard asks for the server hostname or HTTPS URL, then selects the CLI,
-advertised CLI models, a bot name, and whether to allow local tools/CAS.
+a bot name, and whether to allow local tools/CAS. The runner automatically
+discovers model choices from that computer's authenticated CLI.
 It opens a browser; compare the displayed connection
 code, select the organization and conversation/knowledge access, and approve. The bot
 is paired to that selected organization only, even when the server hosts several
@@ -158,7 +159,7 @@ To configure without terminal prompts while retaining browser approval:
 
 ```bash
 uv run --locked reasoning-bot connect --server https://chat.example.org \
-  --engine codex --name "My Codex" --no-local-tools --models default --pair-only
+  --engine codex --name "My Codex" --no-local-tools --pair-only
 ```
 
 `--no-browser` prints the approval URL for another computer. This does not skip
@@ -350,9 +351,25 @@ ledger; no invoice or carbon figures are fabricated for these replies.
 
 Connected bot models appear in the beta reply-model selector and gamma workflow
 model selectors. They use `bot/<identity>/<CLI-model>` routing identifiers but
-display readable bot names. Choose `default` to use the CLI's default model, or
-advertise explicit model IDs supported by that CLI account during connection.
-The server does not infer account access from a model name. Selected routes are
+display readable bot and model names. Choose **CLI default** to use the CLI's
+default model, or choose a discovered model and its supported effort in the
+model picker below the beta message box. The new beta-topic dialog offers
+these choices too. The runner refreshes its catalog every five minutes, including
+while a reply is running; beta model selectors refresh every five seconds.
+Codex uses `codex debug models`; Claude Code uses the Agent SDK initialization
+response's model catalog. Discovery sends no prompt and performs no inference.
+It runs separately from request heartbeats, with a 20-second timeout and a 4 MiB
+output bound. Failed refreshes keep the last successful catalog and retry after
+one minute. Until discovery succeeds, **CLI default** remains available. Up to
+20 choices, including the default, are advertised.
+
+Connection option `--models ID,ID` restricts advertisements to an explicit
+allowlist; `--models auto` and default-only saved profiles use discovery.
+Restart an existing runner with the updated checkout to enable discovery;
+pairing is retained. Catalog entries are the CLI's reported choices, not proof
+of account entitlement. A provider refusal remains visible without substituting
+another model. A running request retains its admitted model and effort even if
+the catalog changes. Selected routes are
 retained per user/topic; no failure falls back to OpenRouter. Beta `/goal` uses
 the selected bot without requiring an OpenRouter key or reservation. Time,
 turn, and tool allowances still apply; provider-account spending is managed

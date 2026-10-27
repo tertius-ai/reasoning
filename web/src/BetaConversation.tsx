@@ -381,7 +381,8 @@ function BetaRunCard({ root, organizationId, topicId, run, canManage, canControl
   };
   return <details data-run-id={run.id} data-status={run.status} className="org-model-run org-run-compact" open={open}
     onToggle={event => { if (event.target === event.currentTarget) setOpen(event.currentTarget.open); }}>
-    <summary><strong>{run.agent ? `${run.agent.role.replaceAll("_", " ")} · ` : ""}{run.model}</strong><span role="status">{run.cancel_requested && active ? "Cancelling…" : paused ? "paused" : run.answer_state?.status === "waiting" ? "Waiting · answer incomplete" : run.status}</span>
+    <summary><strong>{run.agent ? `${run.agent.role.replaceAll("_", " ")} · ` : ""}{run.model}</strong><span role="status">{run.cancel_requested && active ? "Cancelling…" : paused ? "paused" : run.answer_state?.status === "waiting" ? "Waiting · answer incomplete"
+      : run.answer_state?.status === "continued" ? "Continued in a later reply" : run.status}</span>
       {!active && run.error_code && <span title={run.diagnostics?.message}>{run.diagnostics?.http_status
         ? `${run.diagnostics.phase === "stream" ? "Stream error" : "HTTP"} ${run.diagnostics.http_status}`
         : run.error_code.replaceAll("_", " ")}</span>}
@@ -406,6 +407,7 @@ function BetaRunCard({ root, organizationId, topicId, run, canManage, canControl
       {run.answer_state.checkpoint.remaining && <p>Remaining: {run.answer_state.checkpoint.remaining}</p>}
       {run.answer_state.checkpoint.sources?.map(source => <p key={source}>{source}</p>)}</details>}
     {run.answer_state?.status === "waiting" && <p role="status">Waiting: {run.answer_state.reason}. Continue from the retained checkpoint when the result arrives.</p>}
+    {run.answer_state?.status === "continued" && <p className="org-help">Waited for {run.answer_state.reason}. A later reply continued this work and carries the answer.</p>}
     {run.output_text && <pre aria-label={"Streaming response from " + run.model}>{run.output_text}</pre>}
     {!active && run.output_text && <OutputActions {...{ organizationId, topicId, onAuthLost }} targetKind="run" targetId={run.id} canWrite={canReact} text={run.output_text} />}
     <div className="org-usage-row"><MessageUsageDetails usage={run.usage} />

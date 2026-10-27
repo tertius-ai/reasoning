@@ -83,6 +83,10 @@ search and person-specific favorites saved on the server across devices and
 organizations. Effort choices depend on the advertised
 model capabilities; default leaves the provider's effort unchanged.
 Markdown, code blocks, tables, and TeX render in messages. Raw HTML is not executed.
+Your own messages sit on the right under **You**, each as wide as its text and left-aligned;
+everyone else's messages and model and bot replies sit on the left. Direct messages and the
+Thread view follow the same rule, and the Thread view shows consecutive messages from one
+person under one name.
 The fork icon opens the message actions: **Copy link**, and where allowed beta-topic
 forking, editing and version history. Forked conversations have a captured
 history, not access to future origin messages.

@@ -71,15 +71,16 @@ def runner_stages(stamps, claimed):
             "cli_exited_ms": elapsed("cli_exited"), "resolved_model": stamps.get("model")}
 
 
-def runtime_step(client, directory, configuration, agent, binding, *, runner=invoke, on_activity=None, on_status=None):
+def runtime_step(client, directory, configuration, agent, binding, *, runner=invoke, on_activity=None, on_status=None,
+                 discovery=None):
     journal = directory / "runtime-runner.json"
     state = read_journal(journal) if journal.exists() else {"format": 1, "binding": binding, "pending": None, "cursor": 0}
     if state.get("format") != 1 or state.get("binding") != binding:
         raise BotClientError("local-agent journal belongs to different connection inputs")
     models = agent.get("models", ["default"])
-    from .reasoning_effort import cli_efforts
-
-    capabilities = {"efforts": {model: cli_efforts(agent["engine"], model) for model in models}, "gateway": "topic-v2"}
+    capabilities = {"efforts": {}, "gateway": "topic-v2"}
+    if discovery:
+        models, capabilities = discovery.advertisement(agent.get("models"))
     advertised = client._request("POST", "/api/bot/runtime", {"engine": agent["engine"], "models": models,
                                  "allow_other_users": binding["allow_other_users"], "local_tools": agent["local_tools"],
                                  "capabilities": capabilities})
@@ -164,9 +165,10 @@ def runtime_step(client, directory, configuration, agent, binding, *, runner=inv
         progress = reconnect(lambda: client._request("POST", f"/api/bot/runs/{run['id']}/progress",
                   {"lease": run["lease"]}), deadline=lease["until"], **reporting)
         lease["until"] = time.monotonic() + LEASE_RETRY_SECONDS
-        reconnect(lambda: client._request("POST", "/api/bot/runtime", {"engine": agent["engine"], "models": models,
+        current_models, current_capabilities = discovery.advertisement(agent.get("models")) if discovery else (models, capabilities)
+        reconnect(lambda: client._request("POST", "/api/bot/runtime", {"engine": agent["engine"], "models": current_models,
                   "allow_other_users": binding["allow_other_users"], "local_tools": agent["local_tools"],
-                  "capabilities": capabilities}), deadline=lease["until"], **reporting)
+                  "capabilities": current_capabilities}), deadline=lease["until"], **reporting)
         return progress
 
     def activity(kind):
@@ -180,10 +182,9 @@ def runtime_step(client, directory, configuration, agent, binding, *, runner=inv
 
     try:
         # No CLI session is shared across requests. On-demand tools recover canonical state without prompt accumulation.
-        options = {"model": run["model"], "gateway": gateway, "heartbeat": heartbeat}
+        options = {"model": run["model"], "gateway": gateway, "heartbeat": heartbeat, "effort": run.get("effort")}
         if runner is invoke:
             options["progress"] = activity
-            options["effort"] = run.get("effort")
         if runner is invoke or "timing" in inspect.signature(runner).parameters:
             options["timing"] = stamps
         result = runner(agent["engine"], workspace, prompt, False, None, **options)
@@ -224,4 +225,4 @@ def runtime_step(client, directory, configuration, agent, binding, *, runner=inv
                         "timing": stages}
     write_journal(journal, state)
     return runtime_step(client, directory, configuration, agent, binding, runner=runner,
-                        on_activity=on_activity, on_status=on_status)
+                        on_activity=on_activity, on_status=on_status, discovery=discovery)
