@@ -116,7 +116,8 @@ test("thread mode adds to a running reply's timeline, Esc returns to the usual b
     assert.equal(await box.getByRole("button", { name: "Attach picture or PDF", exact: true }).count(), 1, "the plus sits inside the box");
     assert.equal(await page.getByRole("button", { name: "Model details", exact: true }).isVisible(), false, "the model row hides");
     assert.equal(await page.getByLabel("Message", { exact: true }).getAttribute("placeholder"), "Add to reasoner's reply…");
-    assert.equal(await line.getAttribute("aria-pressed"), "true");
+    // The card re-renders from the conversation's activity one effect after the box, so its pressed state is awaited.
+    await card.locator('.org-thread-line[aria-pressed="true"]').waitFor();
 
     // Esc returns to the usual box and keeps the text.
     const box1 = page.getByLabel("Message", { exact: true });
@@ -153,7 +154,7 @@ test("thread mode adds to a running reply's timeline, Esc returns to the usual b
     assert.equal(await page.locator('[data-message-id="sent-3"]').count(), 0, "not in the transcript");
     assert.equal(writes.filter(write => write.method === "POST" && write.path.endsWith("/inference-runs")).length, 0);
     assert.equal(await bar.count(), 0, "after sending, the box returns to new questions");
-    assert.equal(await line.textContent(), "Add to this reply");
+    await line.filter({ hasText: /^Add to this reply$/ }).waitFor();
     await page.screenshot({ path: process.env.REPLY_ADDITIONS_SHOTS ? process.env.REPLY_ADDITIONS_SHOTS + "/timeline.png" : undefined });
 
     // Undo removes an unread addition from the timeline, and the message returns to the transcript.
