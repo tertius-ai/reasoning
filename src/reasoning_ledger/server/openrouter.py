@@ -392,6 +392,11 @@ class Quote:
     reasoning_efforts: tuple[str, ...] = ()
 
     @property
+    def prompt_caching(self) -> bool:
+        """Anthropic models cache a prompt only up to explicit breakpoints, and writing the cache costs more than input."""
+        return self.model.startswith("anthropic/")
+
+    @property
     def free(self) -> bool:
         """Every listed price is zero, so no call on this route can be charged."""
         try:
@@ -423,8 +428,12 @@ class Quote:
         # Context capacity uses a UTF-8 bound; billing uses an estimate rather
         # than one token per byte with a second multiplier. Not an invoice cap.
         estimated_input = (prompt_bound + 2) // 3
+        # A cached prompt may be written to the cache in full, at the cache-write price when it is higher.
+        prompt = money(self.prompt)
+        if self.prompt_caching and (self.pricing or {}).get("input_cache_write") is not None:
+            prompt = max(prompt, money(self.pricing["input_cache_write"]))
         return microusd(
-            estimated_input * money(self.prompt) + output_tokens * money(self.completion) + money(self.request)
+            estimated_input * prompt + output_tokens * money(self.completion) + money(self.request)
         ) + self.image_reservation(messages)
 
     def image_reservation(self, messages):
