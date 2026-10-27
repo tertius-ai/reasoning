@@ -558,8 +558,8 @@ breakpoints, so each priced call to an `anthropic/` model marks the system
 prompt, the previous call's last message and its own last message with text.
 Later rounds of the same turn re-read that prefix at the cache-read price. The
 marks are added to the outgoing request only, and the hold prices the prompt at
-the quoted cache-write rate when that is higher than the input rate. A running hold covers confirmed calls plus outstanding-call
-estimates, not accumulated obsolete estimates. All selected models'
+the quoted cache-write rate when that is higher than the input rate. A running
+hold covers confirmed calls plus outstanding-call estimates, not accumulated obsolete estimates. All selected models'
 estimates are committed in one write transaction. These records support
 accounting and explicit task budgets; OpenRouter owns organization spending enforcement.
 
