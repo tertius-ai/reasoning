@@ -25,6 +25,11 @@
   color: color-mix(in srgb, var(--amber) 75%, var(--foreground)); }
 .org-app .org-timeline-addition button { min-height: 20px; padding: 0 7px; font-size: 11px; }
 .org-run-elapsed { color: var(--muted); font-size: 11px; }
-.org-reply-record { margin: 6px 0 0; font-size: 12px; color: var(--muted); }
-.org-reply-record > summary { cursor: pointer; }
+.org-reply-record { font-size: 12px; color: var(--muted); }
 .org-reply-record > .org-reply-timeline { margin-top: 4px; }
+.org-app .org-reply-record-toggle { min-height: 0; padding: 0; border: 0; background: none; font: inherit; font-size: 12px; color: var(--muted);
+  cursor: pointer; }
+.org-app .org-reply-record-toggle:hover { background: none; color: var(--foreground); }
+.org-reply-record-toggle::before { content: ""; display: inline-block; width: 5px; height: 5px; margin: 0 8px 1px 2px;
+  border: solid currentColor; border-width: 0 1.5px 1.5px 0; transform: rotate(-45deg); }
+.org-reply-record-toggle[aria-expanded="true"]::before { transform: rotate(45deg); margin-bottom: 3px; }

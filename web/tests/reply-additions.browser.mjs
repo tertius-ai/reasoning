@@ -25,9 +25,14 @@ test("thread mode adds to a running reply's timeline, Esc returns to the usual b
       author_kind: "human", author_id: user, topic_id: topic });
     let messages = [message("question", 1, "Which steps prove DM(k, C) from the literature?"),
       message("later", 2, "Skip French-language sources."), message("started", 3, "Also the étale realization.")];
+    // An earlier finished answer, with its steps and usage.
+    const answer = { ...message("answer", 0, "An earlier answer."), author_kind: "assistant", author_id: null,
+      steps: [{ sequence: 1, phase: "round", round: 1 }, { sequence: 2, phase: "answer_ready" }],
+      usage: { prompt_tokens: 128, completion_tokens: 96, actual_microusd: 0, estimated_kwh: 0.0000622, estimate_kind: "reference" } };
     let additions = [];
     const runs = () => [
       { ...base, id: "working", status: "running", context_through_sequence: 1, additions,
+        cost_progress: { confirmed_microusd: 0, next_call_estimate_microusd: 0 },
         activity: [{ sequence: 1, phase: "round", round: 1 },
           { sequence: 2, phase: "tool_requested", tool: "arxiv_search", detail: "searched arXiv for “DM(k, C)”" }] },
       { ...base, id: "own-later", context_through_sequence: 2, ...(additions.some(item => item.message_id === "later")
@@ -58,7 +63,7 @@ test("thread mode adds to a running reply's timeline, Esc returns to the usual b
         const posted = { ...message("sent-" + messages.length, messages.length + 1, body.content) };
         if (body.adds_to) { posted.addition = addition(posted.id, false, body.content); additions = [...additions, posted.addition]; }
         messages = [...messages, posted]; data = posted;
-      } else if (path.endsWith("/messages")) data = messages;
+      } else if (path.endsWith("/messages")) data = [answer, ...messages];
       else if (path.endsWith("/message-updates")) data = { after: 0, messages: [] };
       else if (path.includes("/reactions/")) data = { counts: { up: 0, down: 0, upside_down: 0 }, mine: [] };
       else if (path.endsWith("/inference-runs/working/additions")) {
@@ -81,6 +86,27 @@ test("thread mode adds to a running reply's timeline, Esc returns to the usual b
     const line = card.locator(".org-thread-line");
     await line.waitFor();
     assert.equal(await line.textContent(), "Add to this reply");
+
+    // Each footer is one row: the first part on the left and the last at the right edge. While the reply runs, that is
+    // its usage and its costs; under a finished answer, its folded steps and its usage, with the steps opening below.
+    const sameLine = async (left, right, row) => {
+      const [a, b, r] = await Promise.all([left.boundingBox(), right.boundingBox(), row.boundingBox()]);
+      assert.ok(Math.abs(a.y + a.height / 2 - (b.y + b.height / 2)) < 3, "one line");
+      assert.ok(Math.abs(a.x - r.x) < 1 && Math.abs(b.x + b.width - (r.x + r.width)) < 1, "left part left, right part at the right edge");
+    };
+    const running = card.locator(".org-usage-row");
+    await sameLine(running.locator(".org-message-usage"), running.getByText(/^Confirmed .* · next-call estimate /), running);
+    const answered = page.locator('[data-message-id="answer"]');
+    const steps = answered.getByRole("button", { name: "1 step", exact: true });
+    await sameLine(steps, answered.locator(".org-message-usage"), answered.locator(".org-usage-row"));
+    assert.match(await answered.locator(".org-message-usage").innerText(), /^128 in \/ 96 out .* Wh\*$/);
+    assert.equal(await steps.getAttribute("aria-expanded"), "false");
+    await steps.click();
+    const record = answered.getByLabel("Steps and later messages of this reply", { exact: true });
+    await record.waitFor();
+    assert.ok((await record.boundingBox()).y > (await steps.boundingBox()).y, "the steps open below the row");
+    await steps.click();
+    await record.waitFor({ state: "detached" });
 
     // The thread line puts the usual box into thread mode: a tinted bar, the plus inside, no model row.
     await line.click();

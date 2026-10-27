@@ -397,11 +397,11 @@ function BetaRunCard({ root, organizationId, topicId, run, canManage, canControl
     {run.answer_state?.status === "waiting" && <p role="status">Waiting: {run.answer_state.reason}. Continue from the retained checkpoint when the result arrives.</p>}
     {run.output_text && <pre aria-label={"Streaming response from " + run.model}>{run.output_text}</pre>}
     {!active && run.output_text && <OutputActions {...{ organizationId, topicId, onAuthLost }} targetKind="run" targetId={run.id} canWrite={canReact} text={run.output_text} />}
-    <MessageUsageDetails usage={run.usage} />
+    <div className="org-usage-row"><MessageUsageDetails usage={run.usage} />
+      {active && !paused && run.cost_progress && <small>Confirmed {usd(run.cost_progress.confirmed_microusd)} · next-call estimate {usd(run.cost_progress.next_call_estimate_microusd)}</small>}</div>
     {run.error_code && <p className="org-error">{run.diagnostics?.message ?? runFailureMessage(run.error_code)}</p>}
     {run.diagnostics && <p className="org-help">{run.diagnostics.action}</p>}
     {run.accounting_state === "uncertain" && <p className="org-help">Charge unknown; internal hold {usd(run.reserved_microusd)} is not a charge. Check provider activity.</p>}
-    {active && !paused && run.cost_progress && <small className="org-help">Confirmed {usd(run.cost_progress.confirmed_microusd)} · next-call estimate {usd(run.cost_progress.next_call_estimate_microusd)}</small>}
     {run.accounting_state === "uncertain" && canManage && <ReconcileCost root={root} run={run} onUpdated={() => { onReconciled(); onUpdated(); }} onAuthLost={onAuthLost} />}
   </details>;
 }

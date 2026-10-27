@@ -609,7 +609,6 @@ export const BetaModelMenu = React.memo(function BetaModelMenu({ configuration, 
   </ModelPicker>;
 });
 
-/** People shown in the panel: online people, people with bots, and anyone in `keep` (direct-conversation partners). */
 /** The folded line under a model answer: how many steps its reply took and how many later messages it read. */
 export function replyRecordSummary(message: Pick<Message, "steps" | "additions">): string {
   const steps = message.steps?.filter(step => step.phase === "round").length ?? 0, added = message.additions?.length ?? 0;
@@ -618,6 +617,24 @@ export function replyRecordSummary(message: Pick<Message, "steps" | "additions">
     .replace(/^./, letter => letter.toUpperCase());
 }
 
+/** One row under a model answer: its folded steps on the left and its usage at the right; the steps open below the row. */
+function ReplyFooter({ message, userId, names }: { message: Message; userId: string; names: Record<string, string> }) {
+  const [open, setOpen] = useState(false);
+  const record = !!message.steps?.some(step => step.phase === "round") || !!message.additions?.length;
+  if (!record && message.author_kind !== "assistant") return null;
+  return <>
+    <div className="org-usage-row">
+      {record && <button type="button" className="org-reply-record-toggle" aria-expanded={open} onClick={() => setOpen(!open)}>
+        {replyRecordSummary(message)}</button>}
+      {message.author_kind === "assistant" && <MessageUsageDetails usage={message.usage} />}
+    </div>
+    {record && open && <div className="org-reply-record">
+      <ReplyTimeline activity={message.steps ?? []} additions={message.additions ?? []} active={false} userId={userId}
+        names={names} unplaced label="Steps and later messages of this reply" /></div>}
+  </>;
+}
+
+/** People shown in the panel: online people, people with bots, and anyone in `keep` (direct-conversation partners). */
 export function peopleWithBots(presence: Presence | null, keep: ReadonlySet<string> = new Set()) {
   return (presence?.humans ?? []).map(person => ({ ...person,
     bots: (presence?.bots ?? []).filter(bot => bot.owner_user_id === person.id),
@@ -1245,12 +1262,7 @@ function Conversation({ organizationId, topic, members, user, canWrite, canManag
           <time dateTime={new Date(message.created_at * 1000).toISOString()} title={new Date(message.created_at * 1000).toLocaleString()}>{topic.kind === "alpha" ? new Date(message.created_at * 1000).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" }) : new Date(message.created_at * 1000).toLocaleString()}</time></header>
         <MessageMarkdown markdown={normalizeMathDelimiters(mentionMarkdown(message.content, mentionPeople))} />
         {!!message.files?.length && <ReplyFiles topicId={topic.id} files={message.files} />}
-        {(!!message.steps?.some(step => step.phase === "round") || !!message.additions?.length) && <details className="org-reply-record">
-          <summary>{replyRecordSummary(message)}</summary>
-          <ReplyTimeline activity={message.steps ?? []} additions={message.additions ?? []} active={false} userId={user.id}
-            names={memberNames} unplaced label="Steps and later messages of this reply" />
-        </details>}
-        {message.author_kind === "assistant" && <MessageUsageDetails usage={message.usage} />}
+        <ReplyFooter message={message} userId={user.id} names={memberNames} />
         {addition && <p className={"org-addition-receipt" + (addition.read_at === null && additionThread?.active ? " org-addition-waiting" : "")}
           role="status"><span aria-hidden="true">↳</span>{additionReceipt(addition, additionThread?.root.model ?? "the model", Boolean(additionThread?.active))}
           {addition.read_at === null && additionThread?.active && message.author_id === user.id && canWrite && <button type="button"

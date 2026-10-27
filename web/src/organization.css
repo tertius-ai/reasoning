@@ -609,6 +609,13 @@ a.org-reference:hover, a.org-reference:focus-visible { text-decoration: underlin
   .org-toolbar-actions .org-knowledge-links a { display: inline-flex; }
 }
 .org-message-usage { display: block; margin-top: 6px; color: var(--muted); font-size: 11px; }
+/* A reply's footer row: its first part on the left and its last at the right edge; on a narrow card the right part
+   wraps onto its own line and stays at the right. */
+.org-usage-row { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 12px; margin-top: 6px; color: var(--muted); font-size: 11px; }
+.org-usage-row > .org-message-usage { margin-top: 0; }
+.org-usage-row > small { font-size: 11px; }
+.org-usage-row > :last-child:not(:first-child) { margin-left: auto; text-align: right; }
+.org-model-run > .org-usage-row { margin: 5px 0; font-family: var(--font-mono); }
 .org-run-compact { margin: 6px 0; padding: 5px 10px; font-size: 12px; }
 .org-model-run.org-run-compact { border: 0; background: transparent; }
 .org-run-compact[data-status="failed"] > summary [role="status"] { color: var(--red); }
@@ -642,6 +649,8 @@ a.org-reference:hover, a.org-reference:focus-visible { text-decoration: underlin
 /* A running reply's Stop takes the header's free space and sits at its right edge; the elapsed time stays by the status. */
 .org-run-compact > summary:has(> .org-card-stop) { padding-right: 0; }
 .org-run-compact > summary:has(> .org-card-stop) > small { margin-left: 0; }
+.org-run-compact > summary:has(> .org-card-stop) { flex-wrap: wrap; row-gap: 4px; }
+.org-run-compact > summary:has(> .org-card-stop) > :is(span, small) { white-space: nowrap; }
 .org-card-stop-square { width: 8px; height: 8px; border-radius: 2px; background: currentColor; }
 .org-run-compact > summary small { margin-left: auto; }
 .org-round-activity { list-style: none; margin: 8px 0; padding: 0; color: var(--muted); font-size: 11px; }
