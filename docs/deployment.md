@@ -408,9 +408,10 @@ Resume the same bundle/state directory with `--compute-backend modal`; omitting
 the original compute selection is refused.
 
 After HTTPS/owner readiness, setup uses the freshly checked original DO VM and
-its provider-pinned SSH identity. Under the shared managed-host bootstrap lock,
-it installs the approved catalog only into an empty or identical catalog and
-restarts the server. It then configures organization compute policy through
+its provider-pinned SSH identity. The host installation journal must be at
+`services_started` for that exact release and site. Under the shared managed-host
+bootstrap lock, it installs the approved catalog only into an empty or identical
+catalog and restarts the server. It then configures organization compute policy through
 HTTPS, creates one scoped scaler grant, and recoverably enrolls the exact relay
 slots with saved client-owned nonces/credentials. A lost one-time scaler-grant
 creation reply stops for credential recovery or explicit manual reconciliation;
