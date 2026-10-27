@@ -424,7 +424,13 @@ The `server_diagnostics` tool accepts an optional `topic_id`, `target_run_id`, o
 workflow `request_id`. Its target must be in the bot's current grants and readable
 by both its owner and the invocation's requester. It returns sanitized counts,
 allowlisted errors, up to 25 metadata records per run kind, workflow admission
-usage, worker liveness, and the deployment identity. It returns no conversation
+usage, worker liveness, and the deployment identity. Inference records include
+known run charges and tokens, sanitized provider diagnostics, and the latest
+25 provider-call receipts with parent-call and generation IDs, purpose, status,
+accounting state, reported tokens and costs. Total call counts and truncation
+flags identify omitted history; use the inference ledger or topic JSON for all
+calls. These are retained application records, not a live provider balance or
+quota check. It returns no conversation
 content, server logs, or deployment credentials. Missing and inaccessible targets
 are refused; diagnostics never retry or reconcile work.
 Managed release directories retain the exact public manifest beside `web/`;

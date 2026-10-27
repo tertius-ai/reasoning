@@ -45,4 +45,10 @@ def retained_answer(db, row, status, error):
     elif status != "succeeded":
         text += f"\n\n*Partial response: {status} ({error or status}). Not a completed answer. " \
                 "Continue from retained evidence after reviewing this run; do not replay uncertain paid calls.*"
+        from .openrouter import safe_diagnostics
+        from .usage_store import UsageStore
+
+        diagnostic = safe_diagnostics(UsageStore.diagnostics(db, row["id"]))
+        if diagnostic:
+            text += "\n\n" + diagnostic["message"] + " " + diagnostic["action"]
     return text

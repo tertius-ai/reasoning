@@ -84,7 +84,7 @@ export function ComparisonAnswer({ organizationId, topicId, node, model, canWrit
   }}>
     <summary><span className="org-comparison-swatch" /><strong>{node.bot_run_id ? `${botRun?.bot_name ?? "Bot"} · ${botRun?.model ?? model.split("/").slice(2).join("/")}` : model}</strong>
       {(status !== "succeeded" || costUnknown) && <span>{[status !== "succeeded" && status.replaceAll("_", " "), costUnknown && "cost unknown"].filter(Boolean).join(" · ")}</span>}
-      {run?.diagnostics?.http_status && <span>HTTP {run.diagnostics.http_status}</span>}
+      {run?.diagnostics?.http_status && <span>{run.diagnostics.phase === "stream" ? "Stream error" : "HTTP"} {run.diagnostics.http_status}</span>}
       {failed && run?.actual_microusd != null && <small>{usd(run.actual_microusd)}</small>}
     </summary>
     <div className="org-comparison-body">

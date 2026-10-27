@@ -6,8 +6,11 @@ import asyncio
 import codecs
 import hashlib
 import json
+import logging
 import re
 import time
+from contextlib import asynccontextmanager
+from dataclasses import asdict
 from decimal import Decimal
 
 import httpx
@@ -29,6 +32,7 @@ from .store import StoreError
 from .usage_store import UsageStore
 
 REASONING_TEXT_FIELDS = ("text", "summary", "data", "signature")
+logger = logging.getLogger(__name__)
 
 
 class ReasoningFieldError(Exception):
@@ -446,9 +450,44 @@ class ResearchCompletion:
     async def _stream_summary_async(self, brief):
         self._stream_summary(brief)
 
+    @asynccontextmanager
+    async def _retain_failed_stream(self, snapshot, prefix):
+        """Save received work on failure; incomplete tool/reasoning data is evidence, never replay state."""
+        try:
+            yield
+        except BaseException:
+            try:
+                await self._save_failed_stream(snapshot(), prefix)
+            except Exception:
+                logger.warning("partial provider response could not be retained; original failure preserved")
+            raise
+
+    async def _save_failed_stream(self, response, prefix):
+        message = response["choices"][0]["message"]
+        text = message.get("content") or ""
+        for field in tuple(message):
+            try:
+                encoded(message[field]).encode("utf8")
+            except (UnicodeError, ValueError, TypeError, RecursionError):
+                message.pop(field)
+                response.setdefault("omitted_fields", []).append(field)
+        if self.stream_visible and text:
+            from .inference_store import MAX_OUTPUT_CHARS
+
+            if not await self._stream_content_async(self._display_round(prefix, text)[:MAX_OUTPUT_CHARS], response["id"]):
+                return
+        with self.inference.store.transaction(write=True) as db:
+            current = db.execute("SELECT status,attempt_id FROM llm_runs WHERE id=?", (self.row["id"],)).fetchone()
+            if current and current[0] == "running" and current[1] == self.row["attempt_id"]:
+                self.inference._event(db, self.row["organization_id"], self.row["id"], {
+                    "type": "agent", "phase": "provider_partial_response", "call_id": self.last_call_id,
+                    "response": response,
+                })
+
     async def _read_agent_stream(self, key, payload, timeout):
         self.protocol_stage = "stream_framing"
         text, generation, usage, finish, tools = "", None, None, None, {}
+        valid_text, valid_content = "", True
         reasoning, details = "", ReasoningDetails()
         prefix = await self._stream_prefix_async()
         last_flush = 0.0
@@ -466,9 +505,24 @@ class ResearchCompletion:
             await self._stream_summary_async(brief)
             last_summary, last_summary_flush = summary, time.monotonic()
 
+        def partial():
+            message = {"role": "assistant", "content": valid_text or None}
+            if reasoning:
+                message["reasoning"] = reasoning
+            if details.items:
+                message["reasoning_details"] = details.items
+            if tools:
+                message["tool_calls"] = list(tools.values())
+            result = {"id": generation, "usage": asdict(self.partial_usage) if self.partial_usage else None,
+                      "choices": [{"message": message, "finish_reason": finish}], "partial": True}
+            if not valid_content:
+                result["omitted_fields"] = ["invalid_content_suffix"]
+            return result
+
         client = self.provider.client()
         self._stream_client_ready()
         async with (
+            self._retain_failed_stream(partial, prefix),
             client,
             client.stream(
                 "POST",
@@ -514,8 +568,6 @@ class ResearchCompletion:
                         body = json.loads(data, parse_float=Decimal)
                         if not isinstance(body, dict):
                             raise ProviderError("provider_protocol")
-                        if "error" in body:
-                            raise ProviderError("provider_stream_error", diagnostics=stream_error_diagnostics(body["error"]))
                         if body.get("id") is not None:
                             self.protocol_stage = "generation"
                             if not isinstance(body["id"], str) or not re.fullmatch(r"(?:gen-|chatcmpl-)[A-Za-z0-9_-]{1,180}", body["id"]):
@@ -557,6 +609,13 @@ class ResearchCompletion:
                             if not isinstance(addition, str):
                                 raise ProviderError("provider_protocol")
                             text += addition
+                            if valid_content:
+                                try:
+                                    addition.encode("utf8")
+                                except UnicodeError:
+                                    valid_content = False
+                                else:
+                                    valid_text = text
                             if self.stream_visible and addition and time.monotonic() - last_flush >= 0.2:
                                 self.protocol_stage = "text_encoding"
                                 try:
@@ -605,41 +664,43 @@ class ResearchCompletion:
                                 function = call.get("function") or {}
                                 for field in ("name", "arguments"):
                                     current["function"][field] += function.get(field) or ""
+                        if "error" in body:
+                            raise ProviderError("provider_stream_error", diagnostics=stream_error_diagnostics(body["error"]))
             if not done:
                 raise ProviderError("provider_incomplete")
-        message = {"role": "assistant", "content": text or None}
-        if self.stream_visible:
-            for detail in details.items:
-                summary = ReasoningDetails.summary(detail)
-                if summary and summary != last_summary:
-                    await summarize(summary)
-        if self.stream_visible and text:
-            self.protocol_stage = "text_encoding"
-            text.encode("utf8")
-            await self._stream_content_async(self._display_round(prefix, text), generation)
-        if reasoning:
-            message["reasoning"] = reasoning
-        if details.items:
-            message["reasoning_details"] = details.items
-        if tools:
-            self.protocol_stage = "tool_validation"
-            message["tool_calls"] = [tools[index] for index in sorted(tools)]
-            if any(not call["id"] or not call["function"]["name"] for call in message["tool_calls"]):
-                raise ProviderError("provider_protocol")
-            for call in message["tool_calls"]:
-                if (
-                    not isinstance(call["id"], str)
-                    or not re.fullmatch(r"[A-Za-z0-9_.:-]{1,200}", call["id"])
-                    or not re.fullmatch(r"[A-Za-z0-9_-]{1,200}", call["function"]["name"])
-                    or len(call["function"]["arguments"]) > 65536
-                ):
+            message = {"role": "assistant", "content": text or None}
+            if self.stream_visible:
+                for detail in details.items:
+                    summary = ReasoningDetails.summary(detail)
+                    if summary and summary != last_summary:
+                        await summarize(summary)
+            if self.stream_visible and text:
+                self.protocol_stage = "text_encoding"
+                text.encode("utf8")
+                await self._stream_content_async(self._display_round(prefix, text), generation)
+            if reasoning:
+                message["reasoning"] = reasoning
+            if details.items:
+                message["reasoning_details"] = details.items
+            if tools:
+                self.protocol_stage = "tool_validation"
+                message["tool_calls"] = [tools[index] for index in sorted(tools)]
+                if any(not call["id"] or not call["function"]["name"] for call in message["tool_calls"]):
                     raise ProviderError("provider_protocol")
-        return {
-            "id": generation,
-            "model": payload["model"],
-            "usage": usage,
-            "choices": [{"message": message, "finish_reason": finish or ("tool_calls" if tools else "stop")}],
-        }
+                for call in message["tool_calls"]:
+                    if (
+                        not isinstance(call["id"], str)
+                        or not re.fullmatch(r"[A-Za-z0-9_.:-]{1,200}", call["id"])
+                        or not re.fullmatch(r"[A-Za-z0-9_-]{1,200}", call["function"]["name"])
+                        or len(call["function"]["arguments"]) > 65536
+                    ):
+                        raise ProviderError("provider_protocol")
+            return {
+                "id": generation,
+                "model": payload["model"],
+                "usage": usage,
+                "choices": [{"message": message, "finish_reason": finish or ("tool_calls" if tools else "stop")}],
+            }
 
     def aggregate(self):
         if any(not error["no_charge"] for error in self.errors):

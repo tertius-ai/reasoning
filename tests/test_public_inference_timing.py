@@ -230,9 +230,9 @@ def test_first_call_preparation_avoids_redundant_transactions(installation, monk
 
     monkeypatch.setattr(store_module.Store, "transaction", counted)
     ResearchAgent(state, fixture.provider, row, quote).execute()
-    # Before the first provider request: the reservation, the call header, and one request
-    # record holding the round event, session and prefix. An uncompacted snapshot is not rewritten.
-    assert len(writes) == 3
+    # Before the first provider request: capabilities, pending additions, reservation, call header,
+    # and one request record holding the round event, session and prefix. An uncompacted snapshot is not rewritten.
+    assert len(writes) == 5
     assert state.run(owner["user_id"], owner["organization_id"], row["id"])["status"] == "succeeded"
 
 
