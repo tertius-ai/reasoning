@@ -996,7 +996,7 @@ function Conversation({ organizationId, topic, members, user, canWrite, canManag
     const controller = new AbortController();
     // While the topic event stream is live, it announces new messages and edits by their latest sequences; the
     // poll then fetches exactly what is missing from its cursors, and otherwise runs only as a slow safety net.
-    let live = false, loaded = false, watermark = { sequence: 0, updates: 0 };
+    let live = false, loaded = false, healthy = false, watermark = { sequence: 0, updates: 0 };
     const behind = () => watermark.sequence > cursor.current || watermark.updates > editCursor.current;
     const poll = async (): Promise<number | null> => {
       const before = [cursor.current, editCursor.current];
@@ -1038,7 +1038,7 @@ function Conversation({ organizationId, topic, members, user, canWrite, canManag
         editCursor.current = updates.after;
         setMessages((existing) => mergeMessages(mergeMessages(existing, incoming), updates.messages.filter(message =>
           existing.some(prior => prior.id === message.id) || incoming.some(prior => prior.id === message.id))));
-        setOnline(true); setLoading(false); revalidated.current = true; loaded = true;
+        setOnline(true); setLoading(false); revalidated.current = true; loaded = true; healthy = true;
         if (incoming.some((message) => message.client_id === currentDraft.current.clientId && message.author_id === user.id)) {
           updateDraft(newDraft()); setError("");
         }
@@ -1051,7 +1051,7 @@ function Conversation({ organizationId, topic, members, user, canWrite, canManag
           retained.current.failed = true; if (snapshotKey) rememberTopicSnapshot(snapshotKey, null);
           if (!revalidated.current) setMessages([]);
         }
-        setOnline(false); setError(errorMessage(cause)); setLoading(false);
+        setOnline(false); setError(errorMessage(cause)); setLoading(false); healthy = false;
         return 2000;
       }
       return live ? LIVE_SAFETY_POLL_MS : 2000;
@@ -1059,13 +1059,24 @@ function Conversation({ organizationId, topic, members, user, canWrite, canManag
     const poller = startPolling(poll, controller.signal);
     messagePoller.current = poller;
     const unsubscribe = subscribeTopicEvents(organizationId, topic.id, {
-      // Losing the stream resumes the ordinary cadence at once; becoming live waits for the announced sequences.
-      status: status => { const next = status === "live"; if (live && !next && loaded) poller.wake(); live = next; },
+      // Losing the stream resumes the ordinary cadence at once; becoming live defers a poll scheduled at that cadence
+      // and waits for the announced sequences.
+      status: status => {
+        const next = status === "live";
+        if (live && !next && loaded) poller.wake();
+        else if (!live && next && healthy) poller.defer(LIVE_SAFETY_POLL_MS);
+        live = next;
+      },
       messages: value => { watermark = value; if (loaded && behind()) poller.wake(); },
     });
     return () => { unsubscribe(); controller.abort(); messagePoller.current = null; };
   }, [root, anchor, focus, user.id, onAuthLost, organizationId, topic.id]);
   const transcript = useMemo(() => ({ ids: new Set(messages.map(message => message.id)), from: messages[0]?.sequence ?? Infinity }), [messages]);
+  // Activity views restart at their active cadence when the transcript gains a message. Its first page is not new:
+  // they polled when they mounted, and restarting then would abort and repeat those reads.
+  const lastSequence = messages.at(-1)?.sequence ?? 0, firstPage = useRef<number | undefined>(undefined);
+  if (firstPage.current === undefined && !loading) firstPage.current = lastSequence;
+  const activityWake = firstPage.current === undefined || lastSequence === firstPage.current ? undefined : lastSequence;
 
   useEffect(() => {
     if (bottom.current && viewport.current && !document.querySelector(".chat-action-menu") && !window.getSelection()?.toString())
@@ -1363,11 +1374,11 @@ function Conversation({ organizationId, topic, members, user, canWrite, canManag
         .map(item => <div key={item.id} data-activity-id={item.id}>{item.body}</div>)}
       {topic.kind === "beta" && <BetaConversation organizationId={organizationId} topicId={topic.id} userId={user.id}
         canWrite={canWrite} canManage={canManage} online={online} toolbarTarget={composerButton} hidePlay={Boolean(draft.text.trim())}
-        attempt={modelAttempt} onAttempt={onModelAttempt} onAuthLost={onAuthLost} onActivity={setBetaActivity} wake={messages.at(-1)?.sequence}
+        attempt={modelAttempt} onAttempt={onModelAttempt} onAuthLost={onAuthLost} onActivity={setBetaActivity} wake={activityWake}
         onRuns={setBetaRuns} stopRef={stopReply} addingTo={adding?.root.id} onAddTo={onAddTo} onUndoAddition={undoFromReply} names={memberNames}
         transcript={transcript} onReplyPending={refreshMessages} />}
       <BotConversation organizationId={organizationId} topicId={topic.id} names={botNames} userId={user.id}
-        canWrite={canWrite} canManage={canManage} onActivity={setBotActivity} onAuthLost={onAuthLost} wake={messages.at(-1)?.sequence} />
+        canWrite={canWrite} canManage={canManage} onActivity={setBotActivity} onAuthLost={onAuthLost} wake={activityWake} />
 
     </div>
     {!atBottom && messages.length + workflowActivity.length + computeActivity.length + betaActivity.length > 0 && <NewestMessageButton unseen={unseen} onJump={() => {

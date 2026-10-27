@@ -33,12 +33,14 @@ export class PollBackoff {
 /**
  * Poll repeatedly: `poll` returns the next delay, or null to stop. `wake` brings the next poll forward; a wake
  * during a poll runs another as soon as it finishes, so polls never overlap. The first poll runs at once unless
- * `initialDelay` is positive; later polls pause in hidden tabs as with schedulePoll.
+ * `initialDelay` is positive; later polls pause in hidden tabs as with schedulePoll. `defer` moves a waiting poll to
+ * `delay` from now, for example when an event stream takes over; it leaves a running or woken poll alone.
  */
-export function startPolling(poll: () => Promise<number | null>, signal: AbortSignal, initialDelay = 0): { wake(): void } {
-  let running = false, again = false, cancel: (() => void) | undefined;
+export function startPolling(poll: () => Promise<number | null>, signal: AbortSignal, initialDelay = 0): { wake(): void; defer(delay: number): void } {
+  let running = false, again = false, waiting = 0, cancel: (() => void) | undefined;
   const schedule = (delay: number) => {
     cancel?.();
+    waiting = delay;
     const local = new AbortController(), forward = () => local.abort();
     signal.addEventListener("abort", forward, { once: true });
     cancel = () => { signal.removeEventListener("abort", forward); local.abort(); };
@@ -54,7 +56,10 @@ export function startPolling(poll: () => Promise<number | null>, signal: AbortSi
   if (signal.aborted) { /* Nothing to start. */ }
   else if (initialDelay > 0) schedule(initialDelay);
   else void run();
-  return { wake: () => { if (signal.aborted) return; if (running) again = true; else schedule(0); } };
+  return {
+    wake: () => { if (signal.aborted) return; if (running) again = true; else schedule(0); },
+    defer: delay => { if (!signal.aborted && !running && cancel && waiting > 0) schedule(delay); },
+  };
 }
 
 /**

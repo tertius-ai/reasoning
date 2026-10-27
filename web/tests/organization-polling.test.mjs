@@ -90,6 +90,37 @@ test("woken polls run at once, never overlap, and stop on abort or a null delay"
   }
 });
 
+test("a deferred poll waits again, but a running or woken poll is left alone", async context => {
+  const previous = globalThis.document;
+  globalThis.document = Object.assign(new EventTarget(), { hidden: false });
+  context.mock.timers.enable({ apis: ["setTimeout"] });
+  const settle = async () => { for (let index = 0; index < 5; index++) await Promise.resolve(); };
+  try {
+    let calls = 0, release = () => {};
+    const controller = new AbortController();
+    const poller = startPolling(() => { calls++; return new Promise(resolve => { release = () => resolve(2000); }); }, controller.signal);
+    poller.defer(30000);
+    release(); await settle();
+    context.mock.timers.tick(2000);
+    assert.equal(calls, 2, "a defer during a poll does not change the delay it returns");
+    release(); await settle();
+    context.mock.timers.tick(1000);
+    poller.defer(30000);
+    context.mock.timers.tick(29999);
+    assert.equal(calls, 2, "a waiting poll moves to the deferred time");
+    context.mock.timers.tick(1);
+    assert.equal(calls, 3);
+    release(); await settle();
+    poller.wake(); poller.defer(30000); context.mock.timers.tick(0);
+    assert.equal(calls, 4, "a woken poll is not deferred");
+    controller.abort();
+  } finally {
+    globalThis.document = previous;
+    if (previous === undefined) delete globalThis.document;
+    context.mock.timers.reset();
+  }
+});
+
 test("a finished run stays visible only until its reply message is loaded", () => {
   const run = { status: "succeeded", message_id: "reply", context_through_sequence: 10 };
   const transcript = (ids, from) => ({ ids: new Set(ids), from });
