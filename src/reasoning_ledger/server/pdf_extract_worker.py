@@ -41,11 +41,21 @@ def extract(body):
             "error": error or (None if text else "no_text")}
 
 
+def limit_memory(resource):
+    try:
+        resource.setrlimit(resource.RLIMIT_AS, (512 * 1024 * 1024, 512 * 1024 * 1024))
+    except (ValueError, OSError):
+        # macOS refuses every memory limit. There pypdf's per-stream decoding caps, the page and text limits, the CPU
+        # limit and the parent's timeout bound the work, rather than every extraction failing. Elsewhere it stays fatal.
+        if sys.platform != "darwin":
+            raise
+
+
 def main():
     try:
         import resource
 
-        resource.setrlimit(resource.RLIMIT_AS, (512 * 1024 * 1024, 512 * 1024 * 1024))
+        limit_memory(resource)
         resource.setrlimit(resource.RLIMIT_CPU, (8, 9))
         resource.setrlimit(resource.RLIMIT_FSIZE, (0, 0))
     except ImportError:

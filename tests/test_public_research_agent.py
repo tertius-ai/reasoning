@@ -123,7 +123,8 @@ class ResearchFixture:
                 content = "Here is the memory:\n```json\n" + json.dumps(memory) + "\n```"
             else:
                 content = json.dumps(memory) if self.mode != "bad_compaction" else "unsupported ungrounded summary"
-            delta, finish = {"content": content}, "stop"
+            # The output limit ended the reply; whatever it holds may have lost later items.
+            delta, finish = {"content": content}, "length" if self.mode == "truncated_compaction" else "stop"
         elif (self.turn == 0 and self.mode in {
             "tools", "uncertain", "goal", "credit_later", "invalid_arguments", "invalid_arguments_once", "gemini_nullable",
             "checkpoint_credit"
@@ -687,6 +688,7 @@ def test_bad_compaction_answers_from_recent_messages_and_is_not_retried_every_tu
         assert db.execute("SELECT count(*) FROM messages WHERE topic_id=? AND sender_kind='human'", (topic,)).fetchone()[0] == 71
         reply = db.execute("SELECT content FROM messages WHERE inference_run_id=?", (run["id"],)).fetchone()[0]
     assert reply.endswith("drew only on recent messages and history lookups.*")
+    assert [event["reason"] for event in compaction_events(state, run["id"])] == ["invalid_summary"]
 
     state.store.post_message(owner["user_id"], org, topic, "Is this thing on?", "after-bad-memory")
     state.enqueue(owner["user_id"], org, topic, "after-bad-memory-run", state.parameters([MODELS[0]], 256, 50, None), [quote])
@@ -697,6 +699,41 @@ def test_bad_compaction_answers_from_recent_messages_and_is_not_retried_every_tu
     assert not any("Compact mathematical research" in body["messages"][0]["content"] for body in retry.requests), \
         "the same failed batch is not summarized again within the retry window"
     assert any(event["phase"] == "compaction_skipped" for event in state.run(owner["user_id"], org, second["id"])["activity"])
+
+
+def compaction_events(state, run_id):
+    with state.store.transaction() as db:
+        events = [json.loads(row[0]) for row in db.execute("SELECT event_json FROM llm_events WHERE run_id=?", (run_id,))]
+    return [event for event in events if event.get("phase") == "compaction_failed"]
+
+
+@pytest.mark.parametrize("efforts,reasoning", [(("none", "low", "high", "max"), {"effort": "none"}), ((), None)])
+def test_compaction_asks_for_the_lowest_advertised_effort_with_room_to_answer(installation, efforts, reasoning):
+    from reasoning_ledger.server.research_agent import COMPACTION_MAX_TOKENS
+
+    state, owner, org, topic, _ = long_topic(installation)
+    quote = Quote(MODELS[0], "0.000001", "0.000002", "0", 200000, 65536, supports_tools=True, reasoning_efforts=efforts)
+    state.enqueue(owner["user_id"], org, topic, "reasoning-memory", state.parameters([MODELS[0]], None, 50, None), [quote])
+    fixture, run = ResearchFixture("memory"), state.claim()
+    ResearchAgent(state, fixture.provider, run, quote).execute()
+    assert state.run(owner["user_id"], org, run["id"])["status"] == "succeeded"
+    compactions = [body for body in fixture.requests if "Compact mathematical research" in body["messages"][0]["content"]]
+    assert compactions and all(body["max_completion_tokens"] == COMPACTION_MAX_TOKENS for body in compactions)
+    assert all(body.get("reasoning") == reasoning for body in compactions)
+    assert all("reasoning" not in body for body in fixture.requests if body not in compactions), "the answer keeps its own effort"
+
+
+def test_length_truncated_compaction_is_reported_as_an_output_limit(installation):
+    state, owner, org, topic, quote = long_topic(installation)
+    state.enqueue(owner["user_id"], org, topic, "truncated-memory", state.parameters([MODELS[0]], 256, 50, None), [quote])
+    run = state.claim()
+    ResearchAgent(state, ResearchFixture("truncated_compaction").provider, run, quote).execute()
+    assert state.run(owner["user_id"], org, run["id"])["status"] == "succeeded", "a cut-off summary does not fail the turn"
+    with state.store.transaction() as db:
+        assert db.execute("SELECT count(*) FROM research_memories WHERE topic_id=?", (topic,)).fetchone()[0] == 0, \
+            "a summary cut off by its output limit is not saved, even when what arrived parses"
+    [failed] = compaction_events(state, run["id"])
+    assert failed["reason"] == "output_token_limit" and "hit its output limit" in failed["summary"]
 
 
 def test_near_valid_compaction_keeps_only_cited_items(installation):

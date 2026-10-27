@@ -113,6 +113,32 @@ def test_pdf_text_limit_reports_partial_coverage_and_keeps_readable_text(monkeyp
     assert 0 < len(value["text"].encode()) <= 100 and value["total_pages"] == 2
 
 
+def test_pdf_extractor_subprocess_reads_text_on_this_platform():
+    from reasoning_ledger.server.pdf_extract import extract_pdf
+
+    value = extract_pdf(text_pdf("A readable theorem statement.", pages=2))
+    assert value["status"] == "ready" and "A readable theorem statement." in value["text"], value
+    assert value["pages_read"] == value["total_pages"] == 2
+
+
+@pytest.mark.parametrize("platform,fatal", [("darwin", False), ("linux", True)])
+def test_pdf_worker_skips_its_memory_limit_only_where_the_platform_refuses_every_one(monkeypatch, platform, fatal):
+    from reasoning_ledger.server import pdf_extract_worker
+
+    class Refusing:
+        RLIMIT_AS = 9
+
+        def setrlimit(self, which, limits):
+            raise ValueError("current limit exceeds maximum limit")
+
+    monkeypatch.setattr(pdf_extract_worker.sys, "platform", platform)
+    if fatal:
+        with pytest.raises(ValueError):
+            pdf_extract_worker.limit_memory(Refusing())
+    else:
+        pdf_extract_worker.limit_memory(Refusing())
+
+
 def test_pdf_extractor_timeout_is_bounded_and_contains_no_input_or_exception_body(monkeypatch):
     import subprocess
 

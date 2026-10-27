@@ -24,7 +24,9 @@ uploads extract page-marked text in a separate Python process using pypdf,
 outside database transactions. At most two extractions run per API process.
 Each has a 12-second wall deadline, up to 200 pages and 2 MiB of UTF-8 text;
 POSIX workers additionally enforce 512 MiB address-space and eight CPU-second
-limits. NUL characters and invalid Unicode are replaced. Coverage, truncation,
+limits. macOS refuses every memory limit, so there the worker keeps the CPU
+limit and relies on pypdf's 75 MB per-stream decoding caps; elsewhere a refused
+memory limit fails the extraction. NUL characters and invalid Unicode are replaced. Coverage, truncation,
 password requirements, empty text, and parser/resource failures are reported
 explicitly. Successful upload does not promise readable text. Writers can retry
 extraction from the original attachment through its PDF controls. Scanned pages

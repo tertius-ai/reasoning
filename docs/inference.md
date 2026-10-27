@@ -273,6 +273,11 @@ with exact recovery tools.
 When old source messages no longer fit, the runtime makes separately billed
 compaction calls within its time and inference cost budgets. Output limits apply
 per provider call; summary output does not reduce the final answer's ceiling.
+Each summary call allows up to 16,384 output tokens, within the model's and the
+turn's limits, and asks for the lowest reasoning effort the model advertises,
+since reasoning tokens count against that allowance. A model that advertises no
+effort levels is sent none. A summary that ends at its output limit is rejected
+and recorded with the reason `output_token_limit`, even if what arrived parses.
 Memory preserves goals, definitions, notation, hypotheses, claim status,
 unresolved questions, decisions, citations, artifacts and next steps.
 Every memory item must cite an actual original source message. A summary

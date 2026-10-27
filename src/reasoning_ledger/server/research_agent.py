@@ -22,6 +22,8 @@ class TurnSuspended(BaseException):
 
 # A batch whose summary was rejected is not summarized again within this many seconds; turns answer without it.
 COMPACTION_RETRY_SECONDS = 6 * 3600
+# Output room for one batch's summary. Reasoning tokens count against it, so summaries also ask for the lowest effort.
+COMPACTION_MAX_TOKENS = 16_384
 
 
 def execution_error(result, finish_reason):
@@ -78,24 +80,31 @@ class ResearchAgent:
                 {"role": "user", "content": encoded({"previous_memory": memory, "source_messages": batch})},
             ]
             remaining = self._remaining_output()
-            result = self.client.complete(
-                {
-                    "model": self.row["model"],
-                    "messages": compact_messages,
-                    "max_tokens": min(self.quote.max_completion_tokens, 8192, remaining),
-                },
-                timeout=min(1800, max(1, self.deadline - time.monotonic())),
-            )
+            payload = {
+                "model": self.row["model"],
+                "messages": compact_messages,
+                "max_tokens": min(self.quote.max_completion_tokens, COMPACTION_MAX_TOKENS, remaining),
+            }
+            # A summary needs no deliberation. Models that default to long reasoning (kimi-k3 defaults to max) otherwise
+            # spend the whole allowance before writing it. Only an advertised effort is sent: routes require parameters.
+            if self.quote.reasoning_efforts:
+                payload["reasoning"] = {"effort": self.quote.reasoning_efforts[0]}
+            result = self.client.complete(payload, timeout=min(1800, max(1, self.deadline - time.monotonic())))
             # Mark purpose on the ledger before submission, not after its completion.
             sources = {message["id"] for message in batch}
             if memory:
                 sources |= {source for items in memory.values() for item in items for source in item["sources"]}
             raw = result["choices"][0]["message"].get("content") or ""
+            truncated = result["choices"][0].get("finish_reason") == "length"
             try:
+                if truncated:
+                    raise ValueError("compaction reached its output limit")
                 memory = memory_from_reply(raw, sources)
             except (ValueError, TypeError):
                 failed = {"after": after, "through": batch[-1]["sequence"]}
-                self._event("compaction_failed", {**failed, "summary": "Couldn't summarize earlier messages; answering from recent ones"})
+                self._event("compaction_failed", {**failed, "reason": "output_token_limit" if truncated else "invalid_summary",
+                    "summary": "The summary of earlier messages hit its output limit; answering from recent ones" if truncated
+                    else "Couldn't summarize earlier messages; answering from recent ones"})
                 break
             self.context.save_memory(self.row, batch[-1]["sequence"], memory, sorted(sources))
             after = batch[-1]["sequence"]
