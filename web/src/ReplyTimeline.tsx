@@ -2,6 +2,7 @@
 import React from "react";
 import type { ModelRun, ReplyAddition } from "./organization-api";
 import { StepIcon, TimelineEntry, replyTimeline } from "./ReplyAdditions";
+import { CardStop } from "./TopicActivity";
 import "./reply-timeline.css";
 
 const PATHS: Record<StepIcon | "added" | "waiting", React.ReactNode> = {
@@ -55,4 +56,21 @@ export function ReplyTimeline({ activity, additions, active, userId, names = {},
       {entry.waiting && onUndo && entry.addition.added_by === userId
         && <button type="button" onClick={() => onUndo(entry.addition)}>Undo</button>}
     </li>)}</ol>;
+}
+
+/**
+ * A reply at work, trimmed for the Thread view: who answers, for how long, Stop, and the one step it is on. The finished
+ * answer takes its place.
+ */
+export function WorkingCard({ run, onStop, stopping }: { run: ModelRun; onStop?: () => void; stopping?: boolean }) {
+  const step = replyTimeline(run.activity ?? [], [], true).filter(entry => entry.kind === "step").at(-1);
+  const elapsed = run.status === "running" ? workingFor(run) : null;
+  return <div className="org-thread-working" data-run-id={run.id}>
+    <header><strong>{run.agent ? `${run.agent.role.replaceAll("_", " ")} · ` : ""}{run.model}</strong>
+      <small>{run.cancel_requested ? "stopping…" : run.status === "queued" ? "queued" : "working" + (elapsed ? ` · ${elapsed}` : "")}</small>
+      {onStop && !run.cancel_requested && <CardStop label="Stop this reply" disabled={stopping} onStop={onStop} />}</header>
+    <p role="status" aria-label="Reply progress">{step?.kind === "step"
+      ? <><Icon name={step.icon} current={step.current} /><span>{step.label}{step.current ? "…" : ""}</span></>
+      : <span>Starting…</span>}</p>
+  </div>;
 }

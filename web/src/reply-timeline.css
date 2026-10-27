@@ -33,3 +33,9 @@
 .org-reply-record-toggle::before { content: ""; display: inline-block; width: 5px; height: 5px; margin: 0 8px 1px 2px;
   border: solid currentColor; border-width: 0 1.5px 1.5px 0; transform: rotate(-45deg); }
 .org-reply-record-toggle[aria-expanded="true"]::before { transform: rotate(45deg); margin-bottom: 3px; }
+/* The Thread view's trimmed reply at work: one header line and the step it is on. */
+.org-thread-working { margin: 6px 0 2px; padding: 6px 0 6px 10px; border-left: 2px solid color-mix(in srgb, var(--blue) 55%, transparent); font-size: 12.5px; }
+.org-thread-working > header { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; font-size: 12px; }
+.org-thread-working > header strong { font-weight: 600; overflow-wrap: anywhere; }
+.org-thread-working > header small { color: var(--muted); font-size: 11px; white-space: nowrap; }
+.org-thread-working > p { display: flex; align-items: center; gap: 8px; margin: 5px 0 0; color: color-mix(in srgb, var(--blue) 80%, var(--foreground)); }

@@ -1,6 +1,9 @@
 // Copyright Benjamin Antieau and Deven Manam. SPDX-License-Identifier: Apache-2.0
-import React, { useEffect, useRef, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { ApiError, Message, errorMessage, request } from "./organization-api";
+import { ReturnIcon } from "./ComposerIcons";
+import { AttachFilesButton, MAX_DIRECT_ATTACHMENTS, PendingFile, PendingFiles, joinAttachments, pendingFile } from "./DirectMedia";
+import "./direct-messages.css";
 
 export type MessageThread = { root_id: string; message_id: string; messages: Message[]; truncated: boolean };
 
@@ -62,52 +65,116 @@ export function ReplyBar({ original, label, onCancel }: { original?: Message; la
 }
 
 /**
+ * A loaded thread brought up to date from the conversation's live messages: newer versions of its messages, and every
+ * live message that replies into it, oldest first.
+ */
+export function joinThread(messages: Message[], live: Message[]): Message[] {
+  const byId = new Map(messages.map(message => [message.id, message]));
+  for (const message of live) if (byId.has(message.id)) byId.set(message.id, message);
+  for (let grew = true; grew;) {
+    grew = false;
+    for (const message of live) {
+      if (!byId.has(message.id) && message.reply_to && byId.has(message.reply_to)) { byId.set(message.id, message); grew = true; }
+    }
+  }
+  return [...byId.values()].sort((a, b) => a.sequence - b.sequence);
+}
+
+/**
  * The whole thread over a dimmed conversation: the root, then every reply in order, with a box to reply in the thread.
  * A reply written here answers the thread's root. Escape or a click outside closes it.
  */
-export function ThreadDialog({ messagesPath, messageId, canWrite, renderMessage, onPosted, onClose, onAuthLost }: {
+export function ThreadDialog({ messagesPath, messageId, canWrite, renderMessage, onPosted, onClose, onAuthLost, live, working, attach }: {
   /** The conversation's messages endpoint: a topic's or a direct conversation's. */
   messagesPath: string; messageId: string; canWrite: boolean;
   renderMessage: (message: Message, first: boolean) => React.ReactNode;
   onPosted: (message: Message) => void; onClose: () => void; onAuthLost: () => void;
+  /** The conversation's current messages: replies that arrive while the thread is open join it. */
+  live?: Message[];
+  /** Work in progress on the thread's messages, such as a model reply, shown after them. */
+  working?: (messages: Message[]) => React.ReactNode;
+  /** Uploads a chosen file; its Markdown reference is sent with the reply. */
+  attach?: (file: File) => Promise<{ markdown: string }>;
 }) {
   const dialog = useRef<HTMLDialogElement>(null);
   const [thread, setThread] = useState<MessageThread | null>(null);
   const [error, setError] = useState("");
   const [text, setText] = useState(""), [clientId, setClientId] = useState(""), [sending, setSending] = useState(false);
+  const [files, setFiles] = useState<PendingFile[]>([]);
+  const list = useRef<HTMLDivElement>(null);
+  const shown = useMemo(() => thread ? joinThread(thread.messages, live ?? []) : [], [thread, live]);
+  const uploading = files.some(file => !file.markdown);
   const path = messagesPath + "/";
   const fail = (cause: unknown) => { if (cause instanceof ApiError && cause.status === 401) onAuthLost(); else setError(errorMessage(cause)); };
   const load = (id: string) => request<MessageThread>(path + encodeURIComponent(id) + "/thread").then(setThread);
   useEffect(() => { dialog.current?.showModal(); }, []);
   useEffect(() => { setThread(null); setError(""); void load(messageId).catch(fail); }, [messagesPath, messageId]);
+  // New replies and work in progress appear at the bottom: when the list grows while you were at its end, it follows.
+  const height = useRef(0);
+  useEffect(() => {
+    const view = list.current;
+    if (!view) return;
+    const before = height.current;
+    height.current = view.scrollHeight;
+    if (before && view.scrollHeight > before && before - view.scrollTop - view.clientHeight < 48) view.scrollTo({ top: view.scrollHeight });
+  });
+  const addFiles = (chosen: File[]) => {
+    if (!attach) return;
+    const room = MAX_DIRECT_ATTACHMENTS - files.length;
+    setError(chosen.length > room ? `A message can carry at most ${MAX_DIRECT_ATTACHMENTS} files.` : "");
+    const pending = chosen.slice(0, Math.max(0, room)).map(file => ({ file, item: pendingFile(file) }));
+    setFiles(current => [...current, ...pending.map(({ item }) => item)]);
+    const settle = (key: string, value: Partial<PendingFile>) => setFiles(current => current.map(file => file.key === key ? { ...file, ...value } : file));
+    for (const { file, item } of pending) {
+      void attach(file).then(value => settle(item.key, { markdown: value.markdown }), cause => {
+        if (cause instanceof ApiError && cause.status === 401) onAuthLost();
+        settle(item.key, { error: errorMessage(cause) });
+      });
+    }
+    setClientId("");
+  };
+  const removeFile = (key: string) => setFiles(current => current.filter(file => {
+    if (file.key === key && file.preview) URL.revokeObjectURL(file.preview);
+    return file.key !== key;
+  }));
+  const content = files.length ? joinAttachments(files.flatMap(file => file.markdown ? [file.markdown] : []), text) : text;
   const send = async (event: React.FormEvent) => {
     event.preventDefault();
-    if (!thread || !text.trim() || sending) return;
+    if (!thread || !content.trim() || uploading || sending) return;
     const attempt = clientId || crypto.randomUUID();
     setClientId(attempt); setSending(true); setError("");
     try {
       const message = await request<Message>(messagesPath,
-        { method: "POST", body: { content: text, client_id: attempt, reply_to: thread.root_id } });
+        { method: "POST", body: { content, client_id: attempt, reply_to: thread.root_id } });
       onPosted(message); setText(""); setClientId("");
+      for (const file of files) if (file.preview) URL.revokeObjectURL(file.preview);
+      setFiles([]);
       await load(message.id);
     } catch (cause) { fail(cause); } finally { setSending(false); }
   };
   return <dialog ref={dialog} className="org-thread-dialog" aria-label="Thread" onCancel={onClose} onClose={onClose}
     onClick={event => { if (event.target === event.currentTarget) dialog.current?.close(); }}>
-    <header><strong>Thread</strong>{thread && <small>{thread.messages.length} {thread.messages.length === 1 ? "message" : "messages"}</small>}
+    <header><strong>Thread</strong>{thread && <small>{shown.length} {shown.length === 1 ? "message" : "messages"}</small>}
       <button type="button" aria-label="Close thread" onClick={() => dialog.current?.close()}>×</button></header>
-    <div className="org-thread-messages">
+    <div className="org-thread-messages" ref={list}>
       {!thread && !error && <p role="status">Loading the thread…</p>}
-      {thread?.messages.map((message, index) => <React.Fragment key={message.id}>{renderMessage(message, index === 0)}</React.Fragment>)}
+      {shown.map((message, index) => <React.Fragment key={message.id}>{renderMessage(message, index === 0)}</React.Fragment>)}
+      {thread && working?.(shown)}
       {thread?.truncated && <p className="org-help">Only the first 200 messages of this thread are shown.</p>}
     </div>
     {error && <p className="org-error" role="alert">{error}</p>}
     {canWrite && thread && <form className="org-thread-composer" onSubmit={event => void send(event)}>
-      <label className="org-visually-hidden" htmlFor="org-thread-reply">Reply in thread</label>
-      <textarea id="org-thread-reply" rows={1} maxLength={16000} placeholder="Reply in thread…" value={text} disabled={sending}
-        onChange={event => { setText(event.target.value); setClientId(""); }}
-        onKeyDown={event => { if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) { event.preventDefault(); void send(event); } }} />
-      <button className="org-primary" disabled={sending || !text.trim()} aria-label={sending ? "Sending…" : "Send reply"}>{sending ? "…" : "▶"}</button>
+      {attach && <PendingFiles files={files} onRemove={key => { removeFile(key); setClientId(""); }} />}
+      <div className="org-thread-composer-row">
+        {attach && <AttachFilesButton disabled={sending} onFiles={addFiles} />}
+        <label className="org-visually-hidden" htmlFor="org-thread-reply">Reply in thread</label>
+        <textarea id="org-thread-reply" rows={1} maxLength={16000} placeholder="Reply in thread…" value={text} disabled={sending}
+          onChange={event => { setText(event.target.value); setClientId(""); }}
+          onKeyDown={event => { if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) { event.preventDefault(); void send(event); } }} />
+        <button className="org-composer-button" disabled={sending || uploading || !content.trim()}
+          aria-label={sending ? "Sending…" : uploading ? "Waiting for uploads" : "Send reply"}
+          title={uploading ? "Wait for the uploads to finish, or remove the failed ones" : "Send reply"}><ReturnIcon /></button>
+      </div>
     </form>}
   </dialog>;
 }

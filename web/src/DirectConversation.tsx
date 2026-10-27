@@ -332,6 +332,7 @@ export function DirectConversationView({ organizationId, conversation, user, mem
     {status && <p role="status" className="org-help org-direct-status">{status}</p>}
     {threadFor && <ThreadDialog key={threadFor} messagesPath={root + "/messages"} messageId={threadFor} canWrite={writable}
       onClose={() => setThreadFor(null)} onAuthLost={onAuthLost} onPosted={message => setMessages(existing => mergeMessages(existing, [message]))}
+      live={messages} attach={writable ? file => uploadDirectFile(file, root) : undefined}
       renderMessage={message => <div className={"org-message-group org-speaker-human " + speakerTone(message, tones)}><article className="org-message">
         <header><strong>{authorName(message)}</strong>
           <time dateTime={new Date(message.created_at * 1000).toISOString()}>{new Date(message.created_at * 1000).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" })}</time></header>

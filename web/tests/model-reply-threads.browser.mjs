@@ -6,7 +6,7 @@ import { test } from "node:test";
 import { chromium } from "playwright";
 import { createServer } from "vite";
 
-test("a model's answer replies to its prompt, and a reply to the answer asks a follow-up in the same thread", { timeout: 60000 }, async () => {
+test("a model's answer replies to its prompt, a reply to the answer asks a follow-up, and the Thread view follows the work", { timeout: 90000 }, async () => {
   const root = fileURLToPath(new URL("../", import.meta.url));
   const server = await createServer({ root, server: { host: "127.0.0.1", port: 0,
     fs: { allow: [root, await realpath(root + "node_modules")] } } });
@@ -28,7 +28,10 @@ test("a model's answer replies to its prompt, and a reply to the answer asks a f
     const answer = message(user, "Beilinson's regulator is injective in these cases.", prompt.id,
       { author_kind: "assistant", assistant_model: "fixture/reasoner", inference_run_id: "run-1",
         usage: { prompt_tokens: 128, completion_tokens: 96, actual_microusd: 2100 } });
-    const messages = [prompt, aside, answer];
+    const messages = [prompt, aside, answer], cancels = [];
+    let runs = [];
+    const media = "e".repeat(32), sha = "f".repeat(64), png = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==", "base64");
+    const picture = `/api/organizations/${org}/topics/${topic}/media/${media}/${sha}/content`;
     const thread = id => {
       let top = messages.find(item => item.id === id);
       while (top.reply_to) top = messages.find(item => item.id === top.reply_to);
@@ -54,13 +57,22 @@ test("a model's answer replies to its prompt, and a reply to the answer asks a f
       else if (path.endsWith("/compute-configuration")) data = { images: [], policy: { allowed_images: [] } };
       else if (path.endsWith("/navigation-usage")) data = { projects: {}, channels: {}, topics: {} };
       else if (parts[6] === "messages" && parts[8] === "thread") data = thread(parts[7]);
+      else if (path === picture) { await route.fulfill({ status: 200, contentType: "image/png", body: png }); return; }
+      else if (path.endsWith(`/media/${media}/${sha}/read`)) data = { mime: "image/png" };
+      else if (path.endsWith("/media") && request.method() === "POST") data = { id: media, chunk_bytes: 1 << 20 };
+      else if (path.includes(`/media/${media}/chunks/`)) data = {};
+      else if (path.endsWith(`/media/${media}/finish`)) data = { id: media, name: "k3.png", mime: "image/png", sha256: sha, size_bytes: png.length,
+        url: picture, markdown: `![k3.png](${picture})` };
       else if (path.endsWith("/messages") && request.method() === "POST") {
         posts.push(body); data = message(user, body.content, body.reply_to ?? null, { client_id: body.client_id }); messages.push(data); status = 201;
       } else if (path.endsWith("/messages")) data = messages;
       else if (path.endsWith("/message-updates")) data = { after: 0, messages: [] };
       else if (path.includes("/reactions/")) data = { counts: { up: 0, down: 0, upside_down: 0 }, mine: [] };
       else if (path.endsWith("/inference-runs") && request.method() === "POST") { asked.push(body); data = []; }
-      else if (path.endsWith("/inference-runs")) data = [];
+      else if (path.endsWith("/inference-runs")) data = runs;
+      else if (path.endsWith("/cancel") && request.method() === "POST") {
+        cancels.push(parts[5]); runs = runs.map(run => run.id === parts[5] ? { ...run, cancel_requested: 1 } : run); data = runs[0];
+      }
       else if (path.endsWith("/bot-runs")) data = [];
       else if (path.endsWith("/agents")) data = [];
       else if (path.endsWith("/goal")) data = null;
@@ -89,16 +101,54 @@ test("a model's answer replies to its prompt, and a reply to the answer asks a f
     await article(prompt.id).locator(".org-thread-count").filter({ hasText: /^↩2 replies$/ }).waitFor();
     assert.match(await article(follow().id).locator(".org-reply-pointer").innerText(), /Beilinson's regulator/);
 
-    // A reply written in the thread asks the model too.
+    // In the Thread view, alpha's square plus sits at the left of the box and a chosen picture waits as a chip above it.
     await article(prompt.id).locator(".org-thread-count").click();
     const dialog = page.getByRole("dialog", { name: "Thread", exact: true });
     await dialog.getByText("3 messages", { exact: true }).waitFor();
-    await dialog.getByLabel("Reply in thread", { exact: true }).fill("And for K3 surfaces?");
-    await dialog.getByLabel("Reply in thread", { exact: true }).press("Enter");
+    const reply = dialog.getByLabel("Reply in thread", { exact: true });
+    const plus = dialog.getByRole("button", { name: "Attach pictures or PDFs", exact: true });
+    const [plusBox, replyBox] = await Promise.all([plus.boundingBox(), reply.boundingBox()]);
+    assert.equal(plusBox.width, 28); assert.equal(plusBox.height, 28);
+    assert.ok(plusBox.x + plusBox.width <= replyBox.x, "the plus is left of the text");
+    await dialog.locator('input[type="file"]').setInputFiles({ name: "k3.png", mimeType: "image/png", buffer: png });
+    const chip = dialog.getByRole("list", { name: "Attachments to send", exact: true }).getByRole("listitem");
+    await chip.filter({ hasText: "k3.png" }).waitFor();
+    await dialog.getByRole("button", { name: "Send reply", exact: true }).waitFor();
+
+    // A reply written in the thread carries the picture and asks the model too.
+    await reply.fill("And for K3 surfaces?");
+    await reply.press("Enter");
     await dialog.getByText("4 messages", { exact: true }).waitFor();
+    assert.equal(posts.at(-1).content, `![k3.png](${picture})\n\nAnd for K3 surfaces?`);
+    assert.equal(await chip.count(), 0, "the chips clear once sent");
     for (let wait = 0; wait < 50 && asked.length < 2; wait++) await page.waitForTimeout(100);
     assert.equal(asked.length, 2);
-    assert.equal(asked[1].through_sequence, messages.at(-1).sequence);
+    const k3 = messages.at(-1);
+    assert.equal(asked[1].through_sequence, k3.sequence);
+
+    // While the model works, the Thread view shows a trimmed card: model, Stop, and the step it is on.
+    runs = [{ id: "run-k3", requested_by: user, model: "fixture/reasoner", status: "running", context_through_sequence: k3.sequence,
+      created_at: 1_800_000_900, started_at: 1_800_000_900, cancel_requested: 0, message_id: null, output_text: "", accounting_state: "reserved",
+      actual_microusd: null, reserved_microusd: 10, additions: [],
+      activity: [{ sequence: 1, phase: "round", round: 1 }, { sequence: 2, phase: "tool_requested", tool: "arxiv_search", detail: "searched arXiv for “K3 regulator”" }] }];
+    const working = dialog.locator('.org-thread-working[data-run-id="run-k3"]');
+    await working.waitFor({ timeout: 15000 });
+    assert.match(await working.getByRole("status", { name: "Reply progress" }).innerText(), /searched arXiv for “K3 regulator”…$/);
+    assert.match(await working.locator("header").innerText(), /fixture\/reasoner\s+working/);
+    await working.getByRole("button", { name: "Stop this reply", exact: true }).click();
+    for (let wait = 0; wait < 50 && !cancels.length; wait++) await page.waitForTimeout(100);
+    assert.deepEqual(cancels, ["run-k3"], "Stop cancels the reply");
+
+    // When the reply finishes, its answer takes the card's place in the open thread, with its steps and usage.
+    runs = [{ ...runs[0], status: "succeeded", message_id: "done" }];
+    messages.push(message(user, "For K3 surfaces the regulator is injective on the transcendental part.", k3.id,
+      { author_kind: "assistant", assistant_model: "fixture/reasoner", inference_run_id: "run-k3",
+        steps: [{ sequence: 1, phase: "round", round: 1 }, { sequence: 3, phase: "round", round: 2 }],
+        usage: { prompt_tokens: 96, completion_tokens: 70, actual_microusd: 1200 } }));
+    await dialog.getByText("For K3 surfaces the regulator is injective on the transcendental part.").waitFor({ timeout: 15000 });
+    await dialog.getByText("5 messages", { exact: true }).waitFor();
+    await working.waitFor({ state: "detached" });
+    await dialog.getByRole("button", { name: "2 steps", exact: true }).waitFor();
     assert.deepEqual(errors, []);
   } finally {
     await browser.close(); await server.close();

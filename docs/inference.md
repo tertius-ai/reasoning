@@ -39,6 +39,13 @@ Thread view, asks the model a follow-up. That follow-up's answer replies to it,
 so the thread reads question, answer, follow-up, answer. Source messages given to
 the model carry `reply_to` when they reply to an earlier message.
 
+The Thread view follows the conversation while it is open. A reply at work on
+one of its messages shows as a trimmed card with the model, its elapsed time,
+**Stop**, and the step it is on. When the reply finishes, its answer replaces the
+card, with its steps and usage row. The Thread view's box has the same square
+plus as the main box: chosen pictures and PDFs wait as chips above the text
+while they upload, and are sent with the reply.
+
 A later message can join a reply that is still running instead of starting
 its own. A running reply's card shows how long it has been working and a
 timeline of its steps. Each step has an icon for what it did and a short

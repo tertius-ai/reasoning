@@ -134,7 +134,7 @@ export const replacedByReply = (run: ModelRun, transcript?: LoadedTranscript) =>
 /** A queued request whose agent conversation is paused: it does not start until someone resumes it. */
 export const pausedRun = (run: ModelRun) => run.status === "queued" && run.agent?.thread_status === "paused";
 
-export function BetaConversation({ organizationId, topicId, userId, canWrite, canManage, online, attempt, onAttempt, onAuthLost, onActivity, toolbarTarget, hidePlay, wake, transcript, onReplyPending, onRuns, addingTo, onAddTo, onUndoAddition, names }: {
+export function BetaConversation({ organizationId, topicId, userId, canWrite, canManage, online, attempt, onAttempt, onAuthLost, onActivity, toolbarTarget, hidePlay, wake, transcript, onReplyPending, onRuns, stopRef, addingTo, onAddTo, onUndoAddition, names }: {
   organizationId: string; topicId: string; userId: string; canWrite: boolean; canManage: boolean;
   online: boolean; attempt?: PendingModelAttempt; onAttempt: (attempt?: PendingModelAttempt) => void; onAuthLost: () => void;
   onActivity: (entries: TopicActivity[]) => void;
@@ -147,6 +147,8 @@ export function BetaConversation({ organizationId, topicId, userId, canWrite, ca
   onReplyPending?: () => void;
   /** Receives every runs read, so the transcript can offer adding to a running reply. */
   onRuns?: (runs: ModelRun[]) => void;
+  /** Receives this conversation's Stop for a reply thread, named by its root run. */
+  stopRef?: React.MutableRefObject<((rootRun: string) => Promise<void>) | undefined>;
   /** The root run the message box is adding to, and how its thread line starts adding. */
   addingTo?: string; onAddTo?: (rootRun: string) => void;
   /** Undo one of your unread additions from the reply's timeline. */
@@ -286,6 +288,7 @@ export function BetaConversation({ organizationId, topicId, userId, canWrite, ca
     } catch (cause) { if (alive.current) failed(cause); }
     finally { if (alive.current) setBusy(false); }
   };
+  if (stopRef) stopRef.current = stopReply;
   // A finished run gives way to its reply message only once the transcript shows it, so the output never disappears.
   // A reply cancelled because its message moved into another reply leaves no card: the message shows where it went.
   const visibleRuns = runs.filter((run) => (run.context_through_sequence !== 0 || run.agent) && run.error_code !== "moved_into_reply"

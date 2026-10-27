@@ -5,7 +5,7 @@ import ReactMarkdown, { Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import remarkMath from "remark-math";
 import rehypeKatex from "rehype-katex";
-import { BetaConversation, definitiveRejection, requestModelReply } from "./BetaConversation";
+import { BetaConversation, definitiveRejection, pausedRun, requestModelReply } from "./BetaConversation";
 import { Feedback, ForkOrigin, MessageActions } from "./ChatFeedback";
 import { BotApprovalDialog, useBotApprovals } from "./BotApprovals";
 import { BotConversation } from "./BotConversation";
@@ -27,7 +27,7 @@ import { WorkflowExecutionAttempt } from "./workflow-run-api";
 import { ComputeAttempt } from "./compute-api";
 import { MessageUsageDetails } from "./MessageUsageDetails";
 import { ReplyFiles } from "./ReplyFiles";
-import { ReplyTimeline } from "./ReplyTimeline";
+import { ReplyTimeline, WorkingCard } from "./ReplyTimeline";
 import { normalizeMathDelimiters } from "./markdownMath";
 import { catalogModel, modelOptionGroups } from "./modelRecommendations";
 import { EffortPicker, ModelPicker, compactTokens } from "./ModelBrowser";
@@ -36,7 +36,7 @@ import { TopicCopyButton, TopicSystemPrompt } from "./TopicDiagnostics";
 import { NavigationUsage, readNavigation, saveNavigation, Spend } from "./navigationState";
 import { ThemeToggle } from "./ThemeToggle";
 import { ShortcutsHelp, SlashCommandPalette, TOPIC_COMMANDS, TopicCommand, dispatchTopicCommand, useTopicCommand } from "./TopicCommands";
-import { AttachmentButton, MarkdownMedia, MediaScope } from "./TopicMedia";
+import { AttachmentButton, MarkdownMedia, MediaScope, uploadMedia } from "./TopicMedia";
 import { ReturnIcon } from "./ComposerIcons";
 import { TexRequestDialog, texRequest } from "./TexRequestDialog";
 import { EmailVerification, VerifyEmailBanner } from "./EmailVerification";
@@ -834,6 +834,8 @@ function Conversation({ organizationId, topic, members, user, canWrite, canManag
   // Thread mode: the next message joins a running model reply. Leaving it keeps the text for a new question.
   const [betaRuns, setBetaRuns] = useState<ModelRun[]>([]), [addNotice, setAddNotice] = useState("");
   const threads = useMemo(() => replyThreads(betaRuns), [betaRuns]);
+  // The beta conversation's Stop for a reply, so the Thread view stops replies the same way its cards do.
+  const stopReply = useRef<((rootRun: string) => Promise<void>) | undefined>(undefined);
   const startAdding = useRef((_root: string) => {});
   startAdding.current = (rootRun: string) => {
     updateDraft({ ...currentDraft.current, addTo: rootRun, replyTo: undefined, clientId: crypto.randomUUID(), attempted: false });
@@ -1326,10 +1328,18 @@ function Conversation({ organizationId, topic, members, user, canWrite, canManag
         // A reply written in the thread asks the model too, like one sent from the box.
         if (!modelAttempt) void askModel(message);
       }}
+      live={messages} attach={canWrite ? file => uploadMedia(file, organizationId, topic.id) : undefined}
+      working={shown => topic.kind === "beta" && shown.map(message => {
+        // A reply at work on a message of the thread shows trimmed here; its answer joins the thread when it arrives.
+        const answering = threadAnswering(threads, message.sequence);
+        return answering && !pausedRun(answering.root) && <WorkingCard key={answering.root.id} run={answering.root}
+          onStop={online && (canManage || answering.root.requested_by === user.id) ? () => void stopReply.current?.(answering.root.id) : undefined} />;
+      })}
       renderMessage={message => <div className={"org-message-group org-speaker-" + (message.author_kind ?? "human") + " " + speakerTone(message, tones)}><article className="org-message">
         <header><strong>{authorLabel(message, members)}</strong>
           <time dateTime={new Date(message.created_at * 1000).toISOString()}>{new Date(message.created_at * 1000).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" })}</time></header>
-        <MessageMarkdown markdown={normalizeMathDelimiters(mentionMarkdown(message.content, mentionPeople))} /></article></div>} />}
+        <MessageMarkdown markdown={normalizeMathDelimiters(mentionMarkdown(message.content, mentionPeople))} />
+        <ReplyFooter message={message} userId={user.id} names={memberNames} /></article></div>} />}
     {topic.kind === "beta" && <ForkOrigin organizationId={organizationId} topicId={topic.id} />}
     {focusMissing && <p role="status" className="org-link-notice">The linked message is unavailable. It may have been removed, or you may not have access to it.
       <button type="button" aria-label="Dismiss notice" onClick={() => setFocusMissing(false)}>×</button></p>}
@@ -1346,7 +1356,7 @@ function Conversation({ organizationId, topic, members, user, canWrite, canManag
       {topic.kind === "beta" && <BetaConversation organizationId={organizationId} topicId={topic.id} userId={user.id}
         canWrite={canWrite} canManage={canManage} online={online} toolbarTarget={composerButton} hidePlay={Boolean(draft.text.trim())}
         attempt={modelAttempt} onAttempt={onModelAttempt} onAuthLost={onAuthLost} onActivity={setBetaActivity} wake={messages.at(-1)?.sequence}
-        onRuns={setBetaRuns} addingTo={adding?.root.id} onAddTo={onAddTo} onUndoAddition={undoFromReply} names={memberNames}
+        onRuns={setBetaRuns} stopRef={stopReply} addingTo={adding?.root.id} onAddTo={onAddTo} onUndoAddition={undoFromReply} names={memberNames}
         transcript={transcript} onReplyPending={refreshMessages} />}
       <BotConversation organizationId={organizationId} topicId={topic.id} names={botNames} userId={user.id}
         canWrite={canWrite} canManage={canManage} onActivity={setBotActivity} onAuthLost={onAuthLost} wake={messages.at(-1)?.sequence} />
