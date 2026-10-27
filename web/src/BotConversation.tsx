@@ -2,7 +2,7 @@ import { PollBackoff, startPolling } from "./polling";
 import { LIVE_SAFETY_POLL_MS, subscribeTopicEvents } from "./topicEvents";
 // Copyright Benjamin Antieau and Deven Manam. SPDX-License-Identifier: Apache-2.0
 import React, { useEffect, useState } from "react";
-import { ActivityCard, TopicActivity } from "./TopicActivity";
+import { ActivityCard, CardStop, TopicActivity } from "./TopicActivity";
 import { aborted, ApiError, BotRun, errorMessage, ModelAttempt, organizationPath, request, topicPath } from "./organization-api";
 import { canStopBot, publishBotActivity } from "./BotPlayback";
 import { BotRunTiming } from "./BotRunTiming";
@@ -72,13 +72,24 @@ export function BotConversation({ organizationId, topicId, names, userId, canWri
     poller = startPolling(poll, controller.signal, live && streamed ? LIVE_SAFETY_POLL_MS : 0);
     return () => { unsubscribe(); controller.abort(); };
   }, [organizationId, topicId, names, onActivity, onAuthLost, wake]);
+  const stopRun = async (run: BotRun) => {
+    setBusy(true); setError("");
+    try {
+      const stopped = await request<BotRun>(organizationPath(organizationId) + "/bot-runs/" + run.id + "/stop", { method: "POST", body: {} });
+      setRuns(current => current.map(item => item.id === stopped.id ? stopped : item));
+    } catch (cause) {
+      if (cause instanceof ApiError && cause.status === 401) onAuthLost(); else setError(errorMessage(cause));
+    } finally { setBusy(false); }
+  };
   useEffect(() => { if (connected) onActivity(runs.filter(run => run.status !== "succeeded").map(run => ({
     id: "bot:" + run.id, created_at: run.created_at, after_sequence: run.context_through_sequence || undefined,
     body: <ActivityCard title={`${names[run.bot_id] ?? "Bot"} · ${run.model}`} status={run.status} createdAt={run.created_at}
-      initiallyOpen={!["failed", "cancelled", "outcome_unknown", "succeeded"].includes(run.status)}>{run.status !== "succeeded" && <BotRunStatus run={run} />}
+      initiallyOpen={!["failed", "cancelled", "outcome_unknown", "succeeded"].includes(run.status)}
+      action={canStopBot(run, userId, canWrite, canManage)
+        ? <CardStop label="Stop this bot reply" disabled={busy || !connected} onStop={() => void stopRun(run)} /> : undefined}>{run.status !== "succeeded" && <BotRunStatus run={run} />}
       <BotRunTiming run={run} />
     </ActivityCard>,
-  }))); }, [runs, connected, names, onActivity]);
+  }))); }, [runs, connected, names, onActivity, busy, userId, canWrite, canManage]);
   const stoppable = runs.filter(run => canStopBot(run, userId, canWrite, canManage));
   useEffect(() => {
     publishBotActivity(topicId, connected && !busy && stoppable.length > 0);
@@ -86,17 +97,7 @@ export function BotConversation({ organizationId, topicId, names, userId, canWri
   }, [topicId, connected, busy, stoppable.length]);
   useTopicCommand(topicId, command => {
     if (command !== "stop" || !connected || busy || !stoppable.length) return;
-    setBusy(true); setError("");
-    void (async () => {
-      try {
-        for (const run of stoppable) {
-          const stopped = await request<BotRun>(organizationPath(organizationId) + "/bot-runs/" + run.id + "/stop", { method: "POST", body: {} });
-          setRuns(current => current.map(item => item.id === stopped.id ? stopped : item));
-        }
-      } catch (cause) {
-        if (cause instanceof ApiError && cause.status === 401) onAuthLost(); else setError(errorMessage(cause));
-      } finally { setBusy(false); }
-    })();
+    void (async () => { for (const run of stoppable) await stopRun(run); })();
   });
   return error ? <p className="org-error" role="alert">Unable to stop bot activity: {error}</p> : null;
 }

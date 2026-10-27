@@ -956,8 +956,9 @@ generation, on a bounded schedule and without replaying the request; see
 [inference accounting](inference.md). Administrators can record a verified
 provider cost for a run that stays uncertain. Unsent composer text
 is never included in a model request. A later message can join a running
-reply instead of starting its own, from the reply's thread line, ↩ on its
-question, or a posted message's actions menu; see [inference](inference.md).
+reply instead of starting its own, from **Add to this reply** under the reply's
+timeline, ↩ on its question, or a posted message's actions menu; see
+[inference](inference.md).
 The account menu's **My bots** provides personal bot connections bounded by the
 member's current permissions. **Follow my access** resolves all owner-visible
 topics dynamically, including newly created private topics. Explicit-only grants
@@ -1048,8 +1049,8 @@ approval, and compute steps; **Run workflow** saves an immutable definition and
 then starts a separate idempotent run. Definition and execution request IDs are
 retained independently if either reply is lost. Existing run cards expose results
 and approval. Composer play (▶) retries an acknowledged failed run at its exact
-revision or starts the original pinned version again; stop (■) requests
-cancellation of active work without implying cleanup or releasing reservations.
+revision or starts the original pinned version again; the workflow card's
+**Stop** button requests cancellation of active work without implying cleanup or releasing reservations.
 A retained unacknowledged request is retried with the same identity. Comparison
 dates share a line with model names. Earlier activity loads incrementally without a fixed history ceiling.
 Workflow-owned compute children appear inside their workflow, not as duplicate

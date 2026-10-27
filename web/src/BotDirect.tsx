@@ -3,6 +3,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { EffortPicker } from "./ModelBrowser";
 import { ApiError, BotRun, OrganizationPrices, Presence, aborted, errorMessage, organizationPath, request, sharedRequest } from "./organization-api";
 import "./bot-direct.css";
+import { CardStop } from "./TopicActivity";
 
 /** Your own bot as presence reports it, with its effort levels per model and whether it may run local tools. */
 export type OwnBot = Presence["bots"][number];
@@ -95,16 +96,18 @@ export function BotSteps({ run }: { run: DirectBotRun }) {
 }
 
 /** While your bot works: one live line under your message, with any approval it needs. */
-export function BotWorking({ run, name, online, approvals, onDecide }: {
+export function BotWorking({ run, name, online, approvals, onDecide, onStop }: {
   run: DirectBotRun; name: string; online: boolean; approvals: Approval[];
   onDecide: (approval: Approval, allow: boolean) => void;
+  /** Stops this reply, from the card's header. */
+  onStop?: () => void;
 }) {
   const latest = run.activity?.at(-1)?.label;
   const line = run.status === "waiting_approval" ? "Waiting for your approval"
     : run.status === "queued" ? (online ? "Starting…" : `Waiting for ${name} to come online`) : latest ? `${latest}…` : "Thinking…";
   return <div className="org-message-group org-speaker-bot org-bot-working" aria-live="polite">
     <article className="org-message">
-      <header><strong>{name}</strong></header>
+      <header><strong>{name}</strong>{onStop && <CardStop label="Stop this bot reply" onStop={onStop} />}</header>
       <p className="org-bot-status"><i aria-hidden="true" />{line}</p>
       {approvals.filter(approval => approval.run_id === run.id).map(approval => <div key={approval.id} className="org-bot-approval" role="group"
         aria-label={`${name} asks to run a command`}>

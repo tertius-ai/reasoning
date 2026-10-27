@@ -1,6 +1,7 @@
 """Later topic messages join a running model reply at its next step, never by replaying a request."""
 
 import json
+import re
 
 from test_public_inference import MODELS, enqueue, prepare
 from test_public_research_agent import ResearchFixture
@@ -57,6 +58,20 @@ def test_a_message_sent_in_thread_mode_is_read_at_the_next_step_and_kept_for_lat
     assert [event["step"] for event in events if event.get("phase") == "additions_read"] == [1, 2]
     listed = client.get(f"/api/organizations/{org}/topics/{topic}/messages").json()
     assert next(m for m in listed if m["id"] == early.json()["id"])["addition"]["read_step"] == 1
+    # The card's timeline: each addition's text, and the read events in step order among the reply's rounds.
+    assert {a["content"] for a in view["additions"]} == {"Skip French-language sources.", "Cite exact theorem numbers."}
+    timeline = [(entry["phase"], entry.get("round"), entry.get("step")) for entry in view["activity"]
+                if entry["phase"] in {"round", "additions_read"}]
+    assert timeline == [("additions_read", None, 1), ("round", 1, None), ("additions_read", None, 2), ("round", 2, None)]
+    assert [entry["message_ids"] for entry in view["activity"] if entry["phase"] == "additions_read"][0] == [early.json()["id"]]
+    # The answer lists what it took into account, so the transcript can fold the added messages under it.
+    answer = next(m for m in listed if m.get("inference_run_id") == row["id"])
+    assert [a["content"] for a in answer["additions"]] == ["Skip French-language sources.", "Cite exact theorem numbers."]
+    # Tool steps carry short descriptions, and the answer keeps the reply's steps for its folded record.
+    details = [entry["detail"] for entry in view["activity"] if entry["phase"] == "tool_completed"]
+    assert len(details) == 1 and re.fullmatch(r"read earlier messages · \d+ results?", details[0])
+    assert [entry["phase"] for entry in answer["steps"] if entry["phase"] in {"round", "additions_read"}] \
+        == ["additions_read", "round", "additions_read", "round"]
 
 
 def test_thread_mode_refuses_a_finished_reply_without_posting_the_message(installation):

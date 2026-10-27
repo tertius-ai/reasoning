@@ -3,7 +3,7 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 import { DirectConversation, directPath } from "./DirectMessages";
 import { normalizeMathDelimiters } from "./markdownMath";
 import { MessageMarkdown, alphaMessageGroups, resizeComposer } from "./OrganizationApp";
-import { ReturnIcon, StopIcon } from "./ComposerIcons";
+import { ReturnIcon } from "./ComposerIcons";
 import { BotComposerControls, BotSteps, BotWorking, replyRun, useBotChoice, useBotRuns, useOwnBot } from "./BotDirect";
 import { ApiError, Account, Member, Message, aborted, errorMessage, mentionMarkdown, mergeMessages, request } from "./organization-api";
 import { startPolling } from "./polling";
@@ -270,8 +270,11 @@ export function DirectConversationView({ organizationId, conversation, user, mem
             onSaved={updated => { setMessages(existing => mergeMessages(existing, [updated])); setEditing(null); }} />
             : messageBody(message)}
           {botChat && message.author_kind === "bot" && (() => { const run = replyRun(botRuns.runs, message.client_id); return run ? <BotSteps run={run} /> : null; })()}
-          {botChat && own && botOffline && botRuns.runs.some(run => run.status === "queued" && run.context_through_sequence === message.sequence)
-            && <small className="org-bot-waiting">waiting for {name}</small>}
+          {botChat && own && botOffline && (() => {
+            const queued = botRuns.runs.find(run => run.status === "queued" && run.context_through_sequence === message.sequence);
+            return queued && <small className="org-bot-waiting">waiting for {name}
+              <button type="button" className="org-bot-waiting-cancel" onClick={() => void botRuns.stop(queued)}>Cancel</button></small>;
+          })()}
           <div className={"chat-message-actions chat-has-copy chat-has-fork" + (writable ? " chat-has-reply chat-has-react" : "")}>
             <ReactionControl path={root + "/messages/" + encodeURIComponent(message.id) + "/reactions"}
               canWrite={writable} onAuthLost={onAuthLost} batched preloaded={message.reactions} modelReply={message.author_kind === "bot"} />
@@ -315,7 +318,8 @@ export function DirectConversationView({ organizationId, conversation, user, mem
           : "New messages show as unread in their Direct messages list."}</p></div>}
         {transcript}
         {botChat && activeRun && !(activeRun.status === "queued" && botOffline) && <BotWorking run={activeRun} name={name} online={!botOffline}
-          approvals={botRuns.approvals} onDecide={(approval, allow) => void botRuns.decide(approval, allow)} />}
+          approvals={botRuns.approvals} onDecide={(approval, allow) => void botRuns.decide(approval, allow)}
+          onStop={() => void botRuns.stop(activeRun)} />}
       </div>
       {!atBottom && messages.length > 0 && <NewestMessageButton unseen={unseen} onJump={() => {
         bottom.current = true; setAtBottom(true); if (viewport.current) viewport.current.scrollTop = viewport.current.scrollHeight;
@@ -349,11 +353,9 @@ export function DirectConversationView({ organizationId, conversation, user, mem
             if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); void send(); }
           }} /></div>
         <div className="org-composer-send">
-          {botChat && activeRun ? <button type="button" className="org-composer-button" aria-label="Stop current work" title="Stop current work"
-            onClick={() => void botRuns.stop(activeRun)}><StopIcon /></button>
-            : <button className="org-composer-button org-send-play" aria-label={sending ? "Sending…" : uploading ? "Waiting for uploads" : draft.attempted ? "Retry send" : "Send"}
-              title={uploading ? "Wait for the uploads to finish, or remove the failed ones" : draft.attempted ? "Retry send" : "Send message"} disabled={!canSend}>
-              {sending ? <span aria-hidden="true">…</span> : <ReturnIcon />}</button>}</div>
+          <button className="org-composer-button org-send-play" aria-label={sending ? "Sending…" : uploading ? "Waiting for uploads" : draft.attempted ? "Retry send" : "Send"}
+            title={uploading ? "Wait for the uploads to finish, or remove the failed ones" : draft.attempted ? "Retry send" : "Send message"} disabled={!canSend}>
+            {sending ? <span aria-hidden="true">…</span> : <ReturnIcon />}</button></div>
       </div>
       </div>
       {botChat && <BotComposerControls attach={attachControl} bot={bot} choice={choice} disabled={!writable || sending} />}

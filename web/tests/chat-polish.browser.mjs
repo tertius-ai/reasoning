@@ -82,11 +82,13 @@ test("progress follows its human message, retained failures stay inspectable, an
     await waiting.locator("summary").first().click();
     await waiting.getByText("The finite case is settled.", { exact: true }).waitFor();
     await waiting.getByText("Remaining: Check the infinite case.", { exact: true }).waitFor();
-    // The box has one button at its right. Work is running, so it is Stop, even beside a paused request.
-    const stop = page.getByRole("button", { name: "Stop current work", exact: true });
-    await stop.waitFor({ timeout: 5000 });
-    assert.equal(await page.getByRole("button", { name: "Start or resume", exact: true }).count(), 0);
-    const box = await page.locator(".org-composer-box").boundingBox(), button = await stop.boundingBox();
+    // The box has one button at its right, and it never stops: the running reply has Stop in its own card header,
+    // so beside a paused request the box's button resumes.
+    const resume = page.getByRole("button", { name: "Start or resume", exact: true });
+    await resume.waitFor({ timeout: 5000 });
+    assert.equal(await page.getByRole("button", { name: "Stop current work", exact: true }).count(), 0);
+    await page.locator('[data-run-id="working"] summary').getByRole("button", { name: "Stop this reply", exact: true }).waitFor();
+    const box = await page.locator(".org-composer-box").boundingBox(), button = await resume.boundingBox();
     assert.equal(button.width, 28); assert.equal(button.height, 28);
     assert.ok(button.x + button.width <= box.x + box.width && button.x + button.width >= box.x + box.width - 12, "the button sits at the box's right edge");
     // Under the box: the 28px plus, then the ⓘ and the model at the ⓘ square's 24px height, all centred on one line.
@@ -102,8 +104,9 @@ test("progress follows its human message, retained failures stay inspectable, an
     for (let wait = 0; wait < 50 && !resumed(); wait++) await page.waitForTimeout(100);
     assert.ok(resumed(), "/play resumes the paused request");
     await message.fill("A follow-up");
-    // While the /play request is in flight the box shows Send; Stop returns once the request settles.
-    await stop.waitFor({ timeout: 5000 }).catch(() => assert.fail("Stop stays while work runs, even with text in the box"));
+    // With text in the box its button sends, while the running reply keeps Stop in its card.
+    await page.getByRole("button", { name: "Send", exact: true }).waitFor({ timeout: 5000 });
+    assert.equal(await page.locator('[data-run-id="working"] summary').getByRole("button", { name: "Stop this reply" }).count(), 1);
     assert.equal(await page.locator(".org-composer-send button:visible").count(), 1, "one button in the box");
     assert.deepEqual(errors, []);
   } finally { await browser.close(); await server.close(); }

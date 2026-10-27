@@ -1,7 +1,7 @@
 import { PollBackoff, schedulePoll } from "./polling";
 import React, { useEffect, useRef, useState } from "react";
 import { publishComputeActivity, useTopicCommand } from "./TopicCommands";
-import { ActivityCard, ActivityDialog, TopicActivity } from "./TopicActivity";
+import { ActivityCard, ActivityDialog, CardStop, TopicActivity } from "./TopicActivity";
 import { ApiError, aborted, errorMessage, organizationPath, request, sharedRequest, topicPath } from "./organization-api";
 import {
   ComputeArtifact, ComputeAttempt, ComputeConfiguration, ComputeEvent, ComputeJob, ComputeResources as Limits,
@@ -213,11 +213,13 @@ export function ComputeConversation({ organizationId, topicId, userId, canWrite,
   useEffect(() => {
     onActivity(jobs.map((job, index) => ({ id: "compute:" + job.id, created_at: job.created_at, sequence: job.sequence,
       body: <ActivityCard title={"Compute · " + job.image.name} status={job.status} createdAt={job.created_at}
-        initiallyOpen={index === 0 || selected === job.id || activeCompute(job)}>
+        initiallyOpen={index === 0 || selected === job.id || activeCompute(job)}
+        action={canCancelCompute(job, userId, canWrite, canManage)
+          ? <CardStop label="Stop this computation" disabled={busy} onStop={() => void cancel(job)} /> : undefined}>
         <ComputeJobDetail organizationId={organizationId} jobId={job.id} userId={userId} canWrite={canWrite} canManage={canManage}
           onClose={() => setSelected(null)} onAuthLost={onAuthLost} embedded />
       </ActivityCard> })));
-  }, [jobs, busy, selected, canWrite, canManage, onActivity, onAuthLost]);
+  }, [jobs, busy, selected, canWrite, canManage, userId, onActivity, onAuthLost]);
   const active = jobs.filter(job => canCancelCompute(job, userId, canWrite, canManage));
   useEffect(() => { publishComputeActivity(topicId, active.length > 0); }, [topicId, active.length]);
   useEffect(() => () => { publishComputeActivity(topicId, false); }, [topicId]);

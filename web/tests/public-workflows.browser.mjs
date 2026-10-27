@@ -244,8 +244,9 @@ test("rendered gamma runs share progress, approvals, attempts/results, immutable
       await route.continue();
     });
     await select(member, second);
-    await until(() => member.getByRole("button", { name: "Stop current work", exact: true }).isEnabled(), "cassette stop enabled for active workflow");
-    await member.getByRole("button", { name: "Stop current work", exact: true }).click();
+    const stopWorkflow = member.locator(`[data-activity-id="workflow:${second.id}"]`).getByRole("button", { name: /^Stop this (workflow|comparison)$/ });
+    await until(() => stopWorkflow.isEnabled(), "the workflow card's stop is enabled while it runs");
+    await stopWorkflow.click();
     await member.getByRole("button", { name: "Retry original cancel request", exact: true }).waitFor();
     await until(() => member.getByRole("button", { name: "Retry original cancel request", exact: true }).isEnabled(), "lost cancel reply settled");
     assert.equal((await call(root + "/workflow-runs/" + second.id, undefined, "GET")).cancel_requested, 1);

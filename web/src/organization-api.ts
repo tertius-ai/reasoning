@@ -40,7 +40,9 @@ export type Hierarchy = { projects: Project[]; channels: Channel[]; topics: Topi
 export type Member = Account & { role: Role };
 /** A later topic message added to a running model reply, and the step of that reply which read it. */
 export type ReplyAddition = { message_id: string; run_id: string; added_by: string; moved: boolean; cancelled_runs: string[];
-  created_at: number; read_at: number | null; read_step: number | null };
+  created_at: number; read_at: number | null; read_step: number | null;
+  /** The added message's text, sent with a reply's additions so its card can show them. */
+  content?: string };
 export type Message = { id: string; sequence: number; topic_id: string; author_id: string; content: string; client_id: string; created_at: number;
   reactions?: import("./ChatFeedback").Feedback;
   /** The message of the same topic that this one answers. */
@@ -52,7 +54,11 @@ export type Message = { id: string; sequence: number; topic_id: string; author_i
   files?: import("./ReplyFiles").ReplyFile[];
   workflow_run_id?: string; usage?: MessageUsage | null;
   /** Set when this message was added to a running model reply. */
-  addition?: ReplyAddition };
+  addition?: ReplyAddition;
+  /** On a model answer: the later messages its reply read and took into account. */
+  additions?: ReplyAddition[];
+  /** On a model answer: its reply's recorded steps, for the folded timeline under it. */
+  steps?: ModelRun["activity"] };
 export type ImpactProfile = { model: string; input_kwh_per_million: number; output_kwh_per_million: number;
   location: string; grid_grams_co2e_per_kwh: number | null; source: string };
 export type MessageUsage = { prompt_tokens: number | null; completion_tokens: number | null; actual_microusd: number | null;
@@ -150,7 +156,11 @@ export type ModelRun = {
   agent?: { role: string; task_id?: string | null; parent_run?: string | null; root_run: string; thread_status?: string | null } | null;
   cost_progress?: { confirmed_microusd: number; next_call_estimate_microusd: number; internal_hold_microusd: number } | null;
   created_at?: number; started_at?: number | null;
-  activity?: { sequence: number; phase: string; tool?: string; round?: number; summary?: string }[];
+  activity?: { sequence: number; phase: string; tool?: string; round?: number; summary?: string;
+    /** For `additions_read`: the added messages read before provider call `step`. */
+    message_ids?: string[]; step?: number | null;
+    /** For tool events: what the call did, in a short phrase ("searched arXiv for “x” · 4 results"). */
+    detail?: string }[];
   answer_state?: { status: "working" | "waiting" | "partial" | "response_ready"; reason?: string | null;
     checkpoint?: { summary: string; remaining?: string; sources?: string[] } | null } | null;
   diagnostics?: ProviderDiagnostics | null;

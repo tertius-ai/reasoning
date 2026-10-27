@@ -80,8 +80,11 @@ test("a member messages their own bot from People and follows, approves and reac
     await owner.keyboard.press("Enter");
     const mine = conversation.locator(".org-message-group-mine .org-message").filter({ hasText: "Does the census still run" });
     await visible(mine);
-    const stop = owner.getByRole("button", { name: "Stop current work", exact: true });
+    // The working card has Stop in its header; the message box keeps its Send button.
+    const stop = conversation.locator(".org-bot-working").getByRole("button", { name: "Stop this bot reply", exact: true });
     await visible(stop);
+    assert.equal(await owner.getByRole("button", { name: "Stop current work", exact: true }).count(), 0);
+    await visible(owner.getByRole("button", { name: "Send", exact: true }));
 
     // The runner claims it, works, and asks once to run a command; the request appears in the conversation.
     const claim = await runner("/runs/claim", {});

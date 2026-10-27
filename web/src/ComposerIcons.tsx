@@ -12,7 +12,3 @@ export function ReturnIcon() {
   return <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.1" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
     <path d="M20 5v6a4 4 0 0 1-4 4H5" /><path d="m9 10-5 5 5 5" /></svg>;
 }
-
-export function StopIcon() {
-  return <svg width="10" height="10" viewBox="0 0 12 12" aria-hidden="true"><rect x="1" y="1" width="10" height="10" rx="2" fill="currentColor" /></svg>;
-}

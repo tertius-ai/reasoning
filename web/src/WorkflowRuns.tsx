@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { ActivityCard, TopicActivity } from "./TopicActivity";
+import { ActivityCard, CardStop, TopicActivity } from "./TopicActivity";
 import { MessageUsageDetails } from "./MessageUsageDetails";
 import { RunProgress, runFailureMessage } from "./BetaConversation";
 import ReactMarkdown from "react-markdown";
@@ -31,18 +31,21 @@ const isComparisonDefinition = (definition: WorkflowVersion["definition"]) => de
   node.kind === "llm" && node.depends_on.length === 0 && node.parameters.prompt === definition.nodes[0].parameters.prompt);
 const isComparison = (run: WorkflowRun) => isComparisonDefinition(run.definition);
 
-export function WorkflowActivityCard({ run, initiallyOpen, children }: {
+export function WorkflowActivityCard({ run, initiallyOpen, onStop, stopDisabled, children }: {
   run: WorkflowRunSummary; initiallyOpen: boolean; children: React.ReactNode;
+  /** Cancels this run, shown in the header while it runs. */
+  onStop?: () => void; stopDisabled?: boolean;
 }) {
   const [open, setOpen] = useState(initiallyOpen);
+  const stop = onStop && <CardStop label={run.comparison ? "Stop this comparison" : "Stop this workflow"} disabled={stopDisabled} onStop={onStop} />;
   if (!run.comparison) return <ActivityCard title={run.name ?? "Workflow"} status={run.outcome ?? run.status} label={workflowStatusLabel(run)}
-    createdAt={run.created_at} initiallyOpen={initiallyOpen}>{children}</ActivityCard>;
+    createdAt={run.created_at} initiallyOpen={initiallyOpen} action={stop}>{children}</ActivityCard>;
   return <details className="org-message org-run-message org-comparison-message" data-status={run.outcome ?? run.status}
     open={open} onToggle={event => { if (event.target === event.currentTarget) setOpen(event.currentTarget.open); }}>
     <summary><strong className="org-comparison-question">{run.comparison.question}</strong>
       <span className="org-comparison-meta"><span className="org-comparison-models">{run.comparison.models.join(" · ")}</span>
         <time dateTime={new Date(run.created_at * 1000).toISOString()}>{new Date(run.created_at * 1000).toLocaleString()}</time></span>
-      {!terminalWorkflow(run) && <span role="status">{workflowStatusLabel(run)}</span>}
+      {!terminalWorkflow(run) && <span role="status">{workflowStatusLabel(run)}</span>}{stop}
     </summary>{open && children}
   </details>;
 }
@@ -363,12 +366,14 @@ export function WorkflowRuns({ organizationId, topicId, userId, canWrite, canMan
   useEffect(() => {
     onActivity(runs.map((value, index) => ({ id: "workflow:" + value.id, created_at: value.created_at, sequence: value.sequence,
       body: <WorkflowActivityCard run={value}
-        initiallyOpen={index === 0 || selected === value.id || !terminalWorkflow(value)}>
+        initiallyOpen={index === 0 || selected === value.id || !terminalWorkflow(value)}
+        onStop={!terminalWorkflow(value) && !value.cancel_requested && canControlWorkflow(value, userId, canWrite, canManage)
+          ? () => action(value.id, { operation: "cancel" }) : undefined} stopDisabled={busy || !!attempt || !connected}>
         <WorkflowRunDetail organizationId={organizationId} topicId={topicId} runId={value.id} userId={userId}
           canWrite={canWrite} canManage={canManage} locked={busy || !!attempt || !connected} refresh={refresh}
           onAction={spec => action(value.id, spec)} onClose={() => setSelected(null)} onAuthLost={onAuthLost} embedded />
       </WorkflowActivityCard> })));
-  }, [runs, selected, busy, attempt, connected, refresh, definitionBusy, canWrite, canManage, onActivity, onAuthLost]);
+  }, [runs, selected, busy, attempt, connected, refresh, definitionBusy, userId, canWrite, canManage, onActivity, onAuthLost]);
   const latest = runs[0];
   const active = runs.filter(run => !terminalWorkflow(run) && !run.cancel_requested && canControlWorkflow(run, userId, canWrite, canManage));
   const available = canWrite && !busy && !definitionBusy && connected && !!configuration?.enabled && !!configuration.worker_running;
@@ -410,7 +415,7 @@ export function WorkflowRuns({ organizationId, topicId, userId, canWrite, canMan
       }}>Forget retained request</button>
     </div>}
     {autoStartKey && <p role="status">Starting workflow…</p>}
-    {toolbarTarget && createPortal(<TransportControls {...{ canPlay, canStop, hidePlay }} onPlay={() => dispatchTopicCommand(topicId, "play")} onStop={() => dispatchTopicCommand(topicId, "stop")} />, toolbarTarget)}
+    {toolbarTarget && createPortal(<TransportControls {...{ canPlay, hidePlay }} onPlay={() => dispatchTopicCommand(topicId, "play")} />, toolbarTarget)}
     {more && <button type="button" disabled={busy} onClick={() => setVisibleLimit(limit => limit + 20)}>Earlier workflow activity</button>}
   </section>;
 }

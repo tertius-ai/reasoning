@@ -473,41 +473,15 @@ class InferenceStore:
                 "next_call_estimate_microusd": totals[1],
                 "internal_hold_microusd": row["reserved_microusd"] if row["accounting_state"] in {"reserved", "uncertain"} else 0,
             }
-            for event in db.execute(
-                "SELECT sequence,event_json FROM llm_events WHERE organization_id=? AND run_id=? "
-                "AND json_extract(event_json,'$.phase') IN "
-                "('round','tool_requested','tool_completed','compacting','compaction_failed','compaction_skipped',"
-                "'answer_ready','reasoning_summary','delegated') "
-                "ORDER BY sequence DESC LIMIT 20",
-                (row["organization_id"], row["id"]),
-            ):
-                body = json.loads(event["event_json"])
-                if body.get("phase") in {
-                    "round",
-                    "tool_requested",
-                    "tool_completed",
-                    "compacting",
-                    "compaction_failed",
-                    "compaction_skipped",
-                    "answer_ready",
-                    "reasoning_summary",
-                    "delegated",
-                }:
-                    activity.append(
-                        {
-                            "sequence": event["sequence"],
-                            "phase": body["phase"],
-                            "tool": body.get("name"),
-                            "round": body.get("round"),
-                            "summary": body.get("summary"),
-                        }
-                    )
+            from .reply_steps import run_activity
+
+            activity = run_activity(db, row["organization_id"], row["id"])
         return {
             **{field: row[field] for field in fields},
             "parameters": json.loads(row["parameters_json"]),
             "usage": footprint(row),
             "diagnostics": UsageStore.diagnostics(db, row["id"]) if db is not None else None,
-            "activity": list(reversed(activity)),
+            "activity": activity,
             "cost_progress": cost_progress,
             "agent": agent,
             "answer_state": answer_state(db, row) if db is not None else None,
