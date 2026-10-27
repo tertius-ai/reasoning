@@ -782,6 +782,7 @@ class InferenceStore:
                 status = "cancelled"
             now, message_id = int(time.time()), None
             is_review = db.execute("SELECT 1 FROM mathematical_reviews WHERE reviewer_run_id=?", (row["id"],)).fetchone()
+            from .message_replies import answered
             from .research_answers import retained_answer
 
             content = retained_answer(db, current, status, error)
@@ -789,8 +790,8 @@ class InferenceStore:
                 message_id = _id()
                 db.execute(
                     "INSERT INTO messages(id,organization_id,topic_id,author_id,content,client_id,created_at,"
-                    "author_kind,sender_kind,assistant_model,inference_run_id) "
-                    "VALUES(?,?,?,?,?,?,?,'assistant','assistant',?,?)",
+                    "author_kind,sender_kind,assistant_model,inference_run_id,reply_to) "
+                    "VALUES(?,?,?,?,?,?,?,'assistant','assistant',?,?,?)",
                     (
                         message_id,
                         row["organization_id"],
@@ -801,6 +802,7 @@ class InferenceStore:
                         now,
                         row["model"],
                         row["id"],
+                        answered(db, current),
                     ),
                 )
             if accounting_unknown:

@@ -1,8 +1,9 @@
 """Reply threads: a message, the message it answers, and every reply below them in one topic.
 
 A reply names its target through `messages.reply_to`, which `Store._post_message` only accepts for a
-message of the same topic. A thread is read with the topic's own access check, so it shows nothing a
-reader could not already page through.
+message of the same topic. A model's answer replies to the human message its context ends at, so a
+follow-up sent as a reply to that answer continues the same thread. A thread is read with the topic's
+own access check, so it shows nothing a reader could not already page through.
 
 Copyright Benjamin Antieau and Deven Manam. SPDX-License-Identifier: Apache-2.0
 """
@@ -15,6 +16,19 @@ from .store import Store, StoreError
 
 # One thread returns at most this many messages; `truncated` reports when replies were left out.
 THREAD_LIMIT = 200
+
+
+def answered(db, run: dict) -> str | None:
+    """The message a model reply answers: the human message its context ends at. Delegated tasks and workflows answer none."""
+    from .topic_agents import TopicAgents
+
+    request = db.execute("SELECT topic_id,context_through_sequence FROM llm_requests WHERE organization_id=? AND id=?",
+                         (run["organization_id"], run["request_id"])).fetchone()
+    if request is None or not request["context_through_sequence"] or TopicAgents.metadata(db, run).get("agent_task_id"):
+        return None
+    row = db.execute("SELECT id FROM messages WHERE organization_id=? AND topic_id=? AND sequence=? AND sender_kind='human'",
+                     (run["organization_id"], request["topic_id"], request["context_through_sequence"])).fetchone()
+    return row["id"] if row else None
 
 
 def message_thread(store: Store, user: str, org: str, topic_id: str, message_id: str) -> dict:

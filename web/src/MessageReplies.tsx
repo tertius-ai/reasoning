@@ -17,6 +17,30 @@ export function replyExcerpt(content: string, limit = 90): string {
 /** The first name of a person, or a bot's or model's whole label. */
 export const replyName = (label: string, kind?: Message["author_kind"]) => kind && kind !== "human" ? label : label.split(/\s+/)[0];
 
+/**
+ * How many loaded messages reply, directly or further down, to each thread root. Replies come after their root, so
+ * with the root loaded every reply to it is loaded too.
+ */
+export function threadReplyCounts(messages: Pick<Message, "id" | "reply_to">[]): Map<string, number> {
+  const parent = new Map(messages.map(message => [message.id, message.reply_to ?? null]));
+  const counts = new Map<string, number>();
+  for (const message of messages) {
+    if (!message.reply_to) continue;
+    let root = message.reply_to;
+    const seen = new Set([message.id]);
+    while (parent.get(root) && !seen.has(root)) { seen.add(root); root = parent.get(root)!; }
+    counts.set(root, (counts.get(root) ?? 0) + 1);
+  }
+  return counts;
+}
+
+/** Under a thread's first message: how many replies it has. Opens the whole thread. */
+export function ThreadCount({ count, onOpen }: { count: number; onOpen: () => void }) {
+  const label = `${count} ${count === 1 ? "reply" : "replies"}`;
+  return <button type="button" className="org-thread-count" onClick={onOpen} title="Show the whole thread"
+    aria-label={`${label}: show the whole thread`}><span aria-hidden="true">↩</span>{label}</button>;
+}
+
 /** The pointer above a reply; a curve in the gutter joins it to the speaker's dot. Opens the whole thread. */
 export function ReplyPointer({ original, label, onOpen }: { original?: Message; label?: string; onOpen: () => void }) {
   return <button type="button" className="org-reply-pointer" onClick={onOpen}

@@ -538,6 +538,10 @@ a.org-reference:hover, a.org-reference:focus-visible { text-decoration: underlin
   background: transparent; color: var(--muted); font-size: 11px; line-height: 16px; text-align: left; white-space: nowrap; overflow: hidden; cursor: pointer; }
 .org-app .org-reply-pointer:hover, .org-app .org-reply-pointer:focus-visible { background: transparent; color: var(--foreground); }
 .org-reply-pointer strong { flex: none; color: var(--foreground); font-weight: 500; }
+/* Under a thread's first message: how many replies it has. */
+.org-app .org-thread-count { display: inline-flex; align-items: center; gap: 5px; min-height: 20px; margin: 4px 0 0; padding: 0 9px;
+  border-radius: 999px; font-size: 11px; color: var(--muted); }
+.org-app .org-thread-count:hover, .org-app .org-thread-count:focus-visible { color: var(--foreground); }
 .org-reply-pointer > span:last-child { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .org-message:has(> .org-reply-pointer)::after { content: ""; position: absolute; left: 6.25px; top: 10px; width: 10px; height: 11px; box-sizing: border-box;
   border: solid color-mix(in srgb, var(--speaker-tone, var(--teal)) 60%, transparent); border-width: 1.5px 0 0 1.5px; border-top-left-radius: 6px; pointer-events: none; }

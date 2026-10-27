@@ -943,6 +943,11 @@ refreshes at once when such a reply is missing. Play and stop control
 retained agent continuations without a separate agent-status banner; failures
 and uncertain charges remain available in their run records. Finished and partial
 replies become topic messages labeled with their model, not their requester.
+A reply message names the human message its context ends at as its `reply_to`,
+so it shows a pointer to that message even when other messages arrived in
+between, and the thread's first message shows how many replies it has. Delegated
+task results and workflow runs reply to nothing. Topic forks keep reply targets
+among the copied messages.
 LLM messages and run records show provider-reported tokens/cost plus explicitly
 configured operational kWh and kg CO₂e scenario estimates. Human/bot chat posts
 do not represent inference calls. The requester or an administrator can cancel an active response. The

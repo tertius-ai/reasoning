@@ -37,7 +37,10 @@ def source_message(row, db=None, edit_cutoff=None) -> dict:
         ).fetchone()
         if historical:
             content = historical[0]
-    return {"id": row["id"], "sequence": row["sequence"], "sender": sender, "kind": row["sender_kind"], "text": content}
+    record = {"id": row["id"], "sequence": row["sequence"], "sender": sender, "kind": row["sender_kind"], "text": content}
+    if "reply_to" in row.keys() and row["reply_to"]:  # noqa: SIM118 - `in` on a sqlite3.Row tests values, not keys
+        record["reply_to"] = row["reply_to"]
+    return record
 
 
 def unwrapped_reply(text: str) -> str:
@@ -47,7 +50,7 @@ def unwrapped_reply(text: str) -> str:
     except ValueError:
         return text
     if isinstance(value, dict) and isinstance(value.get("text"), str) and len(value) > 1 \
-            and set(value) <= {"id", "sequence", "sender", "kind", "text"}:
+            and set(value) <= {"id", "sequence", "sender", "kind", "text", "reply_to"}:
         return value["text"]
     return text
 

@@ -66,8 +66,9 @@ class TopicForks:
                     (org, topic_id, source["sequence"]),
                 )
             )
+            copies = {}
             for row in rows:
-                copied = _id()
+                copied = copies[row["id"]] = _id()
                 model = row["assistant_model"] if row["sender_kind"] == "assistant" else None
                 bot = bot_source(db, row)
                 if bot:
@@ -80,7 +81,7 @@ class TopicForks:
                 # Direct retained inserts deliberately emit neither bot events nor new inference requests.
                 db.execute(
                     "INSERT INTO messages(id,organization_id,topic_id,author_id,content,client_id,created_at,sender_kind,"
-                    "assistant_model,author_kind) VALUES(?,?,?,?,?,?,?,?,?,?)",
+                    "assistant_model,author_kind,reply_to) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
                     (
                         copied,
                         org,
@@ -92,6 +93,7 @@ class TopicForks:
                         row["sender_kind"],
                         row["assistant_model"],
                         row["author_kind"],
+                        copies.get(row["reply_to"]),
                     ),
                 )
                 db.execute("INSERT INTO fork_message_sources VALUES(?,?,?,?,?)", (org, copied, row["id"], row["inference_run_id"], model))

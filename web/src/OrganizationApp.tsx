@@ -16,7 +16,7 @@ import { Brand } from "./Brand";
 import { ComputeConversation } from "./ComputeConversation";
 import { DirectConversation, DirectMessageMarks, DirectMessagePicker, NewDirectMessageButton, directPath, directUnread, directUnreadTotal, peopleInbox } from "./DirectMessages";
 import { KnowledgeLinks, KnowledgeView } from "./KnowledgeLinks";
-import { ReplyBar, ReplyPointer, ThreadDialog } from "./MessageReplies";
+import { ReplyBar, ReplyPointer, ThreadCount, ThreadDialog, threadReplyCounts } from "./MessageReplies";
 import { additionReceipt, modelName, moveBlocked, moveTarget, replyThreads, threadAnswering } from "./ReplyAdditions";
 import { MentionMirror, MentionSelf, MentionTag, chatTones, mentionFromHref, mentionInitials, speakerKey, speakerTone, toneClass } from "./mentions";
 import { LazyView } from "./LazyView";
@@ -1083,6 +1083,25 @@ function Conversation({ organizationId, topic, members, user, canWrite, canManag
     dispatchTopicCommand(topic.id, command);
     textarea.current?.focus();
   };
+  /**
+   * In a beta topic, a posted message asks the selected model for a reply, unless it mentions a bot. The answer replies
+   * to that message, so a reply to an earlier answer continues its thread.
+   */
+  const askModel = async (message: Message) => {
+    if (topic.kind !== "beta" || !selectedModel || topicBots.some((bot) => message.content.includes(`@[${bot.id}]`) || message.content.includes(`@[${bot.id}:`))) return;
+    const metadata = modelCatalog?.models.find((model) => model.id === selectedModel);
+    const modelRequest = automaticModelAttempt(selectedModel, message.sequence, metadata?.max_completion_tokens ?? 8192);
+    if (selectedEffort) modelRequest.effort = selectedEffort;
+    onModelAttempt(modelRequest);
+    try {
+      await requestModelReply(organizationId, topic.id, modelRequest, onModelAttempt);
+    } catch (cause) {
+      if (!alive.current) return;
+      if (cause instanceof ApiError && cause.status === 401) onAuthLost();
+      // An unconfirmed request is explained, with retry, in the conversation.
+      else if (definitiveRejection(cause)) setError(`Message sent, but ${errorMessage(cause).replace(/^./, (letter) => letter.toLowerCase())}`);
+    }
+  };
   const send = async (event?: React.FormEvent) => {
     event?.preventDefault();
     if (!canWrite || sending || !online || !draft.text.trim() || (topic.kind === "beta" && !!modelAttempt)) return;
@@ -1117,22 +1136,8 @@ function Conversation({ organizationId, topic, members, user, canWrite, canManag
       bottom.current = true; setAtBottom(true);
       if (addedTo) return;
       const control = topic.kind === "beta" ? agentCommand(attempt.text) : null;
-      if (control) {
-        await request(root + "/agents/control", { method: "POST", body: { status: control } });
-      } else if (topic.kind === "beta" && selectedModel && !topicBots.some((bot) => wireText.includes(`@[${bot.id}]`) || wireText.includes(`@[${bot.id}:`))) {
-        const metadata = modelCatalog?.models.find((model) => model.id === selectedModel);
-        const modelRequest = automaticModelAttempt(selectedModel, message.sequence, metadata?.max_completion_tokens ?? 8192);
-        if (selectedEffort) modelRequest.effort = selectedEffort;
-        onModelAttempt(modelRequest);
-        try {
-          await requestModelReply(organizationId, topic.id, modelRequest, onModelAttempt);
-        } catch (cause) {
-          if (!alive.current) return;
-          if (cause instanceof ApiError && cause.status === 401) onAuthLost();
-          // An unconfirmed request is explained, with retry, in the conversation.
-          else if (definitiveRejection(cause)) setError(`Message sent, but ${errorMessage(cause).replace(/^./, (letter) => letter.toLowerCase())}`);
-        }
-      }
+      if (control) await request(root + "/agents/control", { method: "POST", body: { status: control } });
+      else await askModel(message);
     } catch (cause) {
       if (!alive.current) return;
       if (cause instanceof ApiError && cause.status === 401) onAuthLost();
@@ -1193,6 +1198,7 @@ function Conversation({ organizationId, topic, members, user, canWrite, canManag
     || !workflowRuns.has("workflow:" + message.workflow_run_id));
   const groups = topic.kind === "alpha" ? alphaMessageGroups(visibleMessages) : visibleMessages.map(message => [message]);
   const byId = new Map(messages.map(message => [message.id, message]));
+  const replyCounts = threadReplyCounts(messages);
   const markUnread = (message: Message) => {
     holdRead.current = true; setUnreadFrom(message.sequence);
     void request(root + "/unread", { method: "PUT", body: { message_id: message.id } }).then(() => onPreference()).catch(cause => {
@@ -1223,6 +1229,7 @@ function Conversation({ organizationId, topic, members, user, canWrite, canManag
         <MessageMarkdown markdown={normalizeMathDelimiters(mentionMarkdown(message.content, mentionPeople))} />
         {!!message.files?.length && <ReplyFiles topicId={topic.id} files={message.files} />}
         {message.author_kind === "assistant" && <MessageUsageDetails usage={message.usage} />}
+        {!message.reply_to && !!replyCounts.get(message.id) && <ThreadCount count={replyCounts.get(message.id)!} onOpen={() => setThreadFor(message.id)} />}
         {addition && <p className={"org-addition-receipt" + (addition.read_at === null && additionThread?.active ? " org-addition-waiting" : "")}
           role="status"><span aria-hidden="true">↳</span>{additionReceipt(addition, additionThread?.root.model ?? "the model", Boolean(additionThread?.active))}
           {addition.read_at === null && additionThread?.active && message.author_id === user.id && canWrite && <button type="button"
@@ -1274,7 +1281,11 @@ function Conversation({ organizationId, topic, members, user, canWrite, canManag
       setTexOpen(false); setMention(null); requestAnimationFrame(() => textarea.current?.focus());
     }} />}
     {threadFor && <ThreadDialog key={threadFor} messagesPath={root + "/messages"} messageId={threadFor} canWrite={canWrite}
-      onClose={() => setThreadFor(null)} onAuthLost={onAuthLost} onPosted={message => setMessages(existing => mergeMessages(existing, [message]))}
+      onClose={() => setThreadFor(null)} onAuthLost={onAuthLost} onPosted={message => {
+        setMessages(existing => mergeMessages(existing, [message]));
+        // A reply written in the thread asks the model too, like one sent from the box.
+        if (!modelAttempt) void askModel(message);
+      }}
       renderMessage={message => <div className={"org-message-group org-speaker-" + (message.author_kind ?? "human") + " " + speakerTone(message, tones)}><article className="org-message">
         <header><strong>{authorLabel(message, members)}</strong>
           <time dateTime={new Date(message.created_at * 1000).toISOString()}>{new Date(message.created_at * 1000).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" })}</time></header>

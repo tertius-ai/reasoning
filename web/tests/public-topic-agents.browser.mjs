@@ -229,7 +229,8 @@ test("ordinary beta conversation delegates, streams roles and integrates without
     assert.equal(await final.locator(".chat-reaction-pill .chat-reaction-chip").getAttribute("title"), "Thumbs up: Owner");
     await page.getByRole("button", { name: "Choose reply model", exact: true }).click();
     await page.getByRole("radio", { name: "fixture/new", exact: true }).click();
-    const sourceId = await page.locator("article.org-message").filter({ hasText: "Please compare two approaches and consult a librarian and critic." }).getAttribute("id");
+    const sourceId = await page.locator("article.org-message").filter({ hasText: "Please compare two approaches and consult a librarian and critic.",
+      hasNot: page.locator(".org-reply-pointer") }).getAttribute("id");
     const source = page.locator("#" + sourceId);
     await source.hover(); await source.getByLabel("Message actions", { exact: true }).click();
     await page.getByRole("menuitem", { name: "Edit message", exact: true }).click();
@@ -241,7 +242,8 @@ test("ordinary beta conversation delegates, streams roles and integrates without
     await page.getByRole("menuitem", { name: "Version history", exact: true }).click();
     await source.getByLabel("Message version history").getByText("Please compare two approaches and consult a librarian and critic.", { exact: true }).waitFor();
     await source.getByRole("button", { name: "Close history", exact: true }).click();
-    const revisedSource = page.locator("article.org-message").filter({ hasText: "Corrected prompt: compare the approaches." });
+    const revisedSource = page.locator("article.org-message").filter({ hasText: "Corrected prompt: compare the approaches.",
+      hasNot: page.locator(".org-reply-pointer") });
     await revisedSource.evaluate(node => node.scrollIntoView({ block: "center", inline: "nearest" }));
     await revisedSource.hover();
     assert.equal(await revisedSource.getByLabel("Message actions", { exact: true }).evaluate(button => {
@@ -381,7 +383,8 @@ test("ordinary beta conversation delegates, streams roles and integrates without
     assert.equal(await page.locator(".org-transport-controls").count(), 1, "one transport pair covers workflow and standalone bot activity");
     assert.equal(calls.length, 6, "bot stop and local synthetic receipts must not create OpenRouter requests");
     await page.goto(url + `/organization.html?organization=${session.organization_id}&topic=${topic.id}`);
-    const corrected = page.locator("article.org-message").filter({ hasText: "Corrected prompt: compare the approaches." });
+    const corrected = page.locator("article.org-message").filter({ hasText: "Corrected prompt: compare the approaches.",
+      hasNot: page.locator(".org-reply-pointer") });
     await corrected.hover(); await corrected.getByLabel("Message actions", { exact: true }).click();
     await page.getByRole("menuitem", { name: "Reply again with selected model", exact: true }).click();
     await until(() => calls.length === 7);

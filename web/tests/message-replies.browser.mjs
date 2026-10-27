@@ -68,6 +68,10 @@ test("a reply points to its message, and the pointer opens the whole thread over
     assert.match(await pointer.innerText(), /Bob\s+Can you check the bound in Lemma 3\.2 before we post the draft\?/);
     assert.equal(await article(question.id).locator(".org-reply-pointer").count(), 0);
     assert.equal(await article(answer.id).evaluate(element => element.matches(".org-message-group > .org-message:first-child")), true);
+    // The thread's first message counts its replies; other messages show no count.
+    const count = article(question.id).locator(".org-thread-count");
+    assert.equal(await count.textContent(), "↩1 reply");
+    assert.equal(await page.locator(".org-thread-count").count(), 1);
 
     // Reply starts a reply in the composer; Escape cancels it, and a sent reply carries its target.
     const composer = page.getByLabel("Message", { exact: true });
@@ -87,6 +91,7 @@ test("a reply points to its message, and the pointer opens the whole thread over
     assert.equal(sent.content, "I will check it tonight."); assert.equal(sent.reply_to, question.id);
     const mine = messages.at(-1);
     assert.match(await article(mine.id).locator(".org-reply-pointer").innerText(), /Bob\s+Can you check/);
+    await count.filter({ hasText: /^↩2 replies$/ }).waitFor();
 
     // The pointer opens the whole thread: the root and every reply, in order, over a dimmed conversation.
     await pointer.click();
@@ -104,6 +109,13 @@ test("a reply points to its message, and the pointer opens the whole thread over
     await dialog.getByText("4 messages", { exact: true }).waitFor();
     assert.equal(posts.at(-1).reply_to, question.id);
     await article(messages.at(-1).id).waitFor();
+    await page.keyboard.press("Escape");
+    await dialog.waitFor({ state: "detached" });
+    await count.filter({ hasText: /^↩3 replies$/ }).waitFor();
+    // The count opens the same thread.
+    await count.click();
+    await dialog.getByText("4 messages", { exact: true }).waitFor();
+    assert.equal(threads.at(-1), question.id);
     await page.keyboard.press("Escape");
     await dialog.waitFor({ state: "detached" });
 

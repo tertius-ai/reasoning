@@ -32,6 +32,13 @@ Choose the initial model and knowledge access when creating a beta topic.
 Sending a human message captures context through that committed message and
 requests the model selected beside Send.
 
+The answer is a reply to that message in the topic's threads. It shows a pointer
+to the message it answers, and the thread's first message shows its reply count,
+which opens the whole thread. Replying to an answer with ↩, or writing in the
+Thread view, asks the model a follow-up. That follow-up's answer replies to it,
+so the thread reads question, answer, follow-up, answer. Source messages given to
+the model carry `reply_to` when they reply to an earlier message.
+
 A later message can join a reply that is still running instead of starting
 its own. A running reply's card shows a thread line (**Add to this reply**, or
 the count of added messages read and waiting); clicking it, or ↩ on the question
