@@ -39,3 +39,9 @@
 .org-thread-working > header strong { font-weight: 600; overflow-wrap: anywhere; }
 .org-thread-working > header small { color: var(--muted); font-size: 11px; white-space: nowrap; }
 .org-thread-working > p { display: flex; align-items: center; gap: 8px; margin: 5px 0 0; color: color-mix(in srgb, var(--blue) 80%, var(--foreground)); }
+.org-thread-working > .org-reply-timeline { margin: 4px 0 0; }
+/* "+ Add" in muted text beside Stop; it takes the header's free space so both sit at the right. */
+.org-app .org-card-add { min-height: 22px; margin-left: auto; padding: 0 6px; border: 0; background: none; color: var(--muted); font-size: 11px; }
+.org-app .org-card-add:hover { background: none; color: var(--foreground); }
+.org-app .org-card-add[aria-pressed="true"] { color: color-mix(in srgb, var(--blue) 80%, var(--foreground)); }
+.org-app .org-thread-working > header > .org-card-add + .org-card-stop { margin-left: 0; }

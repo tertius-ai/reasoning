@@ -64,7 +64,13 @@ test("a model's answer replies to its prompt, a reply to the answer asks a follo
       else if (path.endsWith(`/media/${media}/finish`)) data = { id: media, name: "k3.png", mime: "image/png", sha256: sha, size_bytes: png.length,
         url: picture, markdown: `![k3.png](${picture})` };
       else if (path.endsWith("/messages") && request.method() === "POST") {
-        posts.push(body); data = message(user, body.content, body.reply_to ?? null, { client_id: body.client_id }); messages.push(data); status = 201;
+        posts.push(body); data = message(user, body.content, body.reply_to ?? null, { client_id: body.client_id }); status = 201;
+        if (body.adds_to) {
+          data.addition = { message_id: data.id, run_id: body.adds_to, added_by: user, moved: false, cancelled_runs: [],
+            created_at: data.created_at, read_at: null, read_step: null, content: body.content };
+          runs = runs.map(run => run.id === body.adds_to ? { ...run, additions: [...run.additions, data.addition] } : run);
+        }
+        messages.push(data);
       } else if (path.endsWith("/messages")) data = messages;
       else if (path.endsWith("/message-updates")) data = { after: 0, messages: [] };
       else if (path.includes("/reactions/")) data = { counts: { up: 0, down: 0, upside_down: 0 }, mine: [] };
@@ -135,6 +141,34 @@ test("a model's answer replies to its prompt, a reply to the answer asks a follo
     await working.waitFor({ timeout: 15000 });
     assert.match(await working.getByRole("status", { name: "Reply progress" }).innerText(), /searched arXiv for “K3 regulator”…$/);
     assert.match(await working.locator("header").innerText(), /fixture\/reasoner\s+working/);
+
+    // "+ Add" beside Stop puts the thread's box into adding mode; the next message joins the running reply and waits in its card.
+    const line = working.getByRole("button", { name: "Add to this reply", exact: true });
+    assert.equal(await line.innerText(), "+ Add");
+    const [addBox, stopBox, headerBox] = await Promise.all([line.boundingBox(),
+      working.getByRole("button", { name: "Stop this reply", exact: true }).boundingBox(), working.locator("header").boundingBox()]);
+    assert.ok(addBox.x + addBox.width <= stopBox.x && Math.abs(stopBox.x + stopBox.width - (headerBox.x + headerBox.width)) < 1,
+      "+ Add sits just left of Stop at the header's right edge");
+    await line.click();
+    const addingBar = dialog.locator(".org-thread-adding-bar");
+    assert.match(await addingBar.innerText(), /Adding to reasoner's reply/);
+    assert.equal(await reply.getAttribute("placeholder"), "Add to reasoner's reply…");
+    const pressed = working.getByRole("button", { name: "Adding to this reply", exact: true });
+    assert.equal(await pressed.getAttribute("aria-pressed"), "true");
+    assert.equal(await pressed.innerText(), "Adding…");
+    await reply.press("Escape");
+    await addingBar.waitFor({ state: "detached" });
+    assert.equal(await dialog.isVisible(), true, "Escape leaves adding mode before it closes the thread");
+    await line.click();
+    await reply.fill("Skip French-language sources.");
+    await reply.press("Enter");
+    await addingBar.waitFor({ state: "detached" });
+    assert.deepEqual({ adds_to: posts.at(-1).adds_to, reply_to: posts.at(-1).reply_to }, { adds_to: "run-k3", reply_to: undefined });
+    const waitingLine = working.getByLabel("Messages waiting for this reply", { exact: true }).locator("li");
+    await waitingLine.filter({ hasText: "Skip French-language sources." }).waitFor({ timeout: 15000 });
+    assert.match(await waitingLine.innerText(), /^You · Skip French-language sources\.\s*at step \d+\s*Undo$/);
+    assert.equal(asked.length, 2, "an addition asks for no reply of its own");
+    await dialog.getByText("4 messages", { exact: true }).waitFor();
     await working.getByRole("button", { name: "Stop this reply", exact: true }).click();
     for (let wait = 0; wait < 50 && !cancels.length; wait++) await page.waitForTimeout(100);
     assert.deepEqual(cancels, ["run-k3"], "Stop cancels the reply");

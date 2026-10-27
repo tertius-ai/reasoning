@@ -836,6 +836,9 @@ function Conversation({ organizationId, topic, members, user, canWrite, canManag
   const threads = useMemo(() => replyThreads(betaRuns), [betaRuns]);
   // The beta conversation's Stop for a reply, so the Thread view stops replies the same way its cards do.
   const stopReply = useRef<((rootRun: string) => Promise<void>) | undefined>(undefined);
+  // The running reply, by its root run, that the Thread view's box adds to; it ends with the reply.
+  const [threadAdding, setThreadAdding] = useState<string>();
+  const threadAddTo = threadAdding ? threads.find(thread => thread.root.id === threadAdding && thread.active) : undefined;
   const startAdding = useRef((_root: string) => {});
   startAdding.current = (rootRun: string) => {
     updateDraft({ ...currentDraft.current, addTo: rootRun, replyTo: undefined, clientId: crypto.randomUUID(), attempted: false });
@@ -1323,17 +1326,22 @@ function Conversation({ organizationId, topic, members, user, canWrite, canManag
       setTexOpen(false); setMention(null); requestAnimationFrame(() => textarea.current?.focus());
     }} />}
     {threadFor && <ThreadDialog key={threadFor} messagesPath={root + "/messages"} messageId={threadFor} canWrite={canWrite}
-      onClose={() => setThreadFor(null)} onAuthLost={onAuthLost} onPosted={message => {
+      onClose={() => { setThreadFor(null); setThreadAdding(undefined); }} onAuthLost={onAuthLost} onPosted={message => {
         setMessages(existing => mergeMessages(existing, [message]));
-        // A reply written in the thread asks the model too, like one sent from the box.
-        if (!modelAttempt) void askModel(message);
+        // A reply written in the thread asks the model too, like one sent from the box; an addition joins a running one.
+        if (!modelAttempt && !message.addition) void askModel(message);
       }}
+      addTo={threadAddTo && { id: threadAddTo.root.id, label: modelName(threadAddTo.root.model) }} onStopAdding={() => setThreadAdding(undefined)}
       live={messages} attach={canWrite ? file => uploadMedia(file, organizationId, topic.id) : undefined}
       working={shown => topic.kind === "beta" && shown.map(message => {
         // A reply at work on a message of the thread shows trimmed here; its answer joins the thread when it arrives.
         const answering = threadAnswering(threads, message.sequence);
-        return answering && !pausedRun(answering.root) && <WorkingCard key={answering.root.id} run={answering.root}
-          onStop={online && (canManage || answering.root.requested_by === user.id) ? () => void stopReply.current?.(answering.root.id) : undefined} />;
+        if (!answering || pausedRun(answering.root)) return null;
+        const id = answering.root.id;
+        return <WorkingCard key={id} run={answering.root} additions={answering.additions} userId={user.id} names={memberNames}
+          onUndo={undoFromReply} adding={threadAdding === id}
+          onAdd={canWrite ? () => setThreadAdding(current => current === id ? undefined : id) : undefined}
+          onStop={online && (canManage || answering.root.requested_by === user.id) ? () => void stopReply.current?.(id) : undefined} />;
       })}
       renderMessage={message => <div className={"org-message-group org-speaker-" + (message.author_kind ?? "human") + " " + speakerTone(message, tones)}><article className="org-message">
         <header><strong>{authorLabel(message, members)}</strong>

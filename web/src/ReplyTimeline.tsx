@@ -47,30 +47,50 @@ export function ReplyTimeline({ activity, additions, active, userId, names = {},
     ? <li key={entry.key} className="org-timeline-step" data-current={entry.current || undefined}
       role={entry.current ? "status" : undefined} aria-label={entry.current ? "Research progress" : undefined}>
       <Icon name={entry.icon} current={entry.current} /><span>{entry.label}{entry.current ? "…" : ""}</span></li>
-    : <li key={entry.key} className="org-timeline-addition" data-waiting={entry.waiting || undefined}>
-      <Icon name={entry.waiting ? "waiting" : "added"} />
-      <span className="org-timeline-quote"><strong>{entry.addition.added_by === userId ? "You" : names[entry.addition.added_by] ?? "Added"}</strong>
-        {" · "}<q>{entry.addition.content ?? "an added message"}</q></span>
-      <span className="org-timeline-chip">{entry.waiting ? `at step ${entry.nextStep}`
-        : entry.addition.read_step ? `read at step ${entry.addition.read_step}` : "read"}</span>
-      {entry.waiting && onUndo && entry.addition.added_by === userId
-        && <button type="button" onClick={() => onUndo(entry.addition)}>Undo</button>}
-    </li>)}</ol>;
+    : <AdditionLine key={entry.key} entry={entry} userId={userId} names={names} onUndo={onUndo} />)}</ol>;
+}
+
+/** A later message in a reply's timeline: who added it, a quote, and when the reply reads or read it; Undo while it waits. */
+function AdditionLine({ entry, userId, names, onUndo }: { entry: Extract<TimelineEntry, { kind: "addition" }>; userId: string;
+  names: Record<string, string>; onUndo?: (addition: ReplyAddition) => void }) {
+  return <li className="org-timeline-addition" data-waiting={entry.waiting || undefined}>
+    <Icon name={entry.waiting ? "waiting" : "added"} />
+    <span className="org-timeline-quote"><strong>{entry.addition.added_by === userId ? "You" : names[entry.addition.added_by] ?? "Added"}</strong>
+      {" · "}<q>{entry.addition.content ?? "an added message"}</q></span>
+    <span className="org-timeline-chip">{entry.waiting ? `at step ${entry.nextStep}`
+      : entry.addition.read_step ? `read at step ${entry.addition.read_step}` : "read"}</span>
+    {entry.waiting && onUndo && entry.addition.added_by === userId
+      && <button type="button" onClick={() => onUndo(entry.addition)}>Undo</button>}
+  </li>;
 }
 
 /**
- * A reply at work, trimmed for the Thread view: who answers, for how long, Stop, and the one step it is on. The finished
+ * A reply at work, trimmed for the Thread view: who answers, for how long, Stop, the one step it is on, and the later
+ * messages waiting for its next step. "+ Add" beside Stop puts the Thread view's box into adding mode. The finished
  * answer takes its place.
  */
-export function WorkingCard({ run, onStop, stopping }: { run: ModelRun; onStop?: () => void; stopping?: boolean }) {
-  const step = replyTimeline(run.activity ?? [], [], true).filter(entry => entry.kind === "step").at(-1);
+export function WorkingCard({ run, onStop, stopping, additions = [], userId, names = {}, onUndo, adding, onAdd }: {
+  run: ModelRun; onStop?: () => void; stopping?: boolean;
+  additions?: ReplyAddition[]; userId: string; names?: Record<string, string>; onUndo?: (addition: ReplyAddition) => void;
+  /** Whether the Thread view's box adds to this reply; `onAdd` turns that on or off. */
+  adding?: boolean; onAdd?: () => void;
+}) {
+  const entries = replyTimeline(run.activity ?? [], additions, true);
+  const step = entries.filter(entry => entry.kind === "step").at(-1);
+  const waiting = entries.flatMap(entry => entry.kind === "addition" && entry.waiting ? [entry] : []);
   const elapsed = run.status === "running" ? workingFor(run) : null;
   return <div className="org-thread-working" data-run-id={run.id}>
     <header><strong>{run.agent ? `${run.agent.role.replaceAll("_", " ")} · ` : ""}{run.model}</strong>
       <small>{run.cancel_requested ? "stopping…" : run.status === "queued" ? "queued" : "working" + (elapsed ? ` · ${elapsed}` : "")}</small>
+      {onAdd && <button type="button" className="org-card-add" aria-pressed={!!adding}
+        aria-label={adding ? "Adding to this reply" : "Add to this reply"}
+        title={adding ? "Your next message joins this reply; click to send a new question instead" : "Add your next message to this reply"}
+        onClick={onAdd}>{adding ? "Adding…" : "+ Add"}</button>}
       {onStop && !run.cancel_requested && <CardStop label="Stop this reply" disabled={stopping} onStop={onStop} />}</header>
     <p role="status" aria-label="Reply progress">{step?.kind === "step"
       ? <><Icon name={step.icon} current={step.current} /><span>{step.label}{step.current ? "…" : ""}</span></>
       : <span>Starting…</span>}</p>
+    {waiting.length > 0 && <ol className="org-reply-timeline" aria-label="Messages waiting for this reply">
+      {waiting.map(entry => <AdditionLine key={entry.key} entry={entry} userId={userId} names={names} onUndo={onUndo} />)}</ol>}
   </div>;
 }

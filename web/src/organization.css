@@ -582,10 +582,16 @@ a.org-reference:hover, a.org-reference:focus-visible { text-decoration: underlin
 .org-thread-dialog > header small { color: var(--muted); font-size: 11px; }
 .org-app .org-thread-dialog > header button, .org-thread-dialog > header button { width: 24px; min-height: 24px; margin-left: auto; padding: 0; }
 .org-thread-messages { flex: 1; min-height: 0; overflow-y: auto; }
-.org-thread-composer { display: flex; flex-direction: column; gap: 0; padding: 4px; border: 1px solid var(--border-strong); border-radius: var(--radius-composer); }
+.org-thread-composer { display: flex; flex: none; flex-direction: column; gap: 0; padding: 4px; border: 1px solid var(--border-strong); border-radius: var(--radius-composer); }
 /* Alpha's square plus at the left, the text, and the return square at the right; chosen files wait as chips above. */
 .org-thread-composer-row { display: flex; align-items: flex-end; gap: 6px; }
 .org-thread-composer > .direct-pending { margin: 2px 2px 6px; }
+/* Adding to a running reply from the Thread view: the main box's tinted bar and blue border. */
+.org-thread-composer.org-thread-composer-adding { padding-top: 0; overflow: hidden; border-color: var(--blue); }
+.org-thread-adding-bar { display: flex; align-items: center; gap: 8px; margin: 0 -4px 6px; padding: 5px 8px 5px 12px;
+  background: color-mix(in srgb, var(--blue) 14%, transparent); color: color-mix(in srgb, var(--blue) 80%, var(--foreground)); font-size: 12px; }
+.org-thread-adding-bar > span:nth-child(2) { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.org-app .org-thread-adding-bar button { width: 22px; min-height: 22px; padding: 0; border-color: transparent; background: transparent; color: inherit; }
 .org-thread-composer:focus-within { border-color: var(--blue); }
 .org-thread-composer textarea { flex: 1; min-height: 28px; padding: 4px 2px; border: none; background: transparent; color: var(--foreground); resize: none; font: 13px/1.5 var(--font-sans); }
 .org-thread-composer textarea:focus { outline: none; }
