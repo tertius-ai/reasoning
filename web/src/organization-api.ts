@@ -313,6 +313,9 @@ export function authorLabel(message: Message, members: Member[]): string {
   if (message.author_kind === "bot") return "Bot · " + (message.bot_name ?? "Bot");
   return members.find((member) => member.id === message.author_id)?.name ?? "Departed member";
 }
+/** Whether you wrote a message yourself: a model or bot reply you asked for is not yours. */
+export const isOwnMessage = (message: Pick<Message, "author_id" | "author_kind">, userId: string) =>
+  (message.author_kind ?? "human") === "human" && message.author_id === userId;
 export const aborted = (error: unknown) => error instanceof Error && error.name === "AbortError";
 
 /**

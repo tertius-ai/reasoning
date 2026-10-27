@@ -93,6 +93,22 @@ test("a reply points to its message, and the pointer opens the whole thread over
     assert.match(await article(mine.id).locator(".org-reply-pointer").innerText(), /Bob\s+Can you check/);
     await count.filter({ hasText: /^↩2 replies$/ }).waitFor();
 
+    // Your own messages say "You" and hug the right edge with left-aligned text; everyone else's stay on the left.
+    const layout = id => article(id).evaluate(element => {
+      const group = element.closest(".org-message-group"), transcript = element.closest(".org-transcript");
+      const box = element.getBoundingClientRect(), area = transcript.getBoundingClientRect(), style = getComputedStyle(transcript);
+      return { mine: group.classList.contains("org-message-group-mine"), name: group.querySelector("header strong")?.textContent,
+        align: getComputedStyle(element.querySelector("p")).textAlign, width: box.width,
+        left: box.left - area.left - parseFloat(style.paddingLeft), right: area.right - parseFloat(style.paddingRight) - box.right };
+    });
+    const own = await layout(mine.id), theirs = await layout(answer.id);
+    assert.equal(own.mine, true); assert.equal(own.name, "You"); assert.equal(own.align, "start");
+    assert.ok(own.right < 1 && own.left > 100, `your message hugs the right edge: ${JSON.stringify(own)}`);
+    assert.equal(theirs.mine, false); assert.equal(theirs.name, "Carol Chen");
+    assert.ok(theirs.left < 1 && theirs.right < 1, `their message spans the column: ${JSON.stringify(theirs)}`);
+    assert.ok(own.width < theirs.width / 2, "a short message of yours is as wide as its text");
+    assert.match(await article(aside.id).locator("header strong").innerText(), /^You$/);
+
     // The pointer opens the whole thread: the root and every reply, in order, over a dimmed conversation.
     await pointer.click();
     const dialog = page.getByRole("dialog", { name: "Thread", exact: true });
@@ -100,14 +116,20 @@ test("a reply points to its message, and the pointer opens the whole thread over
     assert.equal(threads.at(-1), answer.id);
     await dialog.getByText("3 messages", { exact: true }).waitFor();
     const order = await dialog.locator("article.org-message").evaluateAll(items => items.map(item => item.innerText));
-    assert.deepEqual(order.map(text => text.split("\n")[0]), ["Bob Brown", "Carol Chen", "Alice Adams"]);
+    assert.deepEqual(order.map(text => text.split("\n")[0]), ["Bob Brown", "Carol Chen", "You"]);
     assert.ok(!order.some(text => text.includes("seminar")), "an unrelated message is not part of the thread");
+    assert.deepEqual(await dialog.locator(".org-message-group").evaluateAll(groups => groups.map(group => group.classList.contains("org-message-group-mine"))),
+      [false, false, true], "your reply sits on the right in the thread too");
 
     // Replying in the thread answers its root and shows the new reply in the thread and the conversation.
     await dialog.getByLabel("Reply in thread", { exact: true }).fill("Agreed, 2 it is.");
     await dialog.getByLabel("Reply in thread", { exact: true }).press("Enter");
     await dialog.getByText("4 messages", { exact: true }).waitFor();
     assert.equal(posts.at(-1).reply_to, question.id);
+    // Your two replies a minute apart form one run under one "You", as in a direct conversation.
+    const runs = await dialog.locator(".org-message-group").evaluateAll(groups => groups.map(group =>
+      [...group.querySelectorAll("article")].map(item => item.classList.contains("org-message-continuation") ? "+" : item.querySelector("header strong").textContent)));
+    assert.deepEqual(runs, [["Bob Brown"], ["Carol Chen"], ["You", "+"]]);
     await article(messages.at(-1).id).waitFor();
     await page.keyboard.press("Escape");
     await dialog.waitFor({ state: "detached" });

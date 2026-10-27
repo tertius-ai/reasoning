@@ -17,7 +17,7 @@ import { Brand } from "./Brand";
 import { ComputeConversation } from "./ComputeConversation";
 import { DirectConversation, DirectMessageMarks, DirectMessagePicker, NewDirectMessageButton, directPath, directUnread, directUnreadTotal, peopleInbox } from "./DirectMessages";
 import { KnowledgeLinks, KnowledgeView } from "./KnowledgeLinks";
-import { ReplyBar, ReplyPointer, ThreadCount, ThreadDialog, threadReplyCounts } from "./MessageReplies";
+import { ReplyBar, ReplyPointer, ThreadCount, ThreadDialog, continuesRun, threadReplyCounts } from "./MessageReplies";
 import { additionReceipt, modelName, moveBlocked, moveTarget, replyThreads, shownInReply, stepCount, threadAnswering } from "./ReplyAdditions";
 import { MentionMirror, MentionSelf, MentionTag, chatTones, mentionFromHref, mentionInitials, speakerKey, speakerTone, toneClass } from "./mentions";
 import { LazyView } from "./LazyView";
@@ -51,7 +51,7 @@ import { ReferenceCandidate, ReferenceContext, ReferenceLink, ReferenceResolver,
 import {
   Account, ApiError, Channel, EMPTY_HIERARCHY, Hierarchy, InferenceConfiguration, Invitation, InvitationMail, KeyMetadata, KIND_LABEL, KIND_SYMBOL, KnowledgeTool,
   BotModel, Member, MentionQuery, Message, ModelAttempt, ModelRun, Organization, ReplyAddition, OrganizationPrices, Presence, Project, ProjectMember, SearchResult, Session, Topic, TopicKind, aborted,
-  authorLabel, decimalBudget, errorMessage, invitationEmailLabel, mentionMarkdown, mentionQuery, mentionText, mergeMessages, modelCatalog as sharedModelCatalog, organizationPath, readTopicSnapshot, rememberTopicSnapshot, request, sharedRequest, topicPath, PendingModelAttempt,
+  authorLabel, decimalBudget, errorMessage, invitationEmailLabel, isOwnMessage, mentionMarkdown, mentionQuery, mentionText, mergeMessages, modelCatalog as sharedModelCatalog, organizationPath, readTopicSnapshot, rememberTopicSnapshot, request, sharedRequest, topicPath, PendingModelAttempt,
 } from "./organization-api";
 
 // Views opened by deliberate navigation load on first use.
@@ -119,10 +119,8 @@ export function alphaMessageGroups(messages: Message[]): Message[][] {
   const groups: Message[][] = [];
   for (const message of messages) {
     const last = groups.at(-1)?.at(-1);
-    const sameDay = last && new Date(last.created_at * 1000).toDateString() === new Date(message.created_at * 1000).toDateString();
     // A reply starts its own group, so its pointer sits above the speaker's name.
-    if (last && last.author_id === message.author_id && last.author_kind === message.author_kind && !message.reply_to
-      && message.author_kind !== "assistant" && message.created_at >= last.created_at && message.created_at - last.created_at <= 300 && sameDay) groups.at(-1)!.push(message);
+    if (last && !message.reply_to && continuesRun(last, message)) groups.at(-1)!.push(message);
     else groups.push([message]);
   }
   return groups;
@@ -1252,6 +1250,7 @@ function Conversation({ organizationId, topic, members, user, canWrite, canManag
   const groups = topic.kind === "alpha" ? alphaMessageGroups(visibleMessages) : visibleMessages.map(message => [message]);
   const byId = new Map(messages.map(message => [message.id, message]));
   const replyCounts = threadReplyCounts(messages);
+  const speaker = (message: Message) => isOwnMessage(message, user.id) ? "You" : authorLabel(message, members);
   const markUnread = (message: Message) => {
     holdRead.current = true; setUnreadFrom(message.sequence);
     void request(root + "/unread", { method: "PUT", body: { message_id: message.id } }).then(() => onPreference()).catch(cause => {
@@ -1263,7 +1262,8 @@ function Conversation({ organizationId, topic, members, user, canWrite, canManag
       id: "message:" + group[0].id, created_at: group[0].created_at, sequence: group[0].sequence, body: <>
       {topic.kind === "alpha" && (groupIndex === 0 || new Date(groups[groupIndex - 1][0].created_at * 1000).toDateString() !== new Date(group[0].created_at * 1000).toDateString())
         && <div className="org-message-day"><time dateTime={new Date(group[0].created_at * 1000).toISOString().slice(0, 10)}>{new Date(group[0].created_at * 1000).toLocaleDateString(undefined, { weekday: "long", month: "short", day: "numeric", year: "numeric" })}</time></div>}
-      <div className={"org-message-group org-speaker-" + (group[0].author_kind ?? "human") + " " + speakerTone(group[0], tones)}>{group.map((message, index) => {
+      <div className={"org-message-group org-speaker-" + (group[0].author_kind ?? "human") + " " + speakerTone(group[0], tones)
+        + (isOwnMessage(group[0], user.id) ? " org-message-group-mine" : "")}>{group.map((message, index) => {
         const { threads } = runsNow.current;
         const answering = topic.kind === "beta" && canWrite ? threadAnswering(threads, message.sequence) : undefined;
         const addition = topic.kind === "beta" ? threads.flatMap(thread => thread.additions).find(item => item.message_id === message.id)
@@ -1276,8 +1276,8 @@ function Conversation({ organizationId, topic, members, user, canWrite, canManag
         key={message.id} id={"message-" + message.sequence} data-sequence={message.sequence} data-message-id={message.id}
         tabIndex={message.id === focus ? -1 : undefined} aria-current={message.id === highlighted ? "location" : undefined}>
         {message.reply_to && <ReplyPointer original={byId.get(message.reply_to)} onOpen={() => setThreadFor(message.id)}
-          label={byId.get(message.reply_to) && authorLabel(byId.get(message.reply_to)!, members)} />}
-        <header>{!index && <strong>{authorLabel(message, members)}</strong>}
+          label={byId.get(message.reply_to) && speaker(byId.get(message.reply_to)!)} />}
+        <header>{!index && <strong>{speaker(message)}</strong>}
           <time dateTime={new Date(message.created_at * 1000).toISOString()} title={new Date(message.created_at * 1000).toLocaleString()}>{topic.kind === "alpha" ? new Date(message.created_at * 1000).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" }) : new Date(message.created_at * 1000).toLocaleString()}</time></header>
         <MessageMarkdown markdown={normalizeMathDelimiters(mentionMarkdown(message.content, mentionPeople))} />
         {!!message.files?.length && <ReplyFiles topicId={topic.id} files={message.files} />}
@@ -1351,11 +1351,14 @@ function Conversation({ organizationId, topic, members, user, canWrite, canManag
           onAdd={canWrite ? () => setThreadAdding(current => current === id ? undefined : id) : undefined}
           onStop={online && (canManage || answering.root.requested_by === user.id) ? () => void stopReply.current?.(id) : undefined} />;
       })}
-      renderMessage={message => <div className={"org-message-group org-speaker-" + (message.author_kind ?? "human") + " " + speakerTone(message, tones)}><article className="org-message">
-        <header><strong>{authorLabel(message, members)}</strong>
-          <time dateTime={new Date(message.created_at * 1000).toISOString()}>{new Date(message.created_at * 1000).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" })}</time></header>
+      renderGroup={group => <div className={"org-message-group org-speaker-" + (group[0].author_kind ?? "human") + " " + speakerTone(group[0], tones)
+        + (isOwnMessage(group[0], user.id) ? " org-message-group-mine" : "")}>{group.map((message, index) =>
+        <article key={message.id} className={"org-message" + (index ? " org-message-continuation" : "")}>
+        <header>{!index && <strong>{isOwnMessage(message, user.id) ? "You" : authorLabel(message, members)}</strong>}
+          <time dateTime={new Date(message.created_at * 1000).toISOString()}>{index ? new Date(message.created_at * 1000).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" })
+            : new Date(message.created_at * 1000).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" })}</time></header>
         <MessageMarkdown markdown={normalizeMathDelimiters(mentionMarkdown(message.content, mentionPeople))} />
-        <ReplyFooter message={message} userId={user.id} names={memberNames} /></article></div>} />}
+        <ReplyFooter message={message} userId={user.id} names={memberNames} /></article>)}</div>} />}
     {topic.kind === "beta" && <ForkOrigin organizationId={organizationId} topicId={topic.id} />}
     {focusMissing && <p role="status" className="org-link-notice">The linked message is unavailable. It may have been removed, or you may not have access to it.
       <button type="button" aria-label="Dismiss notice" onClick={() => setFocusMissing(false)}>×</button></p>}
