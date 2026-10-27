@@ -482,6 +482,14 @@ connection. Provider input is bounded to 64 MiB per stream,
 2 MiB per event/line, and 2,000,000 accumulated output characters.
 The provider stream is the single writer of cumulative visible output, including
 progress accompanying tool calls. Final-answer events do not replace that prefix.
+Stream failures, disconnects, cancellations and missing terminal frames flush
+received visible text within the output bound. Failed streams also retain a
+`provider_partial_response` event containing parsed answer text, reasoning and
+tool-call fragments, generation identity and validated usage when received.
+This incomplete exchange is private diagnostic evidence, not a replayable
+session or an executed tool call. Full topic traces preserve it; summaries
+report character counts and mark the exchange as partial. Invalid Unicode fields
+are omitted; the valid visible-text prefix remains available.
 Unexpected execution errors have the `agent_execution_error` classification and
 a safe exception category, not raw exception text or a misleading context failure.
 Model text must contain valid Unicode scalar values; unpaired JSON surrogate
@@ -549,8 +557,10 @@ or upstream failure (5xx) may follow provider work and stays uncertain. On a
 route whose listed prices are all zero, a call without usage still has a known
 cost of zero and is released. Earlier successful calls in the same turn retain
 their actual charges. An error inside an accepted stream, including 402,
-without trustworthy usage retains its reservation as uncertain. The executor
-performs no automatic paid retries.
+without trustworthy usage retains its reservation as uncertain. Validated usage
+and generation IDs in an error event are retained before the error is raised;
+accounting can settle while execution remains failed. The executor performs no
+automatic paid retries.
 
 Without an explicit output ceiling, a call can exceed its output/cost estimate.
 Known usage is settled in full even when it exceeds the reservation; budgets
@@ -562,7 +572,12 @@ the upstream inference cost; see [OpenRouter usage accounting](https://openroute
 
 Provider refusals expose a status-derived category, HTTP status, and action:
 authentication, credit, permissions, request size, unsupported parameters, rate
-limits, or provider availability. Credit refusals can also include allowlisted
+limits, or provider availability. The diagnostic `phase` distinguishes an HTTP
+refusal (`http`) from an error inside an accepted stream (`stream`). A stream
+error's `http_status` is the provider's error code, not the HTTP response status;
+chat and workflow cards label it **Stream error**. Retained partial chat messages
+include the same static explanation and next action as their run card.
+Credit refusals can also include allowlisted
 `limit_source` and `reason` enums distinguishing key limits, balance/oversized
 request estimates, and temporary concurrent spending limits. These follow
 [OpenRouter's credit-limit contract](https://openrouter.ai/docs/api_reference/limits).
@@ -577,6 +592,20 @@ Raw upstream messages, error bodies, prompts, headers, and credentials are
 excluded. A displayed held reservation is explicitly labeled
 **Budget held**, separate from the provider's actual charge. Status guidance
 does not establish whether an ambiguous submission incurred a bill.
+
+To investigate a failed or partial answer, export its topic JSON and inspect all
+calls belonging to the run in **Usage and energy → Inference ledger**. Compare
+each generation ID, reported input/output/reasoning tokens, actual cost and held
+reservation with OpenRouter activity. A final refusal does not refund earlier
+calls, and a large token count does not establish that a visible answer was
+generated. Full traces retain received reasoning separately from the answer;
+content never received or retained cannot be reconstructed from accounting.
+Check the organization's credential in OpenRouter's key/credit settings for
+current spending and quota limits. The read-only
+[`GET /key`](https://openrouter.ai/docs/api/api-reference/api-keys/get-current-key) endpoint
+reports key limits and usage; a current snapshot does not prove the balance or
+limit at the incident time. Keep these records private and verify any proposed
+charge adjustment against individual provider records before changing accounting.
 
 The inference worker settles uncertain calls automatically from the
 provider's own record. For each stopped run whose call is uncertain and has an

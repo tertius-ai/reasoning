@@ -85,7 +85,7 @@ export type ModelBenchmarks = { models: Record<string, BenchmarkScores>; status:
 export type OrganizationPrices = { models: ModelPrice[]; allowed_models: string[]; fetched_at: number; routing: string; source: string;
   recommendations?: ModelRecommendations; benchmarks?: ModelBenchmarks };
 export type ProviderDiagnostics = { http_status?: number; category: string; message: string; action: string;
-  limit_source?: string; reason?: string; protocol_stage?: string };
+  phase?: "http" | "stream"; limit_source?: string; reason?: string; protocol_stage?: string };
 export type InferenceCall = { id: string; sequence: number; run_id: string; request_id: string; requested_by: string; actor_name: string;
   usage?: MessageUsage;
   project_id: string; project_name: string; topic_id: string; topic_name: string; model: string; purpose: string; parent_call_id: string | null;

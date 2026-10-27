@@ -10,6 +10,7 @@ import re
 import stat
 from pathlib import Path
 
+from .openrouter import GENERATION_ID, safe_diagnostics
 from .store import StoreError
 
 IDENTITY = re.compile(r"[a-f0-9]{32}\Z")
@@ -26,7 +27,50 @@ ERRORS = (
     "provider_stream_error", "provider_stream_incomplete", "context_limit", "backup_restored",
     "provider_rejected", "provider_protocol", "catalog_unavailable", "model_unavailable",
     "model_not_text", "model_output_limit_unsupported", "provider_key_invalid", "unsupported_tool_call",
+    "execution_timeout", "execution_cancelled", "worker_interrupted", "provider_network", "provider_incomplete",
+    "usage_unavailable", "empty_response", "output_token_limit", "output_limit", "execution_fenced",
 )
+PROVIDER_CALL_LIMIT = 25
+ACCOUNTING = {"reserved", "settled", "released", "uncertain"}
+
+
+def _count(value):
+    return value if type(value) is int and 0 <= value <= 10**18 else None
+
+
+def _inference_details(db, org, row):
+    """Prompt-free accounting and closed diagnostics; no provider network access."""
+    from .usage_store import UsageStore
+
+    run = db.execute("SELECT started_at,finished_at,reserved_microusd,actual_microusd,prompt_tokens,completion_tokens "
+                     "FROM llm_runs WHERE organization_id=? AND id=?", (org, row["id"])).fetchone()
+    row.update({key: _count(value) for key, value in dict(run).items()})
+    row["diagnostics"] = safe_diagnostics(UsageStore.diagnostics(db, row["id"]))
+    total = db.execute("SELECT COUNT(*) FROM inference_calls WHERE organization_id=? AND run_id=?", (org, row["id"])).fetchone()[0]
+    calls = []
+    for record in db.execute(
+        "SELECT i.id,i.parent_call_id,i.purpose,i.started_at,i.reserved_microusd,e.data_json FROM inference_calls i "
+        "JOIN inference_call_events e ON e.sequence=(SELECT MAX(sequence) FROM inference_call_events WHERE call_id=i.id) "
+        "WHERE i.organization_id=? AND i.run_id=? ORDER BY i.sequence DESC LIMIT ?", (org, row["id"], PROVIDER_CALL_LIMIT),
+    ):
+        data = json.loads(record["data_json"])
+        generation = data.get("provider_generation_id")
+        calls.append({
+            "id": record["id"], "parent_call_id": record["parent_call_id"],
+            "purpose": record["purpose"] if record["purpose"] in {
+                "answer", "continuation", "compaction", "workflow", "review"} else "other",
+            "started_at": _count(record["started_at"]),
+            "reserved_microusd": _count(record["reserved_microusd"]),
+            "status": data.get("status") if data.get("status") in STATES else "other",
+            "accounting_state": data.get("accounting_state") if data.get("accounting_state") in ACCOUNTING else "other",
+            "provider_generation_id": generation if isinstance(generation, str) and GENERATION_ID.fullmatch(generation) else None,
+            "error_code": data.get("error_code") if data.get("error_code") in ERRORS else None,
+            "diagnostics": safe_diagnostics(data.get("diagnostics")),
+            **{key: _count(data.get(key)) for key in ("finished_at", "actual_microusd", "prompt_tokens", "completion_tokens",
+                                                     "reasoning_tokens", "cached_tokens", "total_tokens", "tool_tokens")},
+        })
+    row.update(provider_calls=list(reversed(calls)), provider_call_count=total, provider_call_limit=PROVIDER_CALL_LIMIT,
+               provider_calls_truncated=total > PROVIDER_CALL_LIMIT)
 
 
 def deployment_identity(frontend, release):
@@ -146,8 +190,8 @@ def details(db, org, topic, *, run_id=None, request_id=None):
             if "error_code" in row:
                 row["error_code"] = row["error_code"] if row["error_code"] in ERRORS or row["error_code"] is None else "other"
             if "accounting_state" in row:
-                allowed = {"reserved", "settled", "released", "uncertain"}
-                row["accounting_state"] = row["accounting_state"] if row["accounting_state"] in allowed else "other"
+                row["accounting_state"] = row["accounting_state"] if row["accounting_state"] in ACCOUNTING else "other"
+                _inference_details(db, org, row)
         result[kind] = rows
     used = db.execute("SELECT COUNT(*) FROM workflow_runs WHERE organization_id=? AND finished_at IS NULL "
                       "AND capacity_released=0", (org,)).fetchone()[0]

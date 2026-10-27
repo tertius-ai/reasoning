@@ -123,7 +123,7 @@ def rejection_error(status: int, metadata: object = None) -> ProviderError:
     category, message, action = categories.get(
         status, ("provider", "The provider rejected this submission.", "Check OpenRouter activity and provider status before retrying.")
     )
-    diagnostics = {"http_status": status, "category": category, "message": message, "action": action}
+    diagnostics = {"http_status": status, "phase": "http", "category": category, "message": message, "action": action}
     if status == 403 and isinstance(metadata, dict) and metadata.get("restriction") in {"region", "privacy", "model"}:
         restriction = metadata["restriction"]
         diagnostics["restriction"] = restriction
@@ -265,12 +265,21 @@ def safe_diagnostics(value: object) -> dict | None:
         return protocol_diagnostics(value["protocol_stage"], value.get("protocol_rule"), value.get("received_bytes"),
                                     value.get("protocol_field"), value.get("protocol_value_type"))
     status = value.get("http_status") if isinstance(value, dict) else None
-    return rejection_error(status, value).diagnostics if type(status) is int and 300 <= status <= 599 else None
+    if type(status) is not int or not 300 <= status <= 599:
+        return None
+    result = rejection_error(status, value).diagnostics
+    if value.get("phase") == "stream":
+        result["phase"] = "stream"
+    return result
 
 
 def stream_error_diagnostics(error: object) -> dict | None:
     status = error.get("code") if isinstance(error, dict) else None
-    return rejection_error(status, error.get("metadata")).diagnostics if type(status) is int and 300 <= status <= 599 else None
+    if type(status) is not int or not 300 <= status <= 599:
+        return None
+    result = rejection_error(status, error.get("metadata")).diagnostics
+    result["phase"] = "stream"
+    return result
 
 
 async def response_rejection(response: httpx.Response) -> ProviderError:
@@ -784,9 +793,8 @@ class OpenRouter:
                             if data == "[DONE]":
                                 return
                             body = json.loads(data, parse_float=Decimal)
-                            if not isinstance(body, dict) or "error" in body:
-                                details = body.get("error") if isinstance(body, dict) else None
-                                raise ProviderError("provider_stream_error", diagnostics=stream_error_diagnostics(details))
+                            if not isinstance(body, dict):
+                                raise ProviderError("provider_protocol")
                             generation = body.get("id")
                             if generation is not None and (
                                 not isinstance(generation, str) or not re.fullmatch(r"(?:gen-|chatcmpl-)[A-Za-z0-9_-]{1,180}", generation)
@@ -815,6 +823,8 @@ class OpenRouter:
                                     if finish not in {"stop", "length", "content_filter", "tool_calls", "function_call", "error"}:
                                         raise ProviderError("provider_protocol")
                             yield Chunk(text, generation, usage, finish)
+                            if "error" in body:
+                                raise ProviderError("provider_stream_error", diagnostics=stream_error_diagnostics(body["error"]))
                 raise ProviderError("provider_incomplete")
         except (httpx.HTTPError, UnicodeError, ValueError, KeyError, TypeError, AttributeError, RecursionError) as exc:
             raise ProviderError("provider_network" if isinstance(exc, httpx.HTTPError) else "provider_protocol") from exc

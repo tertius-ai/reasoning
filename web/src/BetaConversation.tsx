@@ -382,7 +382,9 @@ function BetaRunCard({ root, organizationId, topicId, run, canManage, canControl
   return <details data-run-id={run.id} data-status={run.status} className="org-model-run org-run-compact" open={open}
     onToggle={event => { if (event.target === event.currentTarget) setOpen(event.currentTarget.open); }}>
     <summary><strong>{run.agent ? `${run.agent.role.replaceAll("_", " ")} · ` : ""}{run.model}</strong><span role="status">{run.cancel_requested && active ? "Cancelling…" : paused ? "paused" : run.answer_state?.status === "waiting" ? "Waiting · answer incomplete" : run.status}</span>
-      {!active && run.error_code && <span title={run.diagnostics?.message}>{run.diagnostics?.http_status ? `HTTP ${run.diagnostics.http_status}` : run.error_code.replaceAll("_", " ")}</span>}
+      {!active && run.error_code && <span title={run.diagnostics?.message}>{run.diagnostics?.http_status
+        ? `${run.diagnostics.phase === "stream" ? "Stream error" : "HTTP"} ${run.diagnostics.http_status}`
+        : run.error_code.replaceAll("_", " ")}</span>}
       {run.actual_microusd != null && <small>{usd(run.actual_microusd)}</small>}
       {active && !paused && run.status === "running" && workingFor(run) && <small className="org-run-elapsed">working · {workingFor(run)}</small>}
       {active && onStop && !run.cancel_requested && <CardStop label="Stop this reply" disabled={stopping} onStop={onStop} />}

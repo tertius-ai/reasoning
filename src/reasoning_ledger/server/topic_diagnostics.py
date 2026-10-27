@@ -91,6 +91,7 @@ def summarize_topic(value):
                     message = choice.get("message", {})
                     call["response"]["choices"].append({"finish_reason": choice.get("finish_reason"),
                         "content_characters": len(message.get("content") or ""),
+                        "reasoning_characters": len(message.get("reasoning") or ""),
                         "tool_names": [tool.get("function", {}).get("name") for tool in message.get("tool_calls", [])],
                         "reasoning_present": bool(message.get("reasoning") or message.get("reasoning_details"))})
             if event.get("phase") == "failed":
