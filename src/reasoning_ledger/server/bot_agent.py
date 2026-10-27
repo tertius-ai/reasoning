@@ -38,7 +38,9 @@ def agent_arguments(engine, workspace, local_tools=False, session=None, *, model
         raise BotClientError("invalid CLI model identifier")
     if session is not None and not SESSION.fullmatch(session):
         raise BotClientError("invalid saved CLI session")
-    if effort is not None and effort not in {"low", "medium", "high", "xhigh", "max"}:
+    from .reasoning_effort import CLI_EFFORTS
+
+    if effort is not None and effort not in CLI_EFFORTS:
         raise BotClientError("unsupported CLI reasoning effort")
     if engine == "codex":
         args = [
@@ -377,14 +379,16 @@ def connect(server, directory, *, transport=None, open_browser=webbrowser.open, 
             if local_tools is None:
                 local_tools = False if automated else input("2 · Enable local tools/CAS? [y/N]: ").strip().lower() == "y"
             checked = (agent_check or doctor)(engine, workspace, local_tools)
-            models = models or input("3 · CLI models, comma-separated [default]: ").strip() or "default"
             from .bot_runtime import MODEL
 
-            selected = [model.strip() for model in models.split(",")]
-            if not 1 <= len(selected) <= 20 or len(set(selected)) != len(selected) or any(not MODEL.fullmatch(m) for m in selected):
-                raise BotClientError("choose one to 20 distinct CLI model IDs, or default for the CLI's default model")
-            checked["models"] = selected
-            name = name or (engine if automated else input(f"4 · Bot name [{engine}]: ").strip() or engine)
+            if models and models != "auto":
+                selected = [model.strip() for model in models.split(",")]
+                if not 1 <= len(selected) <= 20 or len(set(selected)) != len(selected) or any(not MODEL.fullmatch(m) for m in selected):
+                    raise BotClientError("choose one to 20 distinct CLI model IDs, or auto for automatic discovery")
+                checked["models"] = selected
+            print("CLI models: automatically discovered" if not models or models in {"auto", "default"}
+                  else "CLI models: restricted to the supplied allowlist")
+            name = name or (engine if automated else input(f"3 · Bot name [{engine}]: ").strip() or engine)
             pending = {
                 "server": origin,
                 "device_secret": secrets.token_urlsafe(32),

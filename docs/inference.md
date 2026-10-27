@@ -553,8 +553,13 @@ are rounded upward to that unit. The admission hold uses a one-token-per-three
 UTF-8/framing-byte input estimate, the quoted prices, and either an explicitly
 chosen output allowance or the 8,192-token reservation estimate. This estimate
 is not a tokenizer measurement or an invoice cap and is never sent as a default
-output-token limit. A running hold covers confirmed calls plus outstanding-call
-estimates, not accumulated obsolete estimates. All selected models'
+output-token limit. Anthropic models cache a prompt only up to explicit
+breakpoints, so each priced call to an `anthropic/` model marks the system
+prompt, the previous call's last message and its own last message with text.
+Later rounds of the same turn re-read that prefix at the cache-read price. The
+marks are added to the outgoing request only, and the hold prices the prompt at
+the quoted cache-write rate when that is higher than the input rate. A running
+hold covers confirmed calls plus outstanding-call estimates, not accumulated obsolete estimates. All selected models'
 estimates are committed in one write transaction. These records support
 accounting and explicit task budgets; OpenRouter owns organization spending enforcement.
 

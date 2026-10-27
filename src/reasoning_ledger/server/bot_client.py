@@ -407,7 +407,7 @@ def main(argv=None) -> int:
     connect_command.add_argument("--engine", choices=("codex", "claude"),
                                  help="configure without terminal prompts; still requires browser approval")
     connect_command.add_argument("--name")
-    connect_command.add_argument("--models")
+    connect_command.add_argument("--models", help="optional comma-separated model allowlist; auto discovers CLI models (default)")
     tools = connect_command.add_mutually_exclusive_group()
     tools.add_argument("--local-tools", action="store_true", default=None)
     tools.add_argument("--no-local-tools", dest="local_tools", action="store_false")
@@ -449,7 +449,7 @@ def main(argv=None) -> int:
             from .bot_agent import connect
 
             connect(connection_server(args.server, args.state_dir), args.state_dir,
-                    engine=args.engine, name=args.name, models=args.models or ("default" if args.engine else None),
+                    engine=args.engine, name=args.name, models=args.models,
                     local_tools=args.local_tools, open_browser=(lambda _: None) if args.no_browser else webbrowser.open,
                     run_after=not args.pair_only)
             if args.pair_only:
@@ -534,6 +534,7 @@ def main(argv=None) -> int:
             return 0
         if args.command in {"doctor", "run"}:
             from .bot_agent import doctor
+            from .bot_models import ModelDiscovery
             from .bot_runner import runtime_step
 
             if getattr(args, "allow_other_users", False):
@@ -583,12 +584,14 @@ def main(argv=None) -> int:
                 }
                 if terminal:
                     terminal.identify(identity["name"], len(identity["topic_ids"]))
+                discovery = ModelDiscovery(agent["engine"])
                 while True:
                     def step():
                         old_journal = directory / "runner.json"
                         if old_journal.exists() and read_document(old_journal).get("pending"):
                             raise BotClientError("reconcile the retained invocation with reasoning-bot recover before starting new work")
                         options = {"on_activity": terminal.activity, "on_status": status} if terminal else {}
+                        options["discovery"] = discovery
                         return runtime_step(client, directory, load_configuration(args.config), agent, binding, **options)
                     result = reconnect(step, once=args.once, on_status=status)
                     if args.once:

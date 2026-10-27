@@ -482,3 +482,23 @@ def test_conversational_controls_do_not_mutate_another_users_graph(installation)
     assert client.post(path + f"/{parent['id']}/control", json={"status": "paused"}).status_code == 403
     assert not state.stopped(parent)
     assert member["user_id"] != owner["user_id"]
+
+
+def test_coordinator_waiting_for_delegates_settles_once_its_work_continues(installation):
+    state, _, owner, topics, parent, quote = root(installation)
+    fixture = DelegatingProvider()
+    ResearchAgent(state, fixture.provider, parent, quote).execute()
+    view = state.run(owner["user_id"], owner["organization_id"], parent["id"])
+    assert view["answer_state"]["status"] == "waiting" and view["answer_state"]["reason"] == "delegated work"
+    agents = TopicAgents(state)
+    agents.dispatch()
+    for _ in range(2):
+        ResearchAgent(state, fixture.provider, state.claim(), quote).execute()
+    agents.dispatch()
+    continuation = state.claim()
+    view = state.run(owner["user_id"], owner["organization_id"], parent["id"])
+    assert view["answer_state"]["status"] == "continued" and view["answer_state"]["next_run"] == continuation["id"]
+    ResearchAgent(state, fixture.provider, continuation, quote).execute()
+    view = state.run(owner["user_id"], owner["organization_id"], parent["id"])
+    assert view["answer_state"]["status"] == "continued" and view["answer_state"]["next_run"] == continuation["id"]
+    assert state.run(owner["user_id"], owner["organization_id"], continuation["id"])["answer_state"]["status"] == "response_ready"

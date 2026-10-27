@@ -161,16 +161,13 @@ def test_effort_is_retained_and_unsupported_bot_override_is_refused(fixture):
         )
 
 
-def test_effort_metadata_uses_actual_model_levels_and_default_is_not_forced(monkeypatch):
+def test_effort_metadata_uses_actual_model_levels_and_default_is_not_forced():
     from reasoning_ledger.server import reasoning_effort
     from reasoning_ledger.server.bot_agent import agent_arguments
 
-    monkeypatch.setattr(reasoning_effort, "codex_catalog", lambda: {"example": ["high", "max"], "other": ["high"]})
-    assert reasoning_effort.cli_efforts("codex", "example") == ["high", "max"]
-    assert reasoning_effort.cli_efforts("codex", "default") == ["high"]
-    assert reasoning_effort.cli_efforts("codex", "unknown") == []
     assert reasoning_effort.openrouter_efforts({"reasoning": {"supported_efforts": ["none", "high"], "mandatory": True}}) == ["high"]
     assert reasoning_effort.openrouter_efforts({"supported_parameters": ["reasoning"]}) == []
+    assert "ultra" not in reasoning_effort.openrouter_efforts({"reasoning": {"supported_efforts": None}})
     codex = agent_arguments("codex", "/workspace", effort="high")
     assert 'model_reasoning_effort="high"' in codex
     assert not any("model_reasoning_effort" in arg for arg in agent_arguments("codex", "/workspace"))

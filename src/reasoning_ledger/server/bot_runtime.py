@@ -11,10 +11,12 @@ import time
 
 from .bot_sharing import DECLINED, permits, require
 from .bot_store import BotStore
+from .reasoning_effort import CLI_EFFORTS
 from .security import digest, token
 from .store import StoreError, _id, _row
 
-MODEL = re.compile(r"[A-Za-z0-9][A-Za-z0-9._/-]{0,99}\Z")
+MODEL_PATTERN = r"[A-Za-z0-9][A-Za-z0-9._/-]{0,99}(?:\[(?:1m|200k)\])?"
+MODEL = re.compile(r"(?=.{1,100}\Z)" + MODEL_PATTERN + r"\Z")
 ACTIVE = {"queued", "running", "waiting_approval"}
 TERMINAL = {"succeeded", "failed", "outcome_unknown", "cancelled"}
 # Error codes of a running invocation that a person, workflow or agent stop fenced.
@@ -32,7 +34,7 @@ APPROVAL_BY = (
 # Runner-reported stages: whole milliseconds on the runner's monotonic clock,
 # measured from the runner's receipt of the claim response.
 RUNNER_STAGES = ("cli_started_ms", "cli_ready_ms", "first_text_ms", "final_text_ms", "cli_exited_ms")
-MENTION = re.compile(r"@\[([a-f0-9]{32})(?::([A-Za-z0-9][A-Za-z0-9._/-]{0,99})(?:!(low|medium|high|xhigh|max))?)?\]")
+MENTION = re.compile(r"@\[([a-f0-9]{32})(?::(" + MODEL_PATTERN + r")(?:!(low|medium|high|xhigh|max|ultra))?)?\]")
 
 
 def mentioned_models(content, bot_id):
@@ -77,8 +79,9 @@ class BotRuntime:
         """``allow_other_users`` is the runner's flag, retained as reported; the bot's sharing setting decides access."""
         if engine not in {"codex", "claude"} or type(allow_other_users) is not bool or type(local_tools) is not bool:
             raise StoreError(400, "invalid local-agent policy")
-        if (not isinstance(models, list) or not 1 <= len(models) <= 20 or len(set(models)) != len(models)
-                or any(not isinstance(model, str) or not MODEL.fullmatch(model) for model in models)):
+        if (not isinstance(models, list) or not 1 <= len(models) <= 20
+                or any(not isinstance(model, str) or not MODEL.fullmatch(model) for model in models)
+                or len(set(models)) != len(models)):
             raise StoreError(400, "advertise one to 20 distinct CLI model identifiers")
         self.bots._meter(credential, "read")
         if capabilities is not None and (not isinstance(capabilities, dict) or len(json.dumps(capabilities)) > 16000):
@@ -86,9 +89,14 @@ class BotRuntime:
         efforts = (capabilities or {}).get("efforts", {})
         if (not isinstance(efforts, dict) or set(efforts) - set(models)
                 or any(not isinstance(values, list) or any(
-                    not isinstance(value, str) or value not in {"low", "medium", "high", "xhigh", "max"} for value in values
+                    not isinstance(value, str) or value not in CLI_EFFORTS for value in values
                 ) for values in efforts.values())):
             raise StoreError(400, "reasoning efforts must belong to advertised models and supported CLI levels")
+        names = (capabilities or {}).get("model_names", {})
+        if (not isinstance(names, dict) or set(names) - set(models) or any(
+                not isinstance(name, str) or not name.strip() or len(name) > 100 or any(ord(c) < 32 for c in name)
+                for name in names.values())):
+            raise StoreError(400, "model names must be bounded labels for advertised models")
         with self.store.transaction(write=True) as db:
             bot = self.bots._authenticate(db, credential)
             db.execute(
@@ -118,7 +126,8 @@ class BotRuntime:
                 if not permits(db, row, user):
                     continue
                 name = db.execute("SELECT name FROM users WHERE id=?", (row["id"],)).fetchone()[0]
-                values.extend({"id": f"bot/{row['id']}/{model}", "name": f"{name} · {model}", "bot_id": row["id"],
+                labels = json.loads(row["capabilities_json"]).get("model_names", {})
+                values.extend({"id": f"bot/{row['id']}/{model}", "name": f"{name} · {labels.get(model, model)}", "bot_id": row["id"],
                                "efforts": json.loads(row["capabilities_json"]).get("efforts", {}).get(model, []),
                                "engine": row["engine"], "owner_user_id": row["created_by"],
                                "local_tools": bool(row["local_tools"]),
@@ -149,7 +158,8 @@ class BotRuntime:
             except StoreError:
                 continue
             name = db.execute("SELECT name FROM users WHERE id=?", (row["id"],)).fetchone()[0]
-            values.extend({"id": f"bot/{row['id']}/{model}", "name": f"{name} · {model}", "bot_id": row["id"],
+            labels = json.loads(row["capabilities_json"]).get("model_names", {})
+            values.extend({"id": f"bot/{row['id']}/{model}", "name": f"{name} · {labels.get(model, model)}", "bot_id": row["id"],
                            "efforts": json.loads(row["capabilities_json"]).get("efforts", {}).get(model, []),
                            "engine": row["engine"], "owner_user_id": row["created_by"],
                            "local_tools": bool(row["local_tools"]),
@@ -478,7 +488,7 @@ class BotRuntime:
         if run["direct_conversation_id"]:
             self._direct_access(db, bot, run)
             runtime = _row(db.execute("SELECT * FROM bot_runtimes WHERE bot_id=?", (bot["id"],)).fetchone())
-            if run["model"] not in json.loads(runtime["models_json"]):
+            if run["status"] == "queued" and run["model"] not in json.loads(runtime["models_json"]):
                 raise StoreError(403, "bot model is no longer advertised")
             return
         self.access(db, bot, run["topic_id"], write=True)
@@ -499,7 +509,9 @@ class BotRuntime:
             raise StoreError(409, "the delegating invocation was stopped or has an unknown outcome")
         require(db, bot, run["requested_by"])
         runtime = _row(db.execute("SELECT * FROM bot_runtimes WHERE bot_id=?", (bot["id"],)).fetchone())
-        if run["model"] not in json.loads(runtime["models_json"]):
+        # Discovery controls new admissions and claims. A catalog refresh must not revoke a running lease;
+        # live topic, requester, sharing and credential authorization are still checked above on every call.
+        if run["status"] == "queued" and run["model"] not in json.loads(runtime["models_json"]):
             raise StoreError(403, "bot model is no longer advertised")
 
     def leased(self, db, credential, run_id, lease, *, terminal=False):

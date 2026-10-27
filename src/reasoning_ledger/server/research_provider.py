@@ -32,8 +32,40 @@ from .store import StoreError
 from .usage_store import UsageStore
 
 REASONING_TEXT_FIELDS = ("text", "summary", "data", "signature")
+CACHE_BREAKPOINT = {"type": "ephemeral"}
 CREDIT_RETRY_DELAYS = (5, 15, 30)
 logger = logging.getLogger(__name__)
+
+
+def cache_breakpoints(messages: list[dict], previous: int | None = None) -> tuple[list[dict], int | None]:
+    """Mark prompt-cache breakpoints on a copy of the request messages; return it and the last marked index.
+
+    The system prompt is marked, so instructions and tool schemas are read from the cache, and so is the
+    last message with text, so the next round re-reads this round's conversation at the cache price. The
+    previous round's last mark is kept as well, because a provider looks back only a bounded number of
+    blocks from a breakpoint for an earlier cache entry. Messages without text cannot carry a mark.
+    """
+
+    def marked(message):
+        content = message.get("content")
+        if isinstance(content, str) and content:
+            return {**message, "content": [{"type": "text", "text": content, "cache_control": CACHE_BREAKPOINT}]}
+        if isinstance(content, list):
+            last = next((index for index in range(len(content) - 1, -1, -1) if isinstance(content[index], dict)
+                         and content[index].get("type") == "text" and content[index].get("text")), None)
+            if last is not None:
+                parts = list(content)
+                parts[last] = {**parts[last], "cache_control": CACHE_BREAKPOINT}
+                return {**message, "content": parts}
+        return None
+
+    end = next((index for index in range(len(messages) - 1, -1, -1) if marked(messages[index]) is not None), None)
+    system = next((index for index, message in enumerate(messages) if message.get("role") == "system"), None)
+    previous = previous if previous is not None and previous < len(messages) else None
+    result = list(messages)
+    for index in {system, previous, end} - {None}:
+        result[index] = marked(messages[index]) or messages[index]
+    return result, end
 
 
 class ReasoningFieldError(Exception):
@@ -119,6 +151,7 @@ class ResearchCompletion:
         self._last_visible_finish = None
         self.worker_spans, self._dispatch = None, None
         self._reviewer, self._prefix = None, None
+        self._cache_end = None
 
     def complete(self, payload, *, timeout):
         if self.worker_spans is not None and "executor_start" not in self.worker_spans.values:
@@ -274,7 +307,12 @@ class ResearchCompletion:
                 }
             else:
                 submitted = True
-                response = await self._agent_stream(key, request, timeout)
+                wire = request
+                if self.quote.prompt_caching:
+                    # Breakpoints go on the wire only; the retained session keeps the agent's own messages.
+                    marked, self._cache_end = cache_breakpoints(request["messages"], self._cache_end)
+                    wire = {**request, "messages": marked}
+                response = await self._agent_stream(key, wire, timeout)
                 generation = response.get("id")
                 if response.get("usage"):
                     usage = Usage.parse(response["usage"])
