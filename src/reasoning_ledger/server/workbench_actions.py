@@ -294,45 +294,9 @@ def register_actions(research):
             research._target(job["topic_id"])
             return research.compute.cancel(research.user, research.org, job_id)
 
-        @register(
-            name="noether_compute",
-            description=(
-                "Submit declarative Noether work to an approved Python image containing /opt/reasoning/noether_worker.py "
-                "and Noether. Returns a job or approval; never runs on the app host."
-            ),
-            input_schema=schema(
-                {"image_id": string(64), "operation": string(200), "payload": {"type": "object"}, "resources": {"type": "object"}},
-                ["image_id", "operation", "payload", "resources"],
-            ),
-        )
-        def noether_compute(image_id, operation, payload, resources):
-            request = encoded({"operation": operation, "payload": payload})
-            if len(request.encode()) > 12000:
-                raise StoreError(400, "Noether request exceeds its bounded input")
-            program = (
-                'import subprocess\np = subprocess.run(["python3", "/opt/reasoning/noether_worker.py"], input='
-                + repr(request)
-                + ", text=True, capture_output=True)\nprint(p.stdout)\nprint(p.stderr)\nraise SystemExit(p.returncode)\n"
-            )
-            return compute_submit(image_id, "python", program, resources)
+        from .noether_compute import register_jobs
 
-        @register(
-            name="noether_status",
-            description="Request Noether capabilities in an approved sandbox image. Returns an asynchronous job or approval proposal.",
-            input_schema=schema({"image_id": string(64), "resources": {"type": "object"}}, ["image_id", "resources"]),
-        )
-        def noether_status(image_id, resources):
-            return noether_compute(image_id, "capabilities", {}, resources)
-
-        @register(
-            name="noether_describe",
-            description="Request an operation schema from Noether in an approved image. Results arrive as a compute job.",
-            input_schema=schema(
-                {"image_id": string(64), "operation": string(200), "resources": {"type": "object"}}, ["image_id", "operation", "resources"]
-            ),
-        )
-        def noether_describe(image_id, operation, resources):
-            return noether_compute(image_id, "describe", {"operation": operation}, resources)
+        register_jobs(research.registry, compute_submit)
 
         @register(
             name="lean_check",

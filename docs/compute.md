@@ -37,6 +37,12 @@ pending-request indicator in People; approval
 uses this same queue on configured workers or Modal. A bot cannot self-approve,
 requester access is rechecked at admission, and unknown execution is not rerun.
 
+Beta-topic Noether helpers use these same compute paths. `noether_operations`
+provides operation names, schemas and examples without launching a job;
+`noether_compute` saves its structured response in a `noether-result.json`
+artifact. Native beta models use the topic's Compute grant and explicit allowance
+or exact-action approval. Bot submissions require the bot owner's approval.
+
 ## Lean projects and formalization groundwork
 
 Select an allowed `lean-mathlib` image and Lean in a gamma-topic's Compute editor.

@@ -76,6 +76,9 @@ class BotTools:
             tools.extend({"name": item.name, "description": item.description, "input_schema": item.input_schema}
                          for item in research.registry.list())
             if self.compute and "compute" in research.enabled and "knowledge:write" in scopes and topic["kind"] != "alpha":
+                from .noether_compute import definitions
+
+                tools.extend({key: value for key, value in definition.items() if key != "risk"} for definition in definitions())
                 tools.append({"name": "compute_submit", "description": "Request the bot owner's approval for exact "
                               "source, immutable image and resource limits. Approved jobs use the same isolated worker "
                               "and artifact contract on DigitalOcean, owned hardware or Modal; no Docker socket is exposed.",
@@ -227,7 +230,7 @@ class BotTools:
             self.runtime.progress(credential, run_id, lease, "using_tools", tool_activity(name))
         readonly = READS | {"blog_read", "blog_search", "topic_history", "messages_search", "topics_search", "media_list", "media_read",
                             "media_download_chunk",
-                            "artifact_list", "research_file_read", "account_read"}
+                            "artifact_list", "research_file_read", "account_read", "noether_operations", "compute_log_read"}
         if name in {"media_chunk", "media_download_chunk"}:
             from .security import digest
 
@@ -264,10 +267,13 @@ class BotTools:
             if name == "agent_delegate":
                 return delegate(self.runtime, credential, run_id, lease, **arguments)
             return tasks(self.runtime, credential, run_id, lease, **arguments)
-        if name == "compute_submit":
+        from .noether_compute import JOB_TOOLS, submission
+
+        if name in {"compute_submit", *JOB_TOOLS}:
             from .bot_compute import BotCompute
 
-            result = BotCompute(self.runtime, self.compute).request(credential, run_id, lease, **arguments)
+            parameters = arguments if name == "compute_submit" else submission(name, arguments)
+            result = BotCompute(self.runtime, self.compute).request(credential, run_id, lease, **parameters)
             with self.store.transaction(write=True) as db:
                 self.runtime.leased(db, credential, run_id, lease)
                 db.execute("INSERT INTO bot_tool_receipts(run_id,name,result_json,created_at) VALUES(?,?,?,?)",
