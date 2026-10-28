@@ -242,6 +242,8 @@ test("ordinary beta conversation delegates, streams roles and integrates without
     await source.getByRole("button", { name: "Save edit", exact: true }).click();
     await source.getByText("Corrected prompt: compare the approaches.", { exact: true }).waitFor();
     assert.equal(calls.length, 4, "saving a prompt must not automatically spend on inference");
+    // Collapsing the editor can leave the floating toolbar beneath the topic header.
+    await source.evaluate(node => node.scrollIntoView({ block: "center", inline: "nearest" }));
     await source.hover(); await source.getByLabel("Message actions", { exact: true }).click();
     await page.getByRole("menuitem", { name: "Version history", exact: true }).click();
     await source.getByLabel("Message version history").getByText("Please compare two approaches and consult a librarian and critic.", { exact: true }).waitFor();
