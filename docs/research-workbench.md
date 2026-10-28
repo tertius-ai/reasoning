@@ -273,7 +273,7 @@ Discovery never adds permissions. Each invocation has a durable receipt.
 | Private files | `artifact_list`, `artifact_write`, `research_file_read`; compute `artifact_read` |
 | Private research blog | `blog_search`, `blog_read`, `blog_create`, `blog_revise`, `blog_publish` (authorized, revision-guarded writes) |
 | Gamma authoring | `workflow_read`, `workflow_create`, `workflow_update`, `workflow_preflight`, `workflow_propose_run` |
-| Sandbox computation | `compute_submit`, `compute_cancel`, image/job/artifact inspection; `lean_check`; `noether_compute`, `noether_status`, `noether_describe` |
+| Sandbox computation | `compute_submit`, `compute_cancel`, `compute_log_read`, image/job/artifact inspection; `lean_check`; `noether_operations`, `noether_compute`, `noether_status`, `noether_describe` |
 | Fixed arithmetic | `scientific_calculate`, `unit_convert`, `constant_lookup`: bounded trusted implementations, no arbitrary Python execution |
 | Model choices | `model_catalog`: current catalogue IDs, not a substitute for live capability/price preflight |
 
@@ -320,6 +320,21 @@ Noether 0.3.2's default CPU profile; it does not include mathlib or extra Julia 
 require an approved Python image containing the pinned package and the fixed
 worker at `/opt/reasoning/noether_worker.py`. Missing runtimes are failures, not
 permission to execute on the server. See [images](images.md) and [compute](compute.md).
+
+`noether_operations` discovers executable wrapper names without submitting a job;
+its optional `operation` argument returns the exact payload/result schemas and
+an example. This reads literal descriptions from the packaged worker, without
+importing or executing Noether on the server. It describes a protocol, not runtime
+availability. Submitted programs check the installed worker's SHA-256 against
+that protocol before executing and save the response as `noether-result.json`.
+`noether_status` and `noether_describe` check the installed runtime through the
+same job/approval path. Waiting runs resume after their results arrive.
+
+`compute_result` identifies the job and committed artifacts. `artifact_read`
+retrieves the Noether JSON; `compute_log_read` retrieves stdout/stderr in bounded
+pages. Text readers return `next_offset`, `total_characters` and `truncated`,
+including when JSON escaping reduces the page size. A successful job and its
+reported certificate flags are computation evidence, not automatic ledger verification.
 
 A topic's explicit monthly autonomous CPU-second allowance defaults to zero.
 Within it, compute still obeys organization/image/worker ceilings and atomically

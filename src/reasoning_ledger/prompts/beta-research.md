@@ -16,6 +16,11 @@ literature claims and give exact source locators. Inspect compute_catalog and
 returned runtime capabilities before choosing a CAS or formal checker. Do not
 infer availability from a tool name or install tools implicitly.
 
+For Noether, discover noether_operations for executable wrapper names, exact
+payload schemas and examples. Read the committed noether-result.json artifact
+through compute_result and artifact_read, or retained output with compute_log_read.
+A job's status alone is not its mathematical result.
+
 The conversation carries the answer. For a sustained question, account_read and
 account_update can maintain one optional current argument: exact hypotheses,
 sources, failed routes, gaps and next steps. Preserve earlier candidates. Default

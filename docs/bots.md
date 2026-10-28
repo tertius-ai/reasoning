@@ -706,6 +706,17 @@ Approval rechecks current requester/owner access and image identity and queues
 at most one job. Configured DigitalOcean, owned-hardware or Modal workers use the
 same image queue, result and artifact contracts. Neither host shell nor Docker
 socket is exposed to the model. Local CAS execution remains separately approved.
+
+In beta topics, connected bots can discover Noether wrapper names with
+`noether_operations`, then read an operation's exact schemas and example by
+passing its `operation` argument. `noether_compute`, `noether_status` and
+`noether_describe` request the same owner-approved image jobs as `compute_submit`;
+they do not use a native model's autonomous compute allowance. These submission
+tools require both Compute and the bot's knowledge-write grant. Discovery needs
+knowledge-read. Noether responses are retained as `noether-result.json` artifacts:
+use `compute_result` to find them and `artifact_read` to read them. General stdout
+is available through `compute_log_read`. Both text readers return exact offsets
+and explicit truncation; continue from `next_offset` for the remaining output.
 Pending/unknown computation prevents goal completion; completed results trigger
 integration without paid busy-polling.
 

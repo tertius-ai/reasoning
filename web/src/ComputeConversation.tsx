@@ -53,6 +53,25 @@ function ReconcileCompute({ job, onUpdated, onAuthLost }: { job: ComputeJob; onU
   </details>;
 }
 
+function ComputeProgress({ job }: { job: ComputeJob }) {
+  const [now, setNow] = useState(Date.now);
+  useEffect(() => {
+    if (job.status !== "running") return;
+    setNow(Date.now());
+    const timer = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(timer);
+  }, [job.status]);
+  // Worker timestamps include setup; elapsed_ms may instead be a conservative usage estimate.
+  const end = job.finished_at ?? (job.status === "running" ? Math.floor(now / 1000) : null);
+  const seconds = job.started_at === null || end === null ? null : Math.max(0, end - job.started_at);
+  const status = { queued: "Waiting for a worker", running: "Running", succeeded: "Completed", failed: "Computation failed",
+    cancelled: "Cancelled", outcome_unknown: "Outcome unknown · usage remains held" }[job.status];
+  return <p role="status" className={job.status === "failed" ? "org-error" : undefined}>{status}
+    {seconds !== null && <span title="Time since the worker claimed the job, including setup"> · {Math.floor(seconds / 60)}m {seconds % 60}s elapsed</span>}
+    {job.exit_code !== null && job.exit_code !== 0 && <> · Exit code {job.exit_code}</>}
+  </p>;
+}
+
 export function ComputeJobDetail({ organizationId, jobId, userId, canWrite, canManage, onClose, onAuthLost, embedded = false }: {
   organizationId: string; jobId: string; userId: string; canWrite: boolean; canManage: boolean; onClose: () => void; onAuthLost: () => void; embedded?: boolean;
 }) {
@@ -92,26 +111,30 @@ export function ComputeJobDetail({ organizationId, jobId, userId, canWrite, canM
     void poll(); return () => { controller.abort(); clearTimeout(timer); };
   }, [root, refresh, onAuthLost]);
   return <section className="org-compute-detail" aria-label="Selected computation">
-    {!embedded && <header><h3>Computation {jobId}</h3><button type="button" onClick={onClose}>Close computation</button></header>}
+    {!embedded && <header><h3>Computation</h3><button type="button" onClick={onClose}>Close computation</button></header>}
     {error && <p role="alert" className="org-error">{error}</p>}
     {!job ? <p role="status">Loading computation…</p> : <>
-      <p>{job.status} · Exit code {job.exit_code ?? "pending"} · Elapsed {job.elapsed_ms ?? "pending"} ms</p>
+      <ComputeProgress job={job} />
       {!!job.cancel_requested && activeCompute(job) && <p role="status">Cancellation requested; remote termination is not yet confirmed.</p>}
-      <details><summary>Immutable program and image evidence</summary><pre>{job.parameters.program}</pre>
-        <dl><dt>Image</dt><dd>{job.image.reference}</dd><dt>Source revision</dt><dd>{job.image.source_revision}</dd>
+      <pre aria-label="Compute logs">{events.filter((entry) => entry.event.type === "log").map((entry) => entry.event.text ?? "").join("") || "No output recorded."}</pre>
+      {!!artifacts.length && <><h4>Files</h4><ul>{artifacts.map((file) => <li key={file.id}>
+        <a href={"/api" + root + "/artifacts/" + encodeURIComponent(file.id)} download={file.name}>{file.name}</a> · {file.size_bytes} bytes
+      </li>)}</ul></>}
+      <details><summary>Computation details</summary><pre>{job.parameters.program}</pre>
+        <dl><dt>Job ID</dt><dd>{job.id}</dd><dt>Worker ID</dt><dd>{job.worker_id ?? "Unassigned"}</dd>
+          <dt>Usage</dt><dd>{job.accounted_at === null ? `${job.reserved_cpu_seconds} CPU-seconds reserved` : `${job.used_cpu_seconds} CPU-seconds charged`}</dd>
+          {job.error_code && <><dt>Error</dt><dd>{job.error_code}</dd></>}
+          <dt>Image</dt><dd>{job.image.reference}</dd><dt>Source revision</dt><dd>{job.image.source_revision}</dd>
           <dt>Program SHA-256</dt><dd>{job.program_digest}</dd><dt>Capabilities SHA-256</dt><dd>{job.image.capabilities_digest}</dd>
           <dt>SBOM SHA-256</dt><dd>{job.image.sbom_digest}</dd></dl>
+        <h4>Resource limits</h4>
         <pre>{JSON.stringify(job.parameters.resources, null, 2)}</pre>
+        {!!artifacts.length && <><h4>File checksums</h4><p className="org-help">Files download in your browser; desktop downloads are unavailable.</p>
+          <ul>{artifacts.map((file) => <li key={file.id}>{file.name}<small>SHA-256 {file.digest}</small></li>)}</ul></>}
+        <h4>State events</h4><ul>{events.filter((entry) => entry.event.type !== "log").map((entry) => <li key={entry.sequence}>
+          {new Date(entry.created_at * 1000).toLocaleString()} · {entry.event.type}{entry.event.status ? " · " + entry.event.status : ""}
+        </li>)}</ul>
       </details>
-      <h4>Program output</h4><pre aria-label="Compute logs">{events.filter((entry) => entry.event.type === "log").map((entry) => entry.event.text ?? "").join("") || "No log output yet."}</pre>
-      <h4>Committed artifacts</h4><p className="org-help">Files are untrusted output. Download only after reviewing the name and size; do not execute them. Desktop downloads are disabled; use this server in your browser to download.</p>
-      {!artifacts.length ? <p>No committed artifacts.</p> : <ul>{artifacts.map((file) => <li key={file.id}>
-        <a href={"/api" + root + "/artifacts/" + encodeURIComponent(file.id)} download={file.name}>{file.name}</a> · {file.size_bytes} bytes
-        <small>SHA-256 {file.digest}</small>
-      </li>)}</ul>}
-      <details><summary>State events</summary><ul>{events.filter((entry) => entry.event.type !== "log").map((entry) => <li key={entry.sequence}>
-        {new Date(entry.created_at * 1000).toLocaleString()} · {entry.event.type}{entry.event.status ? " · " + entry.event.status : ""}
-      </li>)}</ul></details>
       {canManage && job.status === "outcome_unknown" && <ReconcileCompute key={job.id} job={job} onUpdated={() => setRefresh((value) => value + 1)} onAuthLost={onAuthLost} />}
     </>}
   </section>;
@@ -231,11 +254,8 @@ export function ComputeConversation({ organizationId, topicId, userId, canWrite,
     {!editorOpen && error && <p role="alert" className="org-error">{error}</p>}
     {!editorOpen && attempt && <button type="button" onClick={() => setEditorOpen(true)}>Resume computation request</button>}
     {editorOpen && <ActivityDialog title="Containerized computation" onClose={() => setEditorOpen(false)}>
-      <p className="org-help">Programs run on separate enrolled workers using operator-approved immutable images. Results are shared with this organization. This submits a single computation, not a versioned workflow.</p>
       {!configuration ? <p role="status">Loading compute configuration…</p> : <>
-        <p className="org-budget">Available {configuration.balance.available_cpu_seconds} · Used {configuration.balance.used_cpu_seconds} · Held {configuration.balance.held_cpu_seconds} CPU-seconds</p>
-        <p className="org-help">CPU-time quota is not a provider spending cap. Boot time, idle machines, storage, and network charges are additional.</p>
-        {!allowed.length || configuration.policy.monthly_cpu_seconds === 0 ? <p className="org-help">An administrator must allow an approved image and set a positive CPU-time quota. A separate compatible worker must be installed to execute jobs.</p> : <p className="org-help">Queued jobs wait for a compatible worker; submission does not provision hardware.</p>}
+        {(!allowed.length || configuration.policy.monthly_cpu_seconds === 0) && <p className="org-help">An administrator must allow a compute image and set a CPU-time quota before you can submit.</p>}
       </>}
       {error && <p role="alert" className="org-error">{error}</p>}
       {canWrite ? <form onSubmit={(event) => void submit(event)}>
@@ -252,7 +272,11 @@ export function ComputeConversation({ organizationId, topicId, userId, canWrite,
           <span>Lean source or project JSON · offline mathlib · report and source artifacts</span>
         </div>}
         <label htmlFor={`compute-program-${topicId}`}>Compute program</label><textarea id={`compute-program-${topicId}`} required rows={7} disabled={busy || !!attempt} value={program} onChange={(event) => setProgram(event.target.value)} spellCheck={false} />
-        <ComputeResources value={limits} maximum={image?.maximum_resources} disabled={busy || !!attempt} onChange={setLimits} />
+        <details onInvalidCapture={event => { event.currentTarget.open = true; }}><summary>Resource limits and quota</summary>
+          <ComputeResources value={limits} maximum={image?.maximum_resources} disabled={busy || !!attempt} onChange={setLimits} />
+          {configuration && <p className="org-budget">Available {configuration.balance.available_cpu_seconds} · Used {configuration.balance.used_cpu_seconds} · Held {configuration.balance.held_cpu_seconds} CPU-seconds</p>}
+          <p className="org-help">CPU-time quota is not a provider spending cap. Boot time, idle machines, storage, and network charges are additional.</p>
+        </details>
         {attempt && <div role="status"><p>Unacknowledged request {attempt.client_id}. Retry sends exactly the same captured program and limits. Switching topics preserves it; reloading closes this in-memory record.</p>
           <button type="button" disabled={busy} onClick={() => { if (window.confirm("Stop retrying this request? It may already be queued or running. Inspect shared jobs before deliberately submitting a new computation; this does not cancel an accepted job.")) {
             pending.current = undefined; updateAttempt.current(undefined); setError("");
