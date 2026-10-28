@@ -483,7 +483,7 @@ minutes. Retries of an accepted request do not consume another request slot.
 ## Execution and recovery
 
 `reasoning-server serve` starts one installation-owned inference worker with
-two concurrent turns and a 1,800-second execution timeout per turn. A private exclusive
+eight concurrent turns by default and a 1,800-second execution timeout per turn. A private exclusive
 file lock prevents a second executor from using the same installation. Queues,
 attempt fencing, text deltas, terminal state, and assistant messages are stored
 in SQLite. Provider SSE is incrementally decoded, including split UTF-8 chunks;
@@ -520,10 +520,22 @@ attempt cannot append text or publish another final message.
 On shutdown, active calls are interrupted. On restart, abandoned running calls
 are marked interrupted and are **not automatically retried**: they may already
 have been billed. Previously queued, never-submitted calls can proceed. Known
-usage persisted before an interruption is retained. If execution fails
-unexpectedly, worker availability becomes false; restart the server to recover
-durable work. The current server requires a single executing process per
-installation, not multiple inference-enabled Uvicorn workers.
+usage persisted before an interruption is retained. Run completion, for research
+turns and plain streamed replies alike, retries SQLite busy/locked errors while the
+worker remains active, retaining the chosen outcome and usage. Only the atomic
+completion transaction is retried; the model is not called again. The wait between
+attempts grows to at most one second, but the number of attempts is not limited, so
+a run stays running while the database stays locked, past its turn timeout if need
+be. Each attempt rechecks attempt fencing and cancellation before committing one
+final answer and accounting state; a run fenced by another path still records its
+failure and blocks its goal. If shutdown is requested after a busy error, retries
+stop and the unfinished run and its provider call are left for restart recovery.
+SQLite busy/locked errors during supplementary review completion preserve
+the saved answer and accounting. Maintenance retries the rolled-back review
+transaction for terminal reviewer runs without repeating the model request.
+Other unhandled execution or maintenance errors make worker availability false;
+restart the server to recover durable work. The current server requires a single
+executing process per installation, not multiple inference-enabled Uvicorn workers.
 An explicit provider token-limit or filtering finish is treated as an incomplete
 response, even when it includes valid charge information.
 

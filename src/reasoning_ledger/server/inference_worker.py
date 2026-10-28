@@ -17,7 +17,7 @@ from .inference_timing import Spans
 from .openrouter import OpenRouter, ProviderError, Quote
 from .security import private_file
 from .store import StoreError
-from .worker_poll import claim_work, database_poll
+from .worker_poll import claim_work, database_poll, persist_completion
 
 logger = logging.getLogger(__name__)
 DEFAULT_AGENT_CONCURRENCY = 8
@@ -160,6 +160,12 @@ class InferenceWorker:
             return
         text, generation, usage, finish_reason = "", None, None, None
         call_id, diagnostics = None, None
+
+        def complete(status: str, **outcome) -> bool | None:
+            # Contention rolls back only the completion transaction; it is retried with the same outcome, never the call.
+            return persist_completion(lambda: self.state.finish(row, status, **outcome), stopped=self._stop.is_set,
+                                      warning="Run result persistence is busy; retained result will be retried")
+
         submitted, reason = False, "worker_interrupted"
         last_flush = 0.0
         first_token = False
@@ -204,8 +210,7 @@ class InferenceWorker:
                     with suppress(asyncio.CancelledError):
                         await task
                     self.state.progress(row, text, generation, usage)
-                    self.state.finish(
-                        row,
+                    complete(
                         "interrupted" if reason == "worker_interrupted" else "cancelled",
                         usage=usage,
                         no_charge=not submitted,
@@ -220,21 +225,20 @@ class InferenceWorker:
                 raise ProviderError("output_token_limit" if finish_reason == "length" else "provider_" + finish_reason)
             if not text.strip():
                 raise ProviderError("empty_response")
-            self.state.finish(row, "succeeded", usage=usage)
+            complete("succeeded", usage=usage)
         except asyncio.CancelledError:
             task.cancel()
             with suppress(asyncio.CancelledError, ProviderError, StoreError):
                 await task
             self.state.progress(row, text, generation, usage)
-            self.state.finish(row, "interrupted", usage=usage, no_charge=not submitted, error="worker_interrupted")
+            complete("interrupted", usage=usage, no_charge=not submitted, error="worker_interrupted")
         except (ProviderError, StoreError) as exc:
             task.cancel()
             with suppress(asyncio.CancelledError, ProviderError, StoreError):
                 await task
             # No upstream exception body, prompt, header, or key is a public error.
             self.state.progress(row, text[:MAX_OUTPUT_CHARS], generation, usage)
-            self.state.finish(
-                row,
+            complete(
                 "failed",
                 usage=usage,
                 no_charge=not submitted or isinstance(exc, ProviderError) and exc.no_charge,
@@ -247,12 +251,14 @@ class InferenceWorker:
 
                 with self.state.store.transaction() as db:
                     outcome = dict(db.execute("SELECT * FROM llm_runs WHERE id=?", (row["id"],)).fetchone())
-                UsageStore(self.state.store).finish_call(
-                    call_id,
-                    status=outcome["status"],
-                    usage=usage,
-                    provider_generation_id=generation,
-                    diagnostics=diagnostics,
-                    no_charge=outcome["accounting_state"] == "released",
-                    error_code=outcome["error_code"],
-                )
+                # A run whose completion stopped for shutdown stays running; restart recovery closes it and its call.
+                if outcome["status"] != "running":
+                    UsageStore(self.state.store).finish_call(
+                        call_id,
+                        status=outcome["status"],
+                        usage=usage,
+                        provider_generation_id=generation,
+                        diagnostics=diagnostics,
+                        no_charge=outcome["accounting_state"] == "released",
+                        error_code=outcome["error_code"],
+                    )

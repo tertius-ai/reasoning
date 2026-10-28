@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
+import sqlite3
 import time
 
 from ..agents.contracts import AgentEventKind, AgentRunSpec, PreparedAgentRun, PromptBinding, RunBudget, ToolBinding
@@ -14,6 +16,9 @@ from .research_goals import ResearchGoals
 from .research_provider import ResearchCompletion
 from .research_tools import ResearchTools
 from .store import StoreError
+from .worker_poll import database_busy, persist_completion
+
+logger = logging.getLogger(__name__)
 
 
 class TurnSuspended(BaseException):
@@ -332,8 +337,7 @@ class ResearchAgent:
                     "tool_budget_exhausted": bool(result.metadata.get("tool_budget_exhausted")),
                 })
             cancelled_status = "interrupted" if self.stop_requested() else "cancelled"
-            self.inference.finish(
-                self.row,
+            if self._finish(
                 "succeeded" if completed else cancelled_status if self.cancelled else "failed",
                 usage=usage,
                 no_charge=self.client.no_charge,
@@ -341,7 +345,8 @@ class ResearchAgent:
                 if self.cancelled
                 else failure,
                 accounting_unknown=unknown,
-            )
+            ) is None:
+                return
             if not completed:
                 with self.store.transaction(write=True) as db:
                     db.execute(
@@ -350,25 +355,41 @@ class ResearchAgent:
                     )
         except TurnSuspended as suspension:
             self._event("waiting", {"reason": str(suspension)})
-            self.inference.finish(self.row, "succeeded", usage=self.client.aggregate(), no_charge=self.client.no_charge,
-                                  accounting_unknown=any(not error["no_charge"] for error in self.client.errors))
+            self._finish("succeeded", usage=self.client.aggregate(), no_charge=self.client.no_charge,
+                         accounting_unknown=any(not error["no_charge"] for error in self.client.errors))
         except Exception as exc:
             usage = self.client.aggregate()
-            self.inference.finish(
-                self.row,
+            if self._finish(
                 "interrupted" if self.stop_requested() else "cancelled" if self._stopped() else "failed",
                 usage=usage,
                 no_charge=self.client.no_charge,
                 error=self._cancel_reason() if self.cancelled else self.client.failure_code or "agent_execution_error",
                 accounting_unknown=any(not error["no_charge"] for error in self.client.errors),
-            )
+            ) is None:
+                return
             self._event("failed", {"reason": self.client.failure_code or "agent_execution_error",
                 "exception_type": type(exc).__name__
                 if isinstance(exc, (ValueError, TypeError, KeyError, StoreError)) else "InternalError"})
         finally:
             from .research_reviews import ResearchReviews
 
-            ResearchReviews(self.inference).finish(self.row)
+            try:
+                ResearchReviews(self.inference).finish(self.row)
+            except sqlite3.OperationalError as error:
+                if not database_busy(error):
+                    raise
+                # The transaction rolled back. Maintenance finds terminal reviewer
+                # runs and retries only their review bookkeeping, never the model.
+                logger.warning("Review completion is busy; retained work will be retried")
+
+    def _finish(self, status, **outcome):
+        """Complete the run, retrying only its atomic transaction on contention and retaining the outcome and paid usage.
+
+        Returns whether the run was completed here (False: another attempt or path already fenced it), or None when
+        retries stopped for shutdown. Only None ends the turn early; a fenced run still records its failure.
+        """
+        return persist_completion(lambda: self.inference.finish(self.row, status, **outcome), stopped=self.stop_requested,
+                                  warning="Native result persistence is busy; retained result will be retried")
 
     def _compaction_complete(self, payload, timeout):
         import asyncio
