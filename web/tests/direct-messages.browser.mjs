@@ -47,6 +47,14 @@ test("a member messages a colleague from People, who finds, reads and replies, t
     // People doubles as the inbox: there is no separate conversation list, and + messages any member.
     await visible(owner.getByRole("complementary", { name: "Online people and bots" }).getByRole("button", { name: "New direct message", exact: true }));
     assert.equal(await owner.getByRole("navigation", { name: "Direct messages" }).count(), 0);
+    // The People header's buttons are the same 24px squares as the sidebar header's.
+    const headerButtons = await Promise.all(["New project", "Organization information", "New direct message", "Collapse online sidebar"]
+      .map(name => owner.getByRole("button", { name, exact: true }).evaluate(button => {
+        const box = button.getBoundingClientRect(), style = getComputedStyle(button);
+        return { width: box.width, height: box.height, border: style.borderTopColor, radius: style.borderTopLeftRadius, size: style.fontSize };
+      })));
+    for (const button of headerButtons) assert.deepEqual(button, headerButtons[0]);
+    assert.equal(headerButtons[0].width, 24); assert.equal(headerButtons[0].height, 24);
 
     await owner.getByRole("button", { name: "Account menu", exact: true }).click();
     await owner.getByRole("button", { name: "Administration" }).click();

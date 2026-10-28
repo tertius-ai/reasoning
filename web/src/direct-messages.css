@@ -1,6 +1,5 @@
 /* Copyright Benjamin Antieau and Deven Manam. SPDX-License-Identifier: Apache-2.0 */
-.org-presence-actions { display: flex; align-items: center; gap: 4px; }
-.org-app .org-direct-new { min-height: 24px; padding: 0 8px; font-size: 14px; line-height: 1; }
+.org-presence-actions { display: flex; align-items: center; gap: 5px; }
 .org-direct-picker { display: block; padding: 8px 2px 4px; }
 .org-direct-marks { display: flex; flex: none; align-items: center; gap: 4px; }
 .org-direct-marks .org-private-mark { margin-left: 0; font-size: 11px; }
