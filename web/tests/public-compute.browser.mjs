@@ -137,6 +137,16 @@ test("rendered compute policy, enrollment, shared replay/output, cancellation an
     await member.getByLabel("Compute image", { exact: true }).selectOption(image.id);
     await member.getByLabel("Program language", { exact: true }).selectOption("sage");
     await member.getByLabel("Compute program", { exact: true }).fill("# Protocol fixture only; no execution\nprint(2 + 2)");
+    const resourceDetails = member.locator("details").filter({ has: member.locator("summary", { hasText: "Resource limits and quota" }) });
+    assert.equal(await resourceDetails.evaluate(element => element.open), false);
+    assert.equal(await member.getByLabel("Wall time (seconds)", { exact: true }).isVisible(), false);
+    await resourceDetails.locator(":scope > summary").click();
+    await member.getByLabel("Wall time (seconds)", { exact: true }).fill("0");
+    await resourceDetails.locator(":scope > summary").click();
+    await member.getByRole("button", { name: "Submit computation", exact: true }).click();
+    assert.equal(await resourceDetails.evaluate(element => element.open), true);
+    await member.getByLabel("Wall time (seconds)", { exact: true }).fill("60");
+    await resourceDetails.locator(":scope > summary").click();
     const requests = []; let hideHistory = true;
     await member.route(`**/api${root}/topics/${topic.id}/compute-jobs*`, async (route) => {
       if (route.request().method() === "GET" && hideHistory) { await route.fulfill({ json: [] }); return; }
@@ -161,8 +171,18 @@ test("rendered compute policy, enrollment, shared replay/output, cancellation an
     assert.equal(requests.length, 2); assert.deepEqual(requests[0], requests[1]);
     const jobs = await call(root + "/topics/" + topic.id + "/compute-jobs", undefined, "GET");
     assert.equal(jobs.length, 1); const job = jobs[0];
+    assert.equal(job.parameters.resources.wall_time_seconds, 60);
+    const memberCard = member.locator('[data-activity-id="compute:' + job.id + '"] .org-run-message');
+    const details = memberCard.getByText("Computation details", { exact: true }).locator("..");
+    await details.waitFor({ state: "visible" });
+    assert.equal(await details.evaluate(element => element.open), false);
+    assert.equal(await memberCard.getByText("Resource limits", { exact: true }).isVisible(), false);
+    assert.equal(await memberCard.getByRole("heading", { name: "Files", exact: true }).count(), 0);
+    assert.equal(await memberCard.getByText(/Exit code pending|Elapsed pending|No committed artifacts/).count(), 0);
     const claimed = await call("/worker/claim", {}, "POST", enrollment.token);
     assert.equal(claimed.id, job.id); const lease = { attempt_id: claimed.attempt_id, lease: claimed.lease };
+    await memberCard.getByRole("status").filter({ hasText: "Running" }).waitFor();
+    assert.equal(await memberCard.getByRole("button", { name: "Stop this computation", exact: true }).isVisible(), true);
     const workerPath = "/worker/jobs/" + job.id;
     await call(workerPath + "/logs", { ...lease, chunk_index: 0, text: "Protocol output only. <script>not HTML</script>\n" }, "POST", enrollment.token);
     const payload = Buffer.from("Untrusted protocol artifact, not a CAS result.");
@@ -173,6 +193,9 @@ test("rendered compute policy, enrollment, shared replay/output, cancellation an
     await call(workerPath + "/finish", { ...lease, status: "succeeded", elapsed_ms: 1000, exit_code: 0 }, "POST", enrollment.token);
     await until(async () => (await member.getByLabel("Compute logs", { exact: true }).textContent()).includes("<script>not HTML</script>"), "plain output");
     assert.equal(await member.locator(".org-compute-detail script").count(), 0);
+    await details.locator(":scope > summary").click();
+    assert.equal(await details.getByText(job.id, { exact: true }).isVisible(), true);
+    await details.locator(":scope > summary").click();
     {
       const card = viewer.locator('[data-activity-id="compute:' + job.id + '"] .org-run-message');
       await card.waitFor(); if (!await card.evaluate(element => element.open)) await card.locator(":scope > summary").click();
@@ -189,6 +212,17 @@ test("rendered compute policy, enrollment, shared replay/output, cancellation an
     await until(() => stopComputation.isEnabled(), "the queued computation's card stop is enabled");
     await stopComputation.click();
     await until(async () => (await call(root + "/topics/" + topic.id + "/compute-jobs", undefined, "GET"))[0].status === "cancelled", "queued cancellation");
+    // Failed setup can charge the full reservation; it is not measured wall time.
+    const failed = await call(root + "/topics/" + topic.id + "/compute-jobs", { ...requests[0], client_id: "failed-setup-fixture" });
+    const failedClaim = await call("/worker/claim", {}, "POST", enrollment.token);
+    assert.equal(failedClaim.id, failed.id);
+    const failedReceipt = await call("/worker/jobs/" + failed.id + "/finish", { attempt_id: failedClaim.attempt_id, lease: failedClaim.lease,
+      status: "failed", elapsed_ms: 60000, exit_code: null, error_code: "execution_failed" }, "POST", enrollment.token);
+    const failedCard = member.locator('[data-activity-id="compute:' + failed.id + '"] .org-run-message');
+    await failedCard.getByRole("status").filter({ hasText: "Computation failed" }).waitFor();
+    const elapsed = Math.max(0, failedReceipt.finished_at - failedReceipt.started_at);
+    assert.equal((await failedCard.getByRole("status").textContent()).trim(), `Computation failed · ${Math.floor(elapsed / 60)}m ${elapsed % 60}s elapsed`);
+    assert.equal(await failedCard.getByLabel("Compute logs", { exact: true }).textContent(), "No output recorded.");
     await stop(); await start(); await viewer.reload();
     await viewer.getByRole("heading", { name: "γ-Shared computation" }).waitFor();
     {
