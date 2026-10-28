@@ -209,6 +209,18 @@ or restart from a new state directory to bypass uncertain cleanup. Credential,
 app, catalog, or resource-profile changes require explicit operator migration;
 the backend will not silently adopt them.
 
+Each relay keeps `modal-last-attempt.json` in its private data directory. It
+records the latest attempt's job, worker, attempt and sandbox IDs, current stage,
+execution outcome, safe error code and exception class, update timestamp, and whether VM cleanup was
+verified. The receipt survives ordinary job settlement; the next attempt replaces
+it. Stages distinguish VM creation, Docker client setup/readiness, image download,
+and execution/result collection. Startup failures also produce one short line in
+the job output, without provider error bodies, credentials, or submitted source.
+Image downloads use Docker's quiet mode and retain their bounded transport and
+timeout. An execution outcome alone does not establish successful VM cleanup.
+These diagnostics require the updated relay runtime; upgrading the website alone
+does not replace the separately installed Modal relay code.
+
 For a first DigitalOcean organization, use
 [interactive Modal setup](deployment.md#modal-in-interactive-setup). On owned
 Linux hardware, install the optional SDK with `uv sync --locked --extra modal` in the

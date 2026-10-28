@@ -4,6 +4,7 @@ import asyncio
 import copy
 import hashlib
 import json
+import time
 from types import SimpleNamespace
 
 import httpx
@@ -89,8 +90,110 @@ def test_run_uses_one_ephemeral_vm_and_existing_digest_pinned_docker_boundary(tm
     outcome = instance.run(job(), tmp_path, logs.append, lambda: False)
     assert outcome.status == "succeeded" and outcome.elapsed_ms == 42
     assert len(sdk.creates) == len(sdk.terminations) == 1
-    assert sdk.commands == [["image", "pull", "--platform", "linux/amd64", IMAGE["reference"]]]
+    assert sdk.commands == [["image", "pull", "--quiet", "--platform", "linux/amd64", IMAGE["reference"]]]
     assert instance.state() == {"phase": "idle"} and logs
+    receipt = json.loads((instance.data_dir / "modal-last-attempt.json").read_bytes())
+    assert receipt["execution_status"] == "succeeded" and receipt["cleanup_verified"] is True
+    assert receipt["stage"] == "execution" and receipt["sandbox_id"] == "sb-fixture"
+    assert logs == [b"nonexecuting Modal transport fixture\n"]
+
+
+@pytest.mark.parametrize("stage,code", [("docker_setup", "docker_unavailable"), ("docker_ready", "invalid_runtime_identity"),
+                                        ("image_pull", "output_limit"), ("image_pull", "wall_time_limit"),
+                                        ("execution", "image_verification_failed")])
+def test_failed_stage_survives_cleanup_with_safe_code_and_one_startup_message(tmp_path, monkeypatch, stage, code):
+    instance, sdk = runner(tmp_path)
+
+    class FailedDocker(DockerFixture):
+        def __init__(self, *args):
+            super().__init__(*args)
+            if stage == "docker_setup":
+                raise RuntimeFault(code)
+
+        def verify_runtime_identity(self):
+            if stage == "docker_ready":
+                raise RuntimeFault(code)
+
+        def _command(self, command, **options):
+            assert "--quiet" in command and options["maximum"] == 65536 and options["timeout"] == 180
+            if stage == "image_pull":
+                raise RuntimeFault(code)
+
+        def run(self, *args):
+            raise RuntimeFault(code)
+
+    if stage == "docker_ready":
+        clock = iter((0, 181))
+        monkeypatch.setattr("reasoning_ledger.server.compute_modal.time", SimpleNamespace(
+            monotonic=lambda: next(clock), time=time.time, sleep=lambda _: None))
+    instance.docker_factory = FailedDocker
+    logs = []
+    outcome = instance.run(job(), tmp_path, logs.append, lambda: False)
+    receipt = json.loads((instance.data_dir / "modal-last-attempt.json").read_bytes())
+    assert receipt["stage"] == stage and receipt["error_code"] == code
+    assert receipt["execution_status"] == "failed" and receipt["cleanup_verified"] is True
+    assert receipt["job_id"] == job()["id"] and receipt["attempt_id"] == job()["attempt_id"]
+    assert outcome.status == "failed" and outcome.elapsed_ms == DEFAULT_RESOURCES["wall_time_seconds"] * 1000
+    assert sdk.terminations == ["sb-fixture"] and instance.state() == {"phase": "idle"}
+    if stage != "execution":
+        assert len(logs) == 1 and code.encode() in logs[0]
+
+
+@pytest.mark.parametrize("error", [OSError("private provider body as_secret sk-secret"), RuntimeFault("as_secret sk-secret")])
+def test_creation_failure_does_not_publish_exception_messages_or_unknown_fault_codes(tmp_path, error):
+    instance, sdk = runner(tmp_path)
+    original = sdk.create
+
+    def fail(*args):
+        original(*args)
+        raise error
+
+    sdk.create = fail
+    logs = []
+    outcome = instance.run(job(), tmp_path, logs.append, lambda: False)
+    data = (instance.data_dir / "modal-last-attempt.json").read_bytes()
+    receipt = json.loads(data)
+    assert receipt["stage"] == "sandbox_create" and receipt["error_code"] == "unexpected_error"
+    assert receipt["exception_type"] == type(error).__name__
+    assert outcome.status == "failed" and receipt["cleanup_verified"] is True
+    assert b"private provider body" not in data + b"".join(logs)
+    assert b"as_secret" not in data + b"".join(logs) and b"sk-secret" not in data + b"".join(logs)
+
+
+def test_uncertain_vm_cleanup_never_records_cleanup_as_verified(tmp_path):
+    instance, sdk = runner(tmp_path)
+    sdk.uncertain = True
+    with pytest.raises(CleanupUncertain):
+        instance.run(job(), tmp_path, lambda _: None, lambda: False)
+    receipt = json.loads((instance.data_dir / "modal-last-attempt.json").read_bytes())
+    assert receipt["cleanup_verified"] is False and instance.state()["phase"] == "creating"
+
+
+def test_diagnostic_symlink_refuses_before_paid_vm_creation(tmp_path):
+    instance, sdk = runner(tmp_path)
+    target = private_file(tmp_path / "private-original", b"unchanged")
+    (instance.data_dir / "modal-last-attempt.json").symlink_to(tmp_path / "private-original")
+    with pytest.raises(OSError):
+        instance.run(job(), tmp_path, lambda _: None, lambda: False)
+    assert sdk.creates == [] and target == (tmp_path / "private-original").read_bytes()
+
+
+def test_sdk_exception_context_retains_only_safe_exception_type(tmp_path):
+    instance, _ = runner(tmp_path)
+
+    def fail(*args):
+        try:
+            raise AttributeError("private provider response and credentials")
+        except AttributeError:
+            raise RuntimeFault("docker_unavailable") from None
+
+    instance.docker_factory = fail
+    logs = []
+    instance.run(job(), tmp_path, logs.append, lambda: False)
+    data = (instance.data_dir / "modal-last-attempt.json").read_bytes()
+    receipt = json.loads(data)
+    assert receipt["exception_type"] == "AttributeError" and receipt["error_code"] == "docker_unavailable"
+    assert b"private provider response" not in data + b"".join(logs)
 
 
 def test_probe_is_not_a_paid_run_and_changed_app_or_credentials_refuse_state(tmp_path):
@@ -184,6 +287,30 @@ def test_modal_outcome_uses_real_worker_delivery_protocol_without_a_second_sandb
     assert fixture.state.job(fixture.user, fixture.org, value["id"])["status"] == "succeeded"
     assert len(sdk.creates) == 1
     client.close()
+
+
+def test_startup_failure_log_and_private_receipt_survive_lost_finish_without_paid_retry(tmp_path, fixture):  # noqa: F811
+    instance, sdk = runner(tmp_path, fixture.config["id"])
+    sdk.lose = True
+    value = fixture.enqueue()
+    wire = StoreTransport(fixture)
+    wire.lose = "/finish"
+    client = WorkerClient(fixture.config, transport=httpx.MockTransport(wire.handle))
+    worker = ComputeWorker(instance.data_dir, fixture.config, client, instance)
+    try:
+        with pytest.raises(Exception, match="server_unavailable"):
+            worker.run(once=True)
+        worker.run(once=True)
+        result = fixture.state.job(fixture.user, fixture.org, value["id"])
+        logs = [entry["event"]["text"] for entry in fixture.state.events(fixture.user, fixture.org, value["id"])
+                if entry["event"]["type"] == "log"]
+        assert result["status"] == "failed" and result["used_cpu_seconds"] == result["reserved_cpu_seconds"]
+        assert logs == ["Compute failed during Modal VM creation (unexpected_error).\n"]
+        assert len(sdk.creates) == 1 and len(sdk.terminations) == 1
+        receipt = json.loads((instance.data_dir / "modal-last-attempt.json").read_bytes())
+        assert receipt["job_id"] == value["id"] and receipt["cleanup_verified"] is True
+    finally:
+        client.close()
 
 
 @pytest.mark.parametrize("changes", [dict(resources={**DEFAULT_RESOURCES, "wall_time_seconds": 86400}),

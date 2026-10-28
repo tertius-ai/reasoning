@@ -17,7 +17,7 @@ from pathlib import Path
 
 from .compute_catalog import REFERENCE, ComputeImage, canonical, fits, resources
 from .compute_docker import HEX_ID, CleanupUncertain, DockerRunner, Outcome, RuntimeFault, container_name
-from .compute_store import ComputeStore
+from .compute_store import ERROR_CODES, ComputeStore
 from .security import private_file
 from .workflow_inputs import input_bytes
 
@@ -25,6 +25,14 @@ from .workflow_inputs import input_bytes
 SUPERVISOR_IMAGE = "docker.io/library/ubuntu@sha256:496754492fb28b4d3049432f2ca787449331e23fb14f0dd3fffea86bf5a93eb4"
 OVERHEAD_SECONDS = 600
 OVERHEAD_MEMORY = 512 * 1024**2
+DIAGNOSTIC_CODES = ERROR_CODES | {
+    "cancelled", "docker_unavailable", "sandbox_unavailable", "modal_unavailable", "output_limit",
+    "invalid_runtime_identity", "runtime_identity_changed", "unbound_runtime_state", "invalid_job",
+}
+STAGE_NAMES = {
+    "sandbox_create": "Modal VM creation", "docker_setup": "Docker client setup",
+    "docker_ready": "Docker readiness", "image_pull": "image download", "execution": "execution and result collection",
+}
 
 
 def sandbox_name(worker, attempt):
@@ -275,6 +283,27 @@ class ModalRunner:
             raise RuntimeFault("invalid_job")
         if stopped():
             raise RuntimeFault("cancelled")
+        diagnostic = {"format": 1, "job_id": job["id"], "worker_id": self.worker_id,
+                      "attempt_id": job["attempt_id"], "sandbox_id": None, "stage": "sandbox_create",
+                      "execution_status": None, "error_code": None, "exception_type": None, "cleanup_verified": False}
+        diagnostic_path = self.data_dir / "modal-last-attempt.json"
+
+        def record(**changes):
+            diagnostic.update(changes, updated_at=int(time.time()))
+            self.write_state(diagnostic_path, diagnostic)
+
+        def failed(code, status, exc):
+            safe_code = code if isinstance(code, str) and code in DIAGNOSTIC_CODES else "unexpected_error"
+            cause = exc.__cause__ or exc.__context__ or exc
+            kind = type(cause).__name__
+            record(error_code=safe_code, execution_status=status,
+                   exception_type=kind if re.fullmatch(r"[A-Za-z_][A-Za-z_0-9]{0,63}", kind) else "Exception")
+            # Startup has produced no program output. Never log provider bodies,
+            # exception messages, environment, source, or credentials.
+            if status == "failed" and diagnostic["stage"] != "execution":
+                log(f"Compute failed during {STAGE_NAMES[diagnostic['stage']]} ({safe_code}).\n".encode())
+
+        record()
         intent = {"phase": "creating", "name": name, "sandbox_id": None, "attempt_id": job["attempt_id"]}
         # A lost creation response is reconciled by name, never by creating again.
         self.write_state(self.journal, intent)
@@ -284,8 +313,10 @@ class ModalRunner:
                 raise RuntimeFault("modal_unavailable")
             intent["sandbox_id"] = sandbox.object_id
             self.write_state(self.journal, intent)
+            record(sandbox_id=sandbox.object_id, stage="docker_setup")
             with tempfile.TemporaryDirectory(prefix="modal-docker-", dir=self.data_dir) as temporary:
                 runner = self.docker_factory(Path(temporary), self.worker_id, self.sdk, sandbox)
+                record(stage="docker_ready")
                 deadline = time.monotonic() + 180
                 while True:
                     if stopped():
@@ -295,23 +326,29 @@ class ModalRunner:
                         break
                     except RuntimeFault:
                         if time.monotonic() >= deadline:
-                            raise RuntimeFault("sandbox_unavailable") from None
+                            raise
                         time.sleep(0.1)
-                runner._command(["image", "pull", "--platform", "linux/amd64", image.reference],
+                record(stage="image_pull")
+                runner._command(["image", "pull", "--quiet", "--platform", "linux/amd64", image.reference],
                                 timeout=180, maximum=65536, stopped=stopped)
+                record(stage="execution")
                 outcome = runner.run(job, spool, log, stopped)
+                record(execution_status=outcome.status, error_code=outcome.error_code)
                 return outcome if outcome.status == "succeeded" else replace(outcome, elapsed_ms=limits["wall_time_seconds"] * 1000)
         except CleanupUncertain:
             raise
         except RuntimeFault as exc:
             status = "cancelled" if exc.code == "cancelled" else "failed"
+            failed(exc.code, status, exc)
             error = None if status == "cancelled" else (
                 "image_verification_failed" if exc.code == "image_verification_failed" else "execution_failed")
             # Failed paid starts must not recycle their entire app reservation.
             return Outcome(status, limits["wall_time_seconds"] * 1000, None, error)
-        except Exception:
+        except Exception as exc:
+            failed("unexpected_error", "failed", exc)
             return Outcome("failed", limits["wall_time_seconds"] * 1000, None, "execution_failed")
         finally:
             # VM termination is the final physical boundary, even if nested
             # Docker removal or result transport fails. Do not rerun any source.
             self.cleanup()
+            record(cleanup_verified=True)
