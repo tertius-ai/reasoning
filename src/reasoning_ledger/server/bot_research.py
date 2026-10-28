@@ -28,7 +28,7 @@ class BotResearch(ResearchTools):
         selected = self.registry
         self.registry = ToolRegistry()
         names = {"web_fetch", "web_search", "math_search", "math_read", "lmfdb_query", "oeis_search", "oeis_lookup",
-                 "compute_catalog", "compute_result", "artifact_read"}
+                 "compute_catalog", "compute_result", "compute_log_read", "artifact_read", "noether_operations"}
         for tool in selected.list():
             if tool.name in names or tool.name.startswith(("arxiv_", "crossref_")):
                 self.registry.register(tool)

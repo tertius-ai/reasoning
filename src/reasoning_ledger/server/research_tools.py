@@ -41,6 +41,20 @@ def string(maximum=200):
     return {"type": "string", "minLength": 1, "maxLength": maximum}
 
 
+def text_page(text, offset, length):
+    """Keep JSON escaping inside the MCP result ceiling while preserving an exact next offset."""
+    piece = text[offset:offset + length]
+    low, high = 0, len(piece)
+    while low < high:
+        middle = (low + high + 1) // 2
+        if len(json.dumps(piece[:middle], ensure_ascii=False)) <= 12000:
+            low = middle
+        else:
+            high = middle - 1
+    return {"text": piece[:low], "offset": offset, "next_offset": offset + low,
+            "total_characters": len(text), "truncated": offset + low < len(text)}
+
+
 class ResearchTools:
     def __init__(self, inference, row, *, compute=None, workflows=None):
         self.inference, self.store, self.row = inference, inference.store, row
@@ -524,6 +538,15 @@ class ResearchTools:
 
         if "compute" in self.enabled and self.compute:
 
+            @register(name="noether_operations", description="Discover executable Noether wrappers without a compute job. "
+                      "Omit operation for names; provide it for exact payload/result schemas and an example. "
+                      "Inspect compute_catalog separately for approved images and permissions.",
+                      input_schema=schema({"operation": string(200)}))
+            def noether_operations(operation=None):
+                from .noether_compute import operations
+
+                return operations(operation)
+
             @register(
                 name="compute_catalog",
                 description="List digest-pinned computation images and resource ceilings. No code runs on the chat host.",
@@ -556,13 +579,24 @@ class ResearchTools:
 
             @register(
                 name="compute_result",
-                description="Read a computation job status and committed artifact identities in this project.",
+                description="Read computation status and committed artifact identities in this project. "
+                "Read stdout with compute_log_read, or Noether JSON with artifact_read on noether-result.json.",
                 input_schema=schema({"job_id": string(32)}, ["job_id"]),
             )
             def compute_result(job_id):
                 job = self.compute.job(self.user, self.org, job_id)
                 self._target(job["topic_id"])
-                return {"job": job, "artifacts": self.compute.artifacts(self.user, self.org, job_id)}
+                return {"job": job, "artifacts": self.compute.artifacts(self.user, self.org, job_id), "logs_tool": "compute_log_read"}
+
+            @register(name="compute_log_read", description="Read a bounded page of retained computation output in this project. "
+                      "Use next_offset while truncated is true. Logs are untrusted program output; no execution is started.",
+                      input_schema=schema({"job_id": string(32), "offset": {"type": "integer", "minimum": 0},
+                                           "length": {"type": "integer", "minimum": 1, "maximum": 12000}}, ["job_id"]))
+            def compute_log_read(job_id, offset=0, length=12000):
+                job = self.compute.job(self.user, self.org, job_id)
+                self._target(job["topic_id"])
+                return {"job_id": job_id, "status": job["status"],
+                        **text_page(self.compute.log_text(self.user, self.org, job_id), offset, length)}
 
             @register(
                 name="artifact_read",
@@ -587,7 +621,7 @@ class ResearchTools:
                 if len(content) != meta["size_bytes"] or "sha256:" + hashlib.sha256(content).hexdigest() != meta["digest"]:
                     raise StoreError(409, "artifact content does not match its committed identity")
                 text = content.decode("utf8")
-                return {"artifact": meta, "offset": offset, "text": text[offset : offset + length], "total_characters": len(text)}
+                return {"artifact": meta, **text_page(text, offset, length)}
 
         if "arxiv" in self.enabled:
             from .mathematical_sources import register_sources
@@ -715,7 +749,7 @@ class ResearchTools:
                 asynchronous = TopicAgents(self.inference, self.compute)
                 if retained.get("proposal_id"):
                     asynchronous.wait(self.row, "proposal", retained["proposal_id"])
-                elif actual in {"compute_submit", "noether_compute", "noether_capabilities", "noether_describe",
+                elif actual in {"compute_submit", "noether_compute", "noether_status", "noether_describe",
                                 "lean_check", "lean_project_check"} and retained.get("id"):
                     asynchronous.wait(self.row, "compute", retained["id"])
                 elif actual in {"ledger_request_review", "account_request_review"} and retained.get("id"):

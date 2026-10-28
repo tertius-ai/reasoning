@@ -316,6 +316,14 @@ class ComputeStore:
                 )
             ]
 
+    def log_text(self, user: str, org: str, job: str) -> str:
+        """Read one authorized snapshot of the job's at-most-one-MiB retained output."""
+        with self.store.transaction() as db:
+            self._access(db, user, org, self._job(db, org, job))
+            return "".join(row[0] for row in db.execute(
+                "SELECT json_extract(event_json,'$.text') FROM compute_events WHERE organization_id=? AND job_id=? "
+                "AND json_extract(event_json,'$.type')='log' ORDER BY sequence", (org, job)))
+
     def cancel(self, user: str, org: str, job: str) -> dict:
         with self.store.transaction(write=True) as db:
             self._expire(db, org)
