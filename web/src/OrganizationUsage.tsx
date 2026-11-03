@@ -4,7 +4,7 @@ import { chatModel, usefulChatModel } from "./modelRecommendations";
 import { InferenceLedger } from "./InferenceLedger";
 import { RetainedWork } from "./RetainedWork";
 import { ModelFeedbackPanel } from "./ChatFeedback";
-import { ApiError, ImpactProfile, ModelBenchmarks, OrganizationPrices, OrganizationUsage as Usage, InferenceConfiguration, RoutingPolicy,
+import { ApiError, ImpactProfile, ModelBenchmarks, OrganizationPrices, OrganizationUsage as Usage, InferenceConfiguration, Retention, RoutingPolicy,
   UsageTotal, CATALOG_MAX_AGE, aborted, errorMessage, forgetSharedRead, modelCatalog, organizationPath, request, sharedRequest, usd } from "./organization-api";
 
 import { estimateLabel } from "./usageFormat";
@@ -73,16 +73,23 @@ export function OrganizationModelBrowser({ organizationId, canManage = false, on
   </section>;
 }
 
+/** The data retention modes as administrators choose them. Every mode denies training on prompts. */
+const RETENTION: Record<Retention, { label: string; help: string }> = {
+  no_training: { label: "No training", help: "Providers that don't train on prompts. Retention follows each provider's policy." },
+  prefer_zdr: { label: "Prefer ZDR", help: "Zero data retention when the model has ZDR providers, otherwise providers that don't train. Never refuses a model." },
+  require_zdr: { label: "Require ZDR", help: "Only zero-data-retention providers. Models without them are not offered." },
+};
+
 function OrganizationRouting({ organizationId, canManage, onAuthLost }: { organizationId: string; canManage: boolean; onAuthLost: () => void }) {
   const [policy, setPolicy] = useState<RoutingPolicy | null>(null), [error, setError] = useState(""), [busy, setBusy] = useState(false);
   useEffect(() => {
     const abort = new AbortController();
     void sharedRequest<InferenceConfiguration>(organizationPath(organizationId) + "/inference-configuration", { maxAge: 2000, signal: abort.signal })
-      .then(value => { if (!abort.signal.aborted) setPolicy(value.routing ?? { strategy: "recommended", zdr: false, region: "global" }); })
+      .then(value => { if (!abort.signal.aborted) setPolicy(value.routing ?? { strategy: "recommended", retention: "prefer_zdr", region: "global" }); })
       .catch(cause => { if (!aborted(cause)) { if (cause instanceof ApiError && cause.status === 401) onAuthLost(); else setError(errorMessage(cause)); } });
     return () => abort.abort();
   }, [organizationId, onAuthLost]);
-  return <details className="org-routing"><summary>Provider routing{policy ? ` · ${policy.strategy}${policy.zdr ? " · ZDR" : ""} · ${policy.region}` : ""}</summary>
+  return <details className="org-routing"><summary>Provider routing{policy ? ` · ${policy.strategy} · ${RETENTION[policy.retention].label} · ${policy.region}` : ""}</summary>
     {policy && <form onSubmit={event => {
       event.preventDefault(); setBusy(true); setError("");
       void request(organizationPath(organizationId) + "/routing", { method: "PUT", body: policy })
@@ -91,10 +98,12 @@ function OrganizationRouting({ organizationId, canManage, onAuthLost }: { organi
       <label>Strategy<select disabled={!canManage || busy} value={policy.strategy} onChange={event => setPolicy({ ...policy, strategy: event.target.value as RoutingPolicy["strategy"] })}>
         <option value="recommended">OpenRouter recommended</option><option value="cheapest">Cheapest compatible</option>
         <option value="latency">Lowest latency</option><option value="throughput">Highest throughput</option></select></label>
-      <label className="org-model-choice"><input type="checkbox" checked={policy.zdr} disabled={!canManage || busy} onChange={event => setPolicy({ ...policy, zdr: event.target.checked })} />Require ZDR; deny data collection</label>
+      <label>Data retention<select disabled={!canManage || busy} value={policy.retention} onChange={event => setPolicy({ ...policy, retention: event.target.value as Retention })}>
+        {(Object.keys(RETENTION) as Retention[]).map(mode => <option key={mode} value={mode}>{RETENTION[mode].label}</option>)}</select></label>
+      <p className="org-help">{RETENTION[policy.retention].help}</p>
       <label>Inference region<select value={policy.region} disabled={!canManage || busy} onChange={event => setPolicy({ ...policy, region: event.target.value as RoutingPolicy["region"] })}>
         <option value="global">Global</option><option value="us">USA</option><option value="eu">EU</option></select></label>
-      <p className="org-help">Regional API routing requires an eligible OpenRouter plan. No silent regional or ZDR fallback. Badges indicate availability, not your enforced policy.
+      <p className="org-help">Regional API routing requires an eligible OpenRouter plan. No silent regional fallback.
         Recommended and speed routing permit eligible providers at their prices; cheapest keeps the quoted price ceiling. Speed preferences are not guarantees.
         Holds are estimates, not charges or invoice caps; use OpenRouter key spending limits.</p>
       {canManage && <button disabled={busy}>Save routing</button>}

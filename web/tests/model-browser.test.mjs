@@ -131,3 +131,29 @@ test("summary JSON has one record per line without changing values; full traces 
   const full = { schema: "reasoning.topic-trace.v2", data: { messages: value.messages }, blobs: {} };
   assert.equal(diagnostics.serializeTopicJSON(full), JSON.stringify(full, null, 2));
 });
+
+test("each model shows what the organization's data retention mode gives its requests", () => {
+  const zdr = { id: "z/zdr", routing_availability: { zdr: true, regions: [] } }, plain = { id: "p/plain", routing_availability: { zdr: false, regions: [] } };
+  assert.equal(models.retentionBadge(zdr, "prefer_zdr"), "ZDR");
+  assert.equal(models.retentionBadge(plain, "prefer_zdr"), "no training");
+  assert.equal(models.retentionBadge(zdr, "no_training"), "no training");
+  assert.equal(models.retentionBadge(plain, "require_zdr"), "ZDR", "Require ZDR offers only zero-data-retention models");
+  assert.equal(models.retentionBadge(zdr, undefined), null);
+  assert.equal(models.retentionBadge({ id: "bot/x", execution_source: "bot" }, "prefer_zdr"), null);
+  const line = (model, retention) => renderToStaticMarkup(React.createElement(models.ModelLine, { id: model.id, model, allowed: true, math: false, retention }));
+  assert.match(line(zdr, "prefer_zdr"), /org-model-retention org-model-zdr[^>]*>ZDR</);
+  assert.match(line(plain, "prefer_zdr"), /class="org-model-retention"[^>]*>no training</);
+  assert.doesNotMatch(line(plain, "prefer_zdr"), /zdr</);
+});
+
+test("an unavailable reply model is named and never silently replaced", () => {
+  const kept = recommendations.keptReplyModel, allowed = ["a/one", "b/two"];
+  assert.deepEqual(kept("b/two", null, "a/one", allowed), { model: "b/two", lost: null });
+  assert.deepEqual(kept("gone/free", null, "a/one", allowed), { model: "", lost: "gone/free" });
+  assert.deepEqual(kept("", "gone/free", "a/one", allowed), { model: "", lost: "gone/free" }, "the notice stays until someone chooses");
+  assert.deepEqual(kept("", "b/two", null, allowed), { model: "b/two", lost: null }, "a model allowed again comes back");
+  assert.deepEqual(kept("", null, "gone/free", allowed), { model: "", lost: "gone/free" });
+  assert.deepEqual(kept("", null, "b/two", allowed), { model: "b/two", lost: null });
+  assert.deepEqual(kept("", null, null, allowed), { model: "a/one", lost: null });
+  assert.deepEqual(kept("bot/local", null, null, allowed), { model: "bot/local", lost: null });
+});

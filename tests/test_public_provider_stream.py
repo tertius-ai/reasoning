@@ -440,7 +440,8 @@ def test_route_not_found_is_free_and_explained_without_provider_text(message, un
     assert error.diagnostics.get("unmatched") == unmatched
     assert KEY not in json.dumps(error.diagnostics) and message not in json.dumps(error.diagnostics)
     if unmatched == "data_policy":
-        assert "privacy settings" in error.diagnostics["action"]
+        assert error.diagnostics["message"] == "This model isn't available under your organization's privacy settings."
+        assert error.diagnostics["action"] == "Nothing was charged. Choose another model."
 
 
 @pytest.mark.parametrize("status", [408, 429, 502, 503])

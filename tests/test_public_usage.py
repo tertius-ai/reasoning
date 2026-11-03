@@ -262,12 +262,15 @@ def test_key_setup_and_new_catalogue_models_need_no_model_policy(installation):
     fixture = Fixture()
     headers = {"Authorization": "Bearer " + owner["access_token"]}
     root = f"/api/organizations/{owner['organization_id']}"
-    prices = fixture.provider.prices
+    prices, account_models = fixture.provider.prices, fixture.provider.account_models
     future = "new-provider/new-model"
 
     async def expanded_prices(**options):
         models = await prices(**options)
         return [*models, {**models[0], "id": future}]
+
+    async def expanded_account_models(credential):
+        return (await account_models(credential) or frozenset()) | {future}
 
     with TestClient(create_app(config, provider=fixture.provider)) as client:
         created = client.post(root + "/provider-keys", headers=headers, json={
@@ -278,11 +281,17 @@ def test_key_setup_and_new_catalogue_models_need_no_model_policy(installation):
         assert client.put(root + "/policy", headers=headers, json={"monthly_budget_microusd": 1_000_000}).status_code == 200
         initial = client.get(root + "/inference-configuration", headers=headers).json()
         assert initial["has_organization_key"] and future not in initial["allowed_models"]
-        fixture.provider.prices = expanded_prices
+        fixture.provider.prices, fixture.provider.account_models = expanded_prices, expanded_account_models
         current = client.get(root + "/inference-configuration", headers=headers).json()
         assert future in current["allowed_models"]
         assert future in client.get(root + "/model-prices", headers=headers).json()["allowed_models"]
         assert client.get(root + "/policy", headers=headers).json()["allowed_models"] == []
+        # A model the account's OpenRouter settings do not allow stays in the catalog but is not offered.
+        fixture.provider.account_models = account_models
+        assert future not in client.get(root + "/inference-configuration", headers=headers).json()["allowed_models"]
+        prices_now = client.get(root + "/model-prices", headers=headers).json()
+        assert future in [model["id"] for model in prices_now["models"]] and future not in prices_now["allowed_models"]
+        assert prices_now["retention"] == "prefer_zdr"
         fresh = client.post("/api/organizations", headers=headers, json={
             "name": "Fresh catalogue access", "credential_mode": "new", "key_label": "All routers",
             "key": "sk-or-fresh-catalogue-key", "monthly_budget_microusd": 1_000_000,

@@ -1,5 +1,5 @@
 import React, { memo, useCallback, useEffect, useId, useMemo, useRef, useState, useSyncExternalStore } from "react";
-import { ModelPrice, ModelBenchmarks, OrganizationPrices, request, errorMessage } from "./organization-api";
+import { ModelPrice, ModelBenchmarks, OrganizationPrices, Retention, request, errorMessage } from "./organization-api";
 import { formatModelPrice } from "./modelPriceFormat";
 import { catalogModel, chatModel, usefulChatModel } from "./modelRecommendations";
 import { availableEfforts } from "./ReasoningEffort";
@@ -40,20 +40,32 @@ export function modelSections(ids: string[], catalog: OrganizationPrices | null,
     section("Other models", () => true)].filter(group => group.ids.length);
 }
 
-export function ModelLine({ id, model, allowed, math, scores }: { id: string; model?: ModelPrice; allowed: boolean; math: boolean; scores?: OrganizationPrices["benchmarks"] }) {
+/**
+ * What a model's requests get under the organization's data retention mode: zero data retention, or providers that
+ * don't train on prompts. None for a bot, or while the mode is unknown.
+ */
+export function retentionBadge(model: ModelPrice | undefined, retention: Retention | undefined): "ZDR" | "no training" | null {
+  if (!model || model.execution_source === "bot" || !retention) return null;
+  return retention === "require_zdr" || retention === "prefer_zdr" && model.routing_availability?.zdr ? "ZDR" : "no training";
+}
+
+export function ModelLine({ id, model, allowed, math, scores, retention }: { id: string; model?: ModelPrice; allowed: boolean; math: boolean;
+  scores?: OrganizationPrices["benchmarks"]; retention?: Retention }) {
   if (model?.execution_source === "bot") return <span className="org-model-line"><strong>{model.name}</strong>
     <span className={model.bot_online === false ? "org-model-unavailable" : "org-model-available"} title={model.bot_online === false
       ? "Bot offline; start its local runner before requesting a reply" : "Advertised by a bot; CLI account capacity is checked locally"}>{model.bot_online === false ? "○" : "✓"}</span>
     <span className="org-model-tags">{model.provider}, local agent, tools</span></span>;
   const tags = [math && "math", model?.weights_repository && "open-weights", model?.supports_reasoning && "reasoning", model?.supports_tools && "tools",
     model?.input_modalities?.includes("image") && "vision"].filter(Boolean).join(", ");
-  const indices = benchmarkScores(id, model, scores);
+  const indices = benchmarkScores(id, model, scores), badge = retentionBadge(model, retention);
   return <span className="org-model-line"><strong title={id}>{id}</strong>
     <span className={allowed && model ? "org-model-available" : "org-model-unavailable"} title={allowed && model
       ? "Listed by OpenRouter; not a live provider or credit check" : allowed ? "Catalog metadata unavailable" : "Not in the current model catalog"}>
       {allowed && model ? "✓" : allowed ? "?" : "×"}</span>
     {tags && <span className="org-model-tags">{tags}</span>}
-    {model?.routing_availability?.zdr && <span className="org-model-route" title="ZDR endpoints available; enforcement is chosen in organization provider routing">zdr</span>}
+    {badge ? <span className={badge === "ZDR" ? "org-model-retention org-model-zdr" : "org-model-retention"} title={badge === "ZDR"
+      ? "Zero data retention: providers keep no prompts or replies" : "Providers don't train on prompts; retention follows each provider's policy"}>{badge}</span>
+      : model?.routing_availability?.zdr && <span className="org-model-route" title="ZDR endpoints available; enforcement is chosen in organization provider routing">zdr</span>}
     {model?.routing_availability?.regions.map(region => <span className="org-model-route" key={region} title={`${region} regional endpoints available; enforcement is chosen in organization provider routing`}>
       {region === "US" ? "🇺🇸" : region === "EU" ? "🇪🇺" : region}</span>)}
     <span className="org-model-price" title="Advertised input/output USD per million tokens">{formatModelPrice(model?.input_usd_per_million ?? null)}/{formatModelPrice(model?.output_usd_per_million ?? null).replace(/^\$/, "")}</span>
@@ -80,7 +92,7 @@ export function ModelDetails({ id, model, catalog }: { id: string; model?: Model
     {model?.weights_repository && <p><a href={`https://huggingface.co/${model.weights_repository}`} target="_blank" rel="noreferrer">Weights repository reported by OpenRouter</a></p>}
     {evidence.map(item => <p key={item.model_id}><a href={item.evidence_url} target="_blank" rel="noreferrer">Mathematical evaluation</a> · {item.evaluated_setting}</p>)}
     {model?.routing_availability && <p>{model.routing_availability.source}. Regional residency may require an eligible OpenRouter plan and regional API origin.
-      Badges describe available routes, not the enforced policy. Choose ZDR and region in organization provider routing.</p>}
+      Data retention and region are chosen in organization provider routing.</p>}
     {model?.routing_availability && <p>Available routing options: {[
       model.routing_availability.zdr && "ZDR", ...model.routing_availability.regions,
     ].filter(Boolean).join(", ") || "Not reported"}.</p>}
@@ -181,7 +193,7 @@ const ModelRow = memo(function ModelRow({ id, catalog, allowed, math, selectable
   savingFavorite: boolean; disabled: boolean; name?: string; onSelect: (id: string) => void; onFavorite: (id: string) => void;
 }) {
   const model = catalogModel(catalog, id);
-  const line = <ModelLine id={id} model={model} allowed={allowed} math={math} scores={catalog?.benchmarks} />;
+  const line = <ModelLine id={id} model={model} allowed={allowed} math={math} scores={catalog?.benchmarks} retention={catalog?.retention} />;
   return <ModelCard details={<ModelDetails id={id} model={model} catalog={catalog} />}>
     <summary>{selectable && <button type="button" className="org-model-favorite" aria-label={`Favorite ${id}`} aria-pressed={favorite}
       disabled={savingFavorite} onClick={event => { event.preventDefault(); event.stopPropagation(); onFavorite(id); }}>{favorite ? "★" : "☆"}</button>}
@@ -257,10 +269,12 @@ export function EffortPicker({ model, catalog, effort, disabled = false, onSelec
   </div>;
 }
 
-export function ModelPicker({ label, models, catalog, value, onChange, disabled = false, children, emptyLabel = "Choose model", effort = "", onEffortChange }: {
+export function ModelPicker({ label, models, catalog, value, onChange, disabled = false, children, emptyLabel = "Choose model", effort = "", onEffortChange, openSignal = 0 }: {
   label: string; models: string[]; catalog: OrganizationPrices | null; value: string; onChange: (id: string) => void;
   disabled?: boolean; children?: React.ReactNode; emptyLabel?: string;
   effort?: string; onEffortChange?: (effort: string) => void;
+  /** Opens the list whenever it changes to a new positive value, as when a refused reply asks for another model. */
+  openSignal?: number;
 }) {
   const [open, setOpen] = useState(false), [query, setQuery] = useState(""), [showAll, setShowAll] = useState(false);
   const [effortModel, setEffortModel] = useState<string | null>(null);
@@ -291,6 +305,12 @@ export function ModelPicker({ label, models, catalog, value, onChange, disabled 
     return () => { document.removeEventListener("pointerdown", close); document.removeEventListener("keydown", escape); window.removeEventListener("resize", place); };
   }, [open]);
   useEffect(() => { if (disabled) setOpen(false); }, [disabled]);
+  useEffect(() => {
+    if (!openSignal || disabled) return;
+    place(); setEffortModel(null); setOpen(true);
+    // Focus the search so a keyboard user lands in the list.
+    requestAnimationFrame(() => menu.current?.querySelector<HTMLInputElement>("input[type=search]")?.focus());
+  }, [openSignal]); // Only a new signal opens the list.
   return <details className="org-model-menu org-shared-model-picker" ref={menu} open={open}>
     <summary role="button" aria-label={label} aria-expanded={open} aria-disabled={disabled}
       onClick={event => { event.preventDefault(); if (!disabled) { place(); setEffortModel(null); setOpen(!open); } }}><span>{value ? modelSelectionLabel(catalog, value, effort) : emptyLabel}</span><span aria-hidden="true">⌃</span></summary>

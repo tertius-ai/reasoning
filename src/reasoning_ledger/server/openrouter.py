@@ -8,8 +8,9 @@ import copy
 import json
 import re
 import time
+from collections import OrderedDict
 from collections.abc import AsyncIterator
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from decimal import ROUND_CEILING, Decimal, InvalidOperation
 from urllib.parse import urlsplit
 
@@ -33,12 +34,36 @@ class ProviderError(Exception):
         self.code, self.no_charge, self.diagnostics = code, no_charge, diagnostics
 
 
+STRATEGIES = ("recommended", "cheapest", "latency", "throughput")
+REGIONS = ("global", "us", "eu")
+# How long providers may keep prompts. Every mode denies training on them.
+RETENTION_MODES = ("no_training", "prefer_zdr", "require_zdr")
+ACCOUNT_MODELS_TTL = 300
+ACCOUNT_MODELS_RETRY = 60
+
+
+def routing_policy(value: object) -> dict:
+    """An organization's provider routing policy, complete and valid.
+
+    A stored policy without a retention mode reads its `zdr` flag: true requires
+    zero data retention, otherwise zero data retention is preferred.
+    """
+    policy = value if isinstance(value, dict) else {}
+    retention = policy.get("retention")
+    if retention not in RETENTION_MODES:
+        retention = "require_zdr" if policy.get("zdr") is True else "prefer_zdr"
+    return {
+        "strategy": policy["strategy"] if policy.get("strategy") in STRATEGIES else "recommended",
+        "retention": retention,
+        "region": policy["region"] if policy.get("region") in REGIONS else "global",
+    }
+
+
 # Why OpenRouter found no endpoint (HTTP 404), read from its message into a fixed set of explanations.
 UNMATCHED = {
     "data_policy": (
-        "OpenRouter found no endpoint for this model that matches the account's data policy.",
-        "Free models usually need free endpoints allowed in OpenRouter's privacy settings; also check this organization's "
-        "zero-data-retention routing, or select another model.",
+        "This model isn't available under your organization's privacy settings.",
+        "Nothing was charged. Choose another model.",
     ),
     "parameters": (
         "OpenRouter found no endpoint for this model that accepts this request's tools or parameters.",
@@ -392,6 +417,8 @@ class Quote:
     routing: dict | None = None
     supports_images: bool = False
     reasoning_efforts: tuple[str, ...] = ()
+    # OpenRouter lists zero-data-retention endpoints for this model.
+    zdr_available: bool = False
 
     @property
     def prompt_caching(self) -> bool:
@@ -407,15 +434,20 @@ class Quote:
             return False
 
     def route(self):
-        policy = self.routing or {"strategy": "cheapest", "zdr": False, "region": "global"}
+        """OpenRouter's provider preferences for this request: providers never train on it, and keep nothing when required.
+
+        Prefer ZDR asks for zero data retention only for a model that has such endpoints, so it never refuses a model.
+        """
+        policy = routing_policy(self.routing) if self.routing else {"strategy": "cheapest", "retention": "prefer_zdr", "region": "global"}
         route = {"allow_fallbacks": True, "require_parameters": True}
         if policy["strategy"] == "cheapest":
             route.update(sort="price", max_price={"prompt": float(money(self.prompt) * 1_000_000),
                 "completion": float(money(self.completion) * 1_000_000)})
         elif policy["strategy"] in {"latency", "throughput"}:
             route["sort"] = policy["strategy"]
-        if policy["zdr"]:
-            route.update(zdr=True, data_collection="deny")
+        if policy["retention"] == "require_zdr" or policy["retention"] == "prefer_zdr" and self.zdr_available:
+            route["zdr"] = True
+        route["data_collection"] = "deny"
         return route
 
     def origin(self, default):
@@ -517,6 +549,8 @@ class OpenRouter:
         self._prices_retry_at = 0
         self.prices_fetched_at = None
         self.catalog_models: list[str] = []
+        self._account_models: OrderedDict[str, tuple[float, frozenset[str] | None]] = OrderedDict()
+        self._account_lock = asyncio.Lock()
 
     def client(self) -> httpx.AsyncClient:
         return httpx.AsyncClient(
@@ -619,9 +653,52 @@ class OpenRouter:
                         reasoning_efforts=tuple(reasoning_efforts(row)),
                     )
                 )
-            return result
         except (httpx.HTTPError, ValueError, KeyError, TypeError, AttributeError, RecursionError) as exc:
             raise ProviderError("catalog_unavailable", no_charge=True) from exc
+        zdr = (await self.routing_availability())["zdr"] or set()
+        return [replace(quote, zdr_available=quote.model in zdr) for quote in result]
+
+    async def account_models(self, credential: tuple[str, str] | None) -> frozenset[str] | None:
+        """Models the key's account may use under its OpenRouter privacy and provider settings; None when unknown.
+
+        A read of OpenRouter's account-filtered catalog, never a model request. A failed read keeps the
+        last known list and is retried after a minute.
+        """
+        if credential is None:
+            return None
+        identity, key = credential
+        async with self._account_lock:
+            now = self._clock()
+            prior = self._account_models.get(identity)
+            if prior is not None and prior[0] > now:
+                self._account_models.move_to_end(identity)
+                return prior[1]
+            models = None
+            try:
+                if any(ord(char) < 32 or ord(char) > 126 for char in key):
+                    raise ValueError("invalid key")
+                async with self.client() as client, client.stream(
+                    "GET", self.base_url + "/models/user", headers={"Authorization": "Bearer " + key}, timeout=10,
+                ) as response:
+                    if response.status_code == 200:
+                        body = json.loads(await self._bounded(response, 8 * 1024 * 1024))
+                        rows = body.get("data") if isinstance(body, dict) else None
+                        if isinstance(rows, list):
+                            # An empty list would hide every model; it is treated as unknown.
+                            models = frozenset(row["id"] for row in rows
+                                               if isinstance(row, dict) and isinstance(row.get("id"), str)) or None
+            except (httpx.HTTPError, ProviderError, ValueError, TypeError, RecursionError):
+                # Provider error bodies and credentials never enter logs or caches.
+                models = None
+            if models is None:
+                entry = (now + ACCOUNT_MODELS_RETRY, prior[1] if prior is not None else None)
+            else:
+                entry = (now + ACCOUNT_MODELS_TTL, models)
+            self._account_models[identity] = entry
+            self._account_models.move_to_end(identity)
+            while len(self._account_models) > 128:
+                self._account_models.popitem(last=False)
+            return entry[1]
 
     async def routing_availability(self):
         async with self._routing_lock:

@@ -203,7 +203,7 @@ Provider routing in Model capabilities offers recommended, cheapest, lowest
 latency, and highest throughput strategies. Existing organization policy is
 retained. Cheapest keeps the quoted price ceiling; the speed strategies permit
 other eligible providers at their advertised prices and do not guarantee a
-particular response time. Required ZDR and regional routing are retained.
+particular response time. Data retention and regional routing are retained.
 See [OpenRouter provider routing](https://openrouter.ai/docs/guides/routing/provider-selection).
 
 Each new provider call records time to its first content, reasoning, or tool
@@ -547,11 +547,18 @@ providers. Provider redirects and environment proxy credentials are not used.
 
 An administrator chooses routing under **Model capabilities → Provider routing**
 or `PUT /api/organizations/{organization_id}/routing`, with `strategy` of
-`recommended` (default) or `cheapest`, `zdr` boolean, and `region` of `global`
+`recommended` (default), `cheapest`, `latency` or `throughput`, `retention` of
+`no_training`, `prefer_zdr` (default) or `require_zdr`, and `region` of `global`
 (default), `us`, or `eu`. The policy is captured in each accepted run's quote;
 changing it does not silently reroute accepted work. All modes permit fallback
 only within required parameters and privacy rules, without changing the model.
-ZDR sets `provider.zdr=true` and `data_collection=deny`. US/EU use fixed regional
+Every retention mode sends `data_collection=deny`, so providers that train on
+prompts are never used. Require ZDR also sends `provider.zdr=true`. Prefer ZDR
+sends `provider.zdr=true` only when the model appears in OpenRouter's
+zero-data-retention catalog (`/models?zdr=true`, cached for five minutes), so it
+never refuses a model for lacking ZDR endpoints. A stored policy without
+`retention` reads its `zdr` flag: true is Require ZDR, otherwise Prefer ZDR.
+US/EU use fixed regional
 OpenRouter HTTPS origins and require an eligible provider account; unsupported
 routes fail rather than falling back globally. Cheapest sorts by price and keeps
 the quoted input/output ceiling. Recommended leaves sorting to OpenRouter and
@@ -628,8 +635,9 @@ the provider allowance. These refusals release the rejected call's estimate and
 are not automatically retried.
 A 404, when OpenRouter finds no endpoint for the model and request, can include
 an `unmatched` enum read from its message: `data_policy` (the account's privacy
-settings or zero-data-retention routing exclude every endpoint; free models
-usually need free endpoints allowed in OpenRouter's privacy settings),
+settings or zero-data-retention routing exclude every endpoint; the reply shows
+"not sent" and, on the topic's latest reply, offers to send the same request
+with an allowed model or to choose another),
 `parameters` (no endpoint accepts the request's tools or parameters),
 `providers` (the key's provider settings exclude every endpoint), or `model`
 (OpenRouter does not recognize the model).
@@ -737,8 +745,21 @@ successful reads cache for one day, failed reads retry after five minutes, and
 stale snapshots expire after seven days. These benchmarks are not measurements
 of this installation's research harness.
 
-Optional ZDR and US/EU badges come from OpenRouter's documented filtered public
-catalog queries (`zdr=true`, `region=us`, `region=eu`), cached for five minutes.
+Model pickers offer only the models the organization's OpenRouter account may
+use: `allowed_models` in `inference-configuration` and `model-prices` is the
+catalog filtered by OpenRouter's account-specific `/models/user` list, read with
+the organization's active key, cached for five minutes per key, and kept when a
+refresh fails (retried after a minute). An empty or unreadable list filters
+nothing. Under Require ZDR, models outside the zero-data-retention catalog are
+also left out. Hidden models stay in `model-prices.models`, so existing runs and
+topics still show their metadata. A topic whose reply model is no longer allowed
+says so above the message box and selects no model until someone chooses one.
+
+Each picker row shows what its requests get under the organization's retention
+mode (`model-prices.retention`): **ZDR**, or **no training** when providers may
+retain prompts under their own policies. Optional US/EU badges come from
+OpenRouter's documented filtered public catalog queries (`zdr=true`,
+`region=us`, `region=eu`), cached for five minutes.
 Failed metadata reads leave availability unknown. These indicate endpoints are
 available, not that a particular request uses them: no country is inferred from
 the model author or chat-server location. Regional routing may require an eligible

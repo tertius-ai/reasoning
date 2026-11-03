@@ -10,7 +10,7 @@ from dataclasses import replace
 from datetime import UTC, datetime
 
 from .inference_credit import lock as credit_lock
-from .openrouter import OUTPUT_RESERVATION_TOKENS, Quote, Usage
+from .openrouter import OUTPUT_RESERVATION_TOKENS, REGIONS, RETENTION_MODES, STRATEGIES, Quote, Usage, routing_policy
 from .provider_keys import active_key
 from .store import Store, StoreError, _id, _row
 
@@ -116,16 +116,15 @@ class InferenceStore:
             return {
                 "allowed_models": list(models) if models is not None else getattr(self.store, "_model_catalog", json.loads(policy[0])),
                 "model_access": "all_available",
-                "routing": json.loads(policy[1]),
+                "routing": routing_policy(json.loads(policy[1])),
                 "has_organization_key": has_key,
                 **self._balance(db, org),
             }
 
-    def set_routing(self, user, org, strategy, zdr, region):
-        if (strategy not in {"recommended", "cheapest", "latency", "throughput"}
-                or type(zdr) is not bool or region not in {"global", "us", "eu"}):
+    def set_routing(self, user, org, strategy, retention, region):
+        if strategy not in STRATEGIES or retention not in RETENTION_MODES or region not in REGIONS:
             raise StoreError(400, "invalid provider routing policy")
-        policy = {"strategy": strategy, "zdr": zdr, "region": region}
+        policy = {"strategy": strategy, "retention": retention, "region": region}
         with self.store.transaction(write=True) as db:
             self.store._require(db, user, org, admin=True)
             db.execute("UPDATE organizations SET routing_policy_json=? WHERE id=?", (json.dumps(policy), org))

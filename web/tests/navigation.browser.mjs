@@ -38,7 +38,7 @@ test("phone toolbar retains every action and scoped navigation survives refresh"
       else if (path.endsWith("/model-prices")) data = { models: [{ id: "provider/model", name: "Test model", supports_tools: true,
         provider: "provider", description: "", input_modalities: ["text"], output_modalities: ["text"], supported_parameters: ["tools"] }],
         allowed_models: ["provider/model"], fetched_at: 1791547200, source: "fixture" };
-      else if (path.endsWith("/inference-configuration")) data = { routing: { strategy: "recommended", zdr: false, region: "global" } };
+      else if (path.endsWith("/inference-configuration")) data = { routing: { strategy: "recommended", retention: "prefer_zdr", region: "global" } };
       await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(data) });
     });
     await page.goto(server.resolvedUrls.local[0] + "organization.html");
