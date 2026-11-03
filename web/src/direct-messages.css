@@ -73,6 +73,9 @@
 .direct-file { display:flex; flex-direction:column; gap:6px; max-width:min(100%, 26rem); text-align:left; }
 .direct-file-row { display:flex; align-items:center; gap:10px; padding:7px 12px 7px 8px; border:1px solid var(--border); border-radius:12px; background:var(--surface); }
 .direct-file-icon { display:grid; place-items:center; flex:none; width:28px; height:34px; border-radius:4px; background:color-mix(in srgb, var(--red, #e5484d) 22%, var(--surface)); color:var(--red, #e5484d); font:600 9px/1 var(--font-mono); }
+/* Markdown and TeX share the PDF badge's shape in their own colours. */
+.direct-file-icon[data-kind="MD"] { background:color-mix(in srgb, var(--teal) 22%, var(--surface)); color:var(--teal); }
+.direct-file-icon[data-kind="TEX"] { background:color-mix(in srgb, var(--blue) 22%, var(--surface)); color:var(--blue); }
 .direct-file-text { display:flex; flex-direction:column; min-width:0; }
 .direct-file-text strong { font-weight:500; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .direct-file-text small { color:var(--muted); }

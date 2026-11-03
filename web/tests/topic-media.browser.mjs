@@ -20,7 +20,7 @@ function pdf() {
   return Buffer.from(body + `trailer\n<< /Size 6 /Root 1 0 R >>\nstartxref\n${xref}\n%%EOF\n`);
 }
 
-test("real browser uploads, scoped image rendering, local PDF canvas/text and Markdown previews", { timeout: 60000 }, async () => {
+test("real browser uploads, scoped image rendering, local PDF canvas/text, Markdown and TeX previews", { timeout: 60000 }, async () => {
   const entry = `import React, {useState} from "react"; import {createRoot} from "react-dom/client";
 import {AttachmentButton,MediaScope} from "/src/TopicMedia.tsx"; import {ResearchMarkdown} from "/src/MathematicsBrowser.tsx";
 function Fixture(){ const [text,setText]=useState(''); return React.createElement(MediaScope.Provider,{value:{organizationId:'${org}',topicId:'${topic}'}},
@@ -55,7 +55,7 @@ createRoot(document.getElementById('root')).render(React.createElement(Fixture))
           assert.equal(createHash("sha256").update(file.bytes).digest("hex"), file.sha256);
           const url = `/api/organizations/${org}/topics/${topic}/media/${match[1]}/${file.sha256}/content`;
           file.extraction = file.mime === "application/pdf" ? { status: "ready", method: "server", pages_read: 1, total_pages: 1 }
-            : file.mime === "text/markdown" ? { status: "ready", method: "text", truncated: false } : undefined;
+            : ["text/markdown", "application/x-tex"].includes(file.mime) ? { status: "ready", method: "text", truncated: false } : undefined;
           data = { ...file, chunks: undefined, bytes: undefined, id: match[1], url, markdown: `![${file.name}](${url})` };
         } else if (action.endsWith("/read")) data = { mime: file.mime, size_bytes: file.size_bytes, extraction: file.extraction };
         else if (action.endsWith("/content")) {
@@ -101,6 +101,20 @@ createRoot(document.getElementById('root')).render(React.createElement(Fixture))
     assert.equal(await preview.locator("img,b").count(), 0, "a previewed file shows no images or raw HTML");
     await page.getByRole("link", { name: "Download Markdown" }).waitFor();
     if (process.env.MEDIA_SCREENSHOT) await page.locator(".topic-markdown").screenshot({ path: process.env.MEDIA_SCREENSHOT });
+    // A .tex file is its own source: recognised by its extension, shown as text with light colouring, never compiled.
+    const source = "\\section{Higher regulators}\n% TODO: cite Borel\nThe regulator $r_{\\mathcal D}$ is injective, 50\\% of the time.\n";
+    await input.setInputFiles({ name: "regulators.tex", mimeType: "", buffer: Buffer.from(source) });
+    await page.getByText("regulators.tex", { exact: true }).waitFor();
+    assert.equal([...uploads.values()][3].mime, "application/x-tex");
+    await page.getByText("TeX source available for research · 1 KB.", { exact: true }).waitFor();
+    await page.getByText("regulators.tex", { exact: true }).click();
+    const tex = page.getByLabel("TeX source", { exact: true });
+    await tex.waitFor();
+    assert.equal((await tex.innerText()).trimEnd(), source.trimEnd(), "the source shows exactly as uploaded");
+    assert.deepEqual(await tex.locator(".topic-tex-command").allInnerTexts(), ["\\section", "\\%"], "a command inside math is coloured as math");
+    assert.deepEqual(await tex.locator(".topic-tex-comment").allInnerTexts(), ["% TODO: cite Borel"]);
+    assert.deepEqual(await tex.locator(".topic-tex-math").allInnerTexts(), ["$r_{\\mathcal D}$"]);
+    await page.getByRole("link", { name: "Download TeX" }).waitFor();
     const unavailable = `/api/organizations/${org}/topics/${topic}/media/${"f".repeat(32)}/${"a".repeat(64)}/content`;
     await page.getByLabel("Markdown", { exact: true }).fill(`![private](${unavailable})`);
     await page.getByText("Attachment unavailable", { exact: true }).waitFor();
