@@ -11,6 +11,7 @@ import time
 from ..agents.contracts import AgentEventKind, AgentRunSpec, PreparedAgentRun, PromptBinding, RunBudget, ToolBinding
 from ..agents.native import ReasoningNativeExecutor
 from ..agents.research_memory import memory_from_reply
+from .openrouter import MAX_TURN_SECONDS
 from .research_context import COMPACTION_PROMPT, ResearchContext, encoded, token_bound
 from .research_goals import ResearchGoals
 from .research_provider import ResearchCompletion
@@ -52,7 +53,8 @@ def execution_error(result, finish_reason):
 
 
 class ResearchAgent:
-    def __init__(self, inference, provider, row, quote, *, compute=None, workflows=None, stopped=None, timeout=1800, spans=None):
+    def __init__(self, inference, provider, row, quote, *, compute=None, workflows=None, stopped=None,
+                 timeout=MAX_TURN_SECONDS, spans=None):
         self.inference, self.store, self.row, self.quote = inference, inference.store, row, quote
         self.spans = spans
         self.context = ResearchContext(self.store)
@@ -94,7 +96,7 @@ class ResearchAgent:
             # spend the whole allowance before writing it. Only an advertised effort is sent: routes require parameters.
             if self.quote.reasoning_efforts:
                 payload["reasoning"] = {"effort": self.quote.reasoning_efforts[0]}
-            result = self.client.complete(payload, timeout=min(1800, max(1, self.deadline - time.monotonic())))
+            result = self.client.complete(payload, timeout=min(MAX_TURN_SECONDS, max(1, self.deadline - time.monotonic())))
             # Mark purpose on the ledger before submission, not after its completion.
             sources = {message["id"] for message in batch}
             if memory:

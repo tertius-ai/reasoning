@@ -556,6 +556,20 @@ def test_timeout_closes_transport_and_preserves_known_or_unknown_cost(installati
         worker.stop()
 
 
+def test_a_model_turn_may_run_for_sixty_minutes(installation):
+    from reasoning_ledger.server.research_agent import ResearchAgent
+
+    _, state, _, owner, topics = prepare(installation)
+    provider = Fixture().provider
+    assert InferenceWorker(state, provider).timeout == 3600
+    with pytest.raises(ValueError):
+        InferenceWorker(state, provider, timeout=3601)
+    enqueue(state, owner, topics[1]["id"], models=MODELS[:1])
+    row = state.claim()
+    agent = ResearchAgent(state, provider, row, Quote(**json.loads(row["quote_json"])))
+    assert 3599 < agent.deadline - time.monotonic() <= 3600, "a research turn also gets sixty minutes by default"
+
+
 def test_failed_worker_start_releases_exclusive_lock(installation, monkeypatch):
     _, state, _, _, _ = prepare(installation)
     worker = InferenceWorker(state, Fixture().provider)

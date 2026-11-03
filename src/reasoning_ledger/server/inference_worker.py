@@ -14,7 +14,7 @@ from contextlib import suppress
 
 from .inference_store import MAX_OUTPUT_CHARS, InferenceStore
 from .inference_timing import Spans
-from .openrouter import OpenRouter, ProviderError, Quote
+from .openrouter import MAX_TURN_SECONDS, OpenRouter, ProviderError, Quote
 from .security import private_file
 from .store import StoreError
 from .worker_poll import claim_work, database_poll, persist_completion
@@ -25,8 +25,9 @@ SETTLEMENT_INTERVAL = 15
 
 
 class InferenceWorker:
-    def __init__(self, state: InferenceStore, provider: OpenRouter, *, concurrency: int = DEFAULT_AGENT_CONCURRENCY, timeout: float = 1800):
-        if not 1 <= concurrency <= 256 or not 1 <= timeout <= 3600:
+    def __init__(self, state: InferenceStore, provider: OpenRouter, *, concurrency: int = DEFAULT_AGENT_CONCURRENCY,
+                 timeout: float = MAX_TURN_SECONDS):
+        if not 1 <= concurrency <= 256 or not 1 <= timeout <= MAX_TURN_SECONDS:
             raise ValueError("inference worker concurrency/timeout out of range")
         self.state, self.provider = state, provider
         self.concurrency, self.timeout = concurrency, timeout
