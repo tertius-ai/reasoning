@@ -15,6 +15,7 @@ import { editMentions, encodeMentions, MentionBinding } from "./composerMentions
 import { Brand } from "./Brand";
 import { ComputeConversation } from "./ComputeConversation";
 import { DirectConversation, DirectMessageMarks, DirectMessagePicker, NewDirectMessageButton, directPath, directUnread, directUnreadTotal, peopleInbox } from "./DirectMessages";
+import { AttachFilesButton, MAX_DIRECT_ATTACHMENTS, PendingFile, PendingFiles, pendingFile } from "./DirectMedia";
 import { KnowledgeLinks, KnowledgeView } from "./KnowledgeLinks";
 import { ReplyBar, ReplyPointer, ThreadCount, ThreadDialog, continuesRun, threadReplyCounts } from "./MessageReplies";
 import { additionReceipt, modelName, moveBlocked, moveTarget, replyThreads, shownInReply, stepCount, threadAnswering } from "./ReplyAdditions";
@@ -36,7 +37,7 @@ import { TopicCopyButton, TopicSystemPrompt } from "./TopicDiagnostics";
 import { NavigationUsage, readNavigation, saveNavigation, Spend } from "./navigationState";
 import { ThemeToggle } from "./ThemeToggle";
 import { ShortcutsHelp, SlashCommandPalette, TOPIC_COMMANDS, TopicCommand, dispatchTopicCommand, useTopicCommand } from "./TopicCommands";
-import { AttachmentButton, MarkdownMedia, MediaScope, uploadMedia } from "./TopicMedia";
+import { MarkdownMedia, MediaScope, uploadMedia } from "./TopicMedia";
 import { ReturnIcon } from "./ComposerIcons";
 import { TexRequestDialog, texRequest } from "./TexRequestDialog";
 import { EmailVerification, VerifyEmailBanner } from "./EmailVerification";
@@ -731,9 +732,11 @@ function PresenceSidebar({ organizationId, open, onClose, onAuthLost, userId, on
   </aside>;
 }
 
-function Conversation({ organizationId, topic, members, user, canWrite, canManage, draft, updateDraft, anchor, focus, referenceTargets = [], menuTarget = null, onPreference, onForked, onAuthLost, modelAttempt, onModelAttempt, computeAttempt, onComputeAttempt, workflowAttempt, onWorkflowAttempt, workflowExecutionAttempt, onWorkflowExecutionAttempt }: {
+function Conversation({ organizationId, topic, members, user, canWrite, canManage, draft, updateDraft, files, changeFiles, anchor, focus, referenceTargets = [], menuTarget = null, onPreference, onForked, onAuthLost, modelAttempt, onModelAttempt, computeAttempt, onComputeAttempt, workflowAttempt, onWorkflowAttempt, workflowExecutionAttempt, onWorkflowExecutionAttempt }: {
   organizationId: string; topic: Topic; members: Member[]; user: Account; canWrite: boolean; canManage: boolean;
   draft: Draft; updateDraft: (draft: Draft) => void; anchor: number | null;
+  /** Files waiting to be sent with this topic's draft; `changeFiles` always changes this topic's, even after a switch. */
+  files: PendingFile[]; changeFiles: (change: (files: PendingFile[]) => PendingFile[]) => void;
   /** A linked message: the conversation opens around it, scrolls to it and highlights it. */
   focus?: string;
   /** The topic details card in the top bar, where research items appear. */
@@ -1147,18 +1150,21 @@ function Conversation({ organizationId, topic, members, user, canWrite, canManag
   };
   const send = async (event?: React.FormEvent) => {
     event?.preventDefault();
-    if (!canWrite || sending || !online || !draft.text.trim() || (topic.kind === "beta" && !!modelAttempt)) return;
-    const command = TOPIC_COMMANDS.find(command => draft.text.trim().toLowerCase() === "/" + command.id
+    if (!canWrite || sending || !online || (!draft.text.trim() && !files.length) || uploading || (topic.kind === "beta" && !!modelAttempt)) return;
+    const command = !files.length && TOPIC_COMMANDS.find(command => draft.text.trim().toLowerCase() === "/" + command.id
       && (command.kinds as readonly string[]).includes(topic.kind));
     if (command) { chooseCommand(command.id); return; }
-    if (topic.kind === "beta") {
+    if (topic.kind === "beta" && !files.length) {
       const objective = goalCommand(draft.text);
       if (objective !== null) { setGoalDraft(objective); return; }
     }
     const attempt = prepareMessageAttempt(draft);
     updateDraft(attempt); setSending(true); setError(""); setAddNotice("");
     try {
-      const wireText = encodeMentions(attempt.text, attempt.mentions);
+      // The files follow the text as references, as a link pasted into the box always did.
+      const sent = new Set(files.map(file => file.key));
+      const wireText = [encodeMentions(attempt.text, attempt.mentions), ...files.flatMap(file => file.markdown ? [file.markdown] : [])]
+        .filter(Boolean).join("\n\n");
       const body = { content: wireText, client_id: attempt.clientId, ...(attempt.replyTo ? { reply_to: attempt.replyTo } : {}) };
       let addedTo = topic.kind === "beta" ? attempt.addTo : undefined, message: Message;
       try {
@@ -1171,6 +1177,11 @@ function Conversation({ organizationId, topic, members, user, canWrite, canManag
         setAddNotice(`${finished ? modelName(finished.root.model) : "The model"}'s reply finished first, so this was sent as a new question.`);
         message = await request<Message>(root + "/messages", { method: "POST", body });
       }
+      // Sent files leave the box even if the topic was switched meanwhile; ones added while sending stay.
+      changeFiles(current => current.filter(file => {
+        if (sent.has(file.key) && file.preview) URL.revokeObjectURL(file.preview);
+        return !sent.has(file.key);
+      }));
       if (!alive.current) return;
       setMessages((existing) => mergeMessages(existing, [message]));
       // The incremental cursor advances only from a contiguous poll page, not a
@@ -1322,16 +1333,34 @@ function Conversation({ organizationId, topic, members, user, canWrite, canManag
           }} onAuthLost={onAuthLost} onMarkUnread={() => markUnread(message)} />
       </article></React.Fragment>; })}</div></> }));
   }, [messages, reactions, workflowRunKey, topic.kind, topic.id, mentionPeople, tones, members, user.id, organizationId, canWrite, canReplyAgain, onAuthLost, focus, highlighted, unreadFrom, threadKey]);
+  // Chosen files wait as chips above the text, each uploading on its own, and are sent with the message.
+  const uploading = files.some(file => !file.markdown);
+  const freshDraft = () => { if (currentDraft.current.attempted) updateDraft({ ...currentDraft.current, clientId: crypto.randomUUID(), attempted: false }); };
+  const attachFiles = (chosen: File[]) => {
+    const change = changeFiles, room = MAX_DIRECT_ATTACHMENTS - files.length;
+    setError(chosen.length > room ? `A message can carry at most ${MAX_DIRECT_ATTACHMENTS} files.` : "");
+    const pending = chosen.slice(0, Math.max(0, room)).map(file => ({ file, item: pendingFile(file) }));
+    change(current => [...current, ...pending.map(({ item }) => item)]);
+    const settle = (key: string, value: Partial<PendingFile>) => change(current => current.map(file => file.key === key ? { ...file, ...value } : file));
+    for (const { file, item } of pending) {
+      void uploadMedia(file, organizationId, topic.id).then(value => settle(item.key, { markdown: value.markdown }), cause => {
+        if (cause instanceof ApiError && cause.status === 401) onAuthLost();
+        settle(item.key, { error: errorMessage(cause) });
+      });
+    }
+    freshDraft();
+    requestAnimationFrame(() => textarea.current?.focus());
+  };
+  const removeFile = (key: string) => {
+    changeFiles(current => current.filter(file => {
+      if (file.key === key && file.preview) URL.revokeObjectURL(file.preview);
+      return file.key !== key;
+    }));
+    freshDraft();
+  };
   // The plus sits under the box beside the model picker in AI chats, and inside the box on its left everywhere else.
-  const attach = <span ref={attachmentControl} className="org-composer-attach"><AttachmentButton organizationId={organizationId} topicId={topic.id}
-    disabled={!canWrite || sending || (topic.kind === "beta" && !!modelAttempt)} onError={cause => {
-      if (cause instanceof ApiError && cause.status === 401) onAuthLost();
-    }} onInsert={markdown => {
-      const previous = currentDraft.current, text = previous.text + (previous.text ? "\n\n" : "") + markdown;
-      updateDraft({ text, clientId: crypto.randomUUID(), attempted: false, mentions: previous.mentions,
-        replyTo: previous.replyTo, addTo: previous.addTo });
-      requestAnimationFrame(() => textarea.current?.focus());
-    }} /></span>;
+  const attach = <span ref={attachmentControl} className="org-composer-attach"><AttachFilesButton
+    disabled={!canWrite || sending || (topic.kind === "beta" && !!modelAttempt)} onFiles={attachFiles} /></span>;
   return <MediaScope.Provider value={{ organizationId, topicId: topic.id, canWrite }}><section className="org-conversation" aria-label="Topic conversation">
     {texOpen && <TexRequestDialog bots={botModels} names={botNames} onClose={() => setTexOpen(false)} onPrepare={(source, bot) => {
       const label = `@${botNames[bot.bot_id] ?? bot.name}`;
@@ -1379,7 +1408,7 @@ function Conversation({ organizationId, topic, members, user, canWrite, canManag
       {orderedActivity([...messageActivity, ...workflowActivity, ...computeActivity, ...betaActivity, ...botActivity])
         .map(item => <div key={item.id} data-activity-id={item.id}>{item.body}</div>)}
       {topic.kind === "beta" && <BetaConversation organizationId={organizationId} topicId={topic.id} userId={user.id}
-        canWrite={canWrite} canManage={canManage} online={online} toolbarTarget={composerButton} hidePlay={Boolean(draft.text.trim())}
+        canWrite={canWrite} canManage={canManage} online={online} toolbarTarget={composerButton} hidePlay={Boolean(draft.text.trim() || files.length)}
         attempt={modelAttempt} onAttempt={onModelAttempt} onAuthLost={onAuthLost} onActivity={setBetaActivity} wake={activityWake}
         onRuns={setBetaRuns} stopRef={stopReply} addingTo={adding?.root.id} onAddTo={onAddTo} onUndoAddition={undoFromReply} names={memberNames}
         transcript={transcript} onReplyPending={refreshMessages} />}
@@ -1408,7 +1437,7 @@ function Conversation({ organizationId, topic, members, user, canWrite, canManag
       {topic.kind === "gamma" && <WorkflowConversation organizationId={organizationId} topicId={topic.id} userId={user.id} menuTarget={menuTarget}
         canWrite={canWrite} canManage={canManage} attempt={workflowAttempt} onAttempt={onWorkflowAttempt}
         executionAttempt={workflowExecutionAttempt} onExecutionAttempt={onWorkflowExecutionAttempt} onAuthLost={onAuthLost} toolbarTarget={composerButton}
-        hidePlay={Boolean(draft.text.trim())} onActivity={setWorkflowActivity} />}
+        hidePlay={Boolean(draft.text.trim() || files.length)} onActivity={setWorkflowActivity} />}
       {topic.kind !== "alpha" && <ComputeConversation organizationId={organizationId} topicId={topic.id} userId={user.id}
         canWrite={canWrite} canManage={canManage} attempt={computeAttempt} onAttempt={onComputeAttempt} onAuthLost={onAuthLost} toolbarTarget={composerTools} onActivity={setComputeActivity} />}
     <form className="org-composer" onSubmit={(event) => void send(event)}>
@@ -1422,6 +1451,7 @@ function Conversation({ organizationId, topic, members, user, canWrite, canManag
             ?? adding.root.created_at ?? 0) * 1000).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" })} question</span>
         <button type="button" aria-label="Stop adding" title="Back to a new question · Esc" onClick={cancelAdding}>×</button></div>}
       {draft.replyTo && <ReplyBar original={replyOriginal} label={replyOriginal && authorLabel(replyOriginal, members)} onCancel={cancelReply} />}
+      <PendingFiles files={files} onRemove={removeFile} />
       <label className="org-visually-hidden" htmlFor="org-message">Message</label>
       <div className="org-composer-row">{(topic.kind !== "beta" || adding) && attach}<div className="org-composer-input"><MentionMirror ref={mirror} text={draft.text} bindings={draft.mentions} self={user.id} />
       <textarea id="org-message" ref={textarea} onScroll={event => { if (mirror.current) mirror.current.scrollTop = event.currentTarget.scrollTop; }} placeholder={!canWrite ? "You have read-only access" : topic.kind === "beta" && modelAttempt
@@ -1465,9 +1495,10 @@ function Conversation({ organizationId, topic, members, user, canWrite, canManag
         }} /></div>
         {/* One button: the return symbol is grey with an empty box and active with text; while work runs it is Stop. */}
         <div className="org-composer-send">
-          {(topic.kind === "alpha" || draft.text.trim()) && <button className="org-composer-button org-send-play"
-            aria-label={sending ? "Sending…" : draft.attempted ? "Retry send" : "Send"} title={draft.attempted ? "Retry send" : "Send message"}
-            disabled={!canWrite || sending || !online || !draft.text.trim() || (topic.kind === "beta" && !!modelAttempt)}>
+          {(topic.kind === "alpha" || draft.text.trim() || files.length > 0) && <button className="org-composer-button org-send-play"
+            aria-label={sending ? "Sending…" : uploading ? "Waiting for uploads" : draft.attempted ? "Retry send" : "Send"}
+            title={uploading ? "Wait for the uploads to finish, or remove the failed ones" : draft.attempted ? "Retry send" : "Send message"}
+            disabled={!canWrite || sending || !online || (!draft.text.trim() && !files.length) || uploading || (topic.kind === "beta" && !!modelAttempt)}>
             {sending ? <span aria-hidden="true">…</span> : <ReturnIcon />}</button>}
           {topic.kind !== "alpha" && <div className="org-composer-transport" ref={setComposerButton} />}
         </div></div>
@@ -1644,6 +1675,8 @@ export function OrganizationApp({ user, onAccount, onAuthenticated, onSignedOut,
   const [direct, setDirect] = useState<string | null>(null);
   const [directConversations, setDirectConversations] = useState<DirectConversation[]>([]);
   const [drafts, setDrafts] = useState<Record<string, Draft>>({});
+  // Each topic's files waiting to be sent, kept beside its draft so an upload that finishes later lands in its own topic.
+  const [composerFiles, setComposerFiles] = useState<Record<string, PendingFile[]>>({});
   const [modelAttempts, setModelAttempts] = useState<Record<string, PendingModelAttempt | undefined>>({});
   const [computeAttempts, setComputeAttempts] = useState<Record<string, ComputeAttempt | undefined>>({});
   const [workflowAttempts, setWorkflowAttempts] = useState<Record<string, WorkflowAttempt | undefined>>({});
@@ -2008,7 +2041,9 @@ export function OrganizationApp({ user, onAccount, onAuthenticated, onSignedOut,
           computeAttempt={computeAttempts[draftKey]} onComputeAttempt={(value) => setComputeAttempts((existing) => ({ ...existing, [draftKey]: value }))}
           workflowAttempt={workflowAttempts[draftKey]} onWorkflowAttempt={(value) => setWorkflowAttempts((existing) => ({ ...existing, [draftKey]: value }))}
           workflowExecutionAttempt={workflowExecutionAttempts[draftKey]} onWorkflowExecutionAttempt={(value) => setWorkflowExecutionAttempts((existing) => ({ ...existing, [draftKey]: value }))}
-          updateDraft={(value) => setDrafts((existing) => ({ ...existing, [draftKey]: value }))} anchor={selection?.anchor ?? null} onPreference={preferenceRefresh}
+          updateDraft={(value) => setDrafts((existing) => ({ ...existing, [draftKey]: value }))}
+          files={composerFiles[draftKey] ?? []}
+          changeFiles={change => setComposerFiles(existing => ({ ...existing, [draftKey]: change(existing[draftKey] ?? []) }))} anchor={selection?.anchor ?? null} onPreference={preferenceRefresh}
           onForked={(id) => { void request<Hierarchy>(organizationPath(organization.id) + "/hierarchy").then((tree) => {
             setHierarchy(tree); select(id); preferenceRefresh();
           }).catch((cause) => setError(errorMessage(cause))); }} onAuthLost={authLost} />

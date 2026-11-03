@@ -1,12 +1,13 @@
 # Pictures, PDFs, Markdown and TeX
 
-Attach a PNG, JPEG, WebP, PDF or Markdown (`.md`, `.markdown`) file in an alpha, beta or gamma topic. The attachment
-control uploads the file privately and inserts a Markdown reference in the
-composer. Sending that message makes the attachment part of the conversation.
-The `/attach` command opens the same file chooser in every topic kind.
-Pictures display inline; PDFs expand into the local PDF.js canvas reader, and Markdown
-files expand into the same Markdown and KaTeX rendering as messages, without raw HTML
-or images. Raw
+Attach a PNG, JPEG, WebP, PDF, Markdown (`.md`, `.markdown`) or TeX (`.tex`) file in an alpha, beta or gamma topic
+or a direct message. The attachment control takes up to ten files at once and uploads each privately. Each waits as a
+chip above the message text, showing its upload, with × to remove it; send waits until every upload has finished, and
+a failed upload must be removed first. Sending adds each file to the message as a Markdown reference after the text,
+which makes the attachment part of the conversation. The `/attach` command opens the same file chooser in every topic
+kind. Pictures display inline; PDFs expand into the local PDF.js canvas reader; Markdown files expand into the same
+Markdown and KaTeX rendering as messages, without raw HTML or images; TeX files expand into their source, with
+commands, math and comments lightly coloured. TeX is never compiled. Raw
 HTML, SVG, remote images, tracking pixels and remote PDF embedding are disabled.
 Research files includes the current topic's attachments alongside project text
 files, including editable `.tex` sources.
@@ -35,8 +36,9 @@ extraction from the original attachment through its PDF controls. Scanned pages
 need OCR or a TeX/text source. Compatible uploader text is retained as an explicitly
 partial fallback when server extraction fails.
 
-A Markdown upload must be UTF-8 without NUL characters. Its own text, up to 2 MiB, is
-what models read; there is no extraction step, and `media_read` pages through it.
+A Markdown or TeX upload must be UTF-8 without NUL characters. Its own text, up to 2 MiB, is
+what models read; there is no extraction step, and `media_read` pages through it. TeX
+files are stored as `application/x-tex` and are read as source, not compiled.
 
 Extracted text and its mathematical content remain unverified. Native models
 receive text rather than original PDF bytes; authorized CLI bots can download

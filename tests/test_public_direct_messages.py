@@ -404,6 +404,9 @@ def test_direct_files_are_readable_only_by_the_two_participants(people):
     notes = upload(people, direct["id"], b"# Seminar notes\n\n$x^2$", "notes.md", "text/markdown")
     assert notes.status_code == 200 and notes.json()["mime"] == "text/markdown", notes.text
     assert upload(people, direct["id"], b"\xff\xfe", "bad.md", "text/markdown").status_code == 400
+    source = upload(people, direct["id"], b"\\section{Seminar}\n$x^2$", "seminar.tex", "application/x-tex")
+    assert source.status_code == 200 and source.json()["mime"] == "application/x-tex", source.text
+    assert upload(people, direct["id"], b"\xff\xfe", "bad.tex", "application/x-tex").status_code == 400
     # Organization owners and administrators are not participants, and the bytes are not topic media.
     for outsider in (people["owner"], people["admin"]):
         assert outsider.get(file["url"]).status_code == 404

@@ -15,8 +15,13 @@ export type MediaFile = { id: string; name: string; mime: string; sha256: string
 const PdfViewer = lazy(() => import("./PdfViewer").then(module => ({ default: module.PdfViewer })));
 const IMAGE_TYPES = new Set(["image/png", "image/jpeg", "image/webp"]);
 export const MARKDOWN_TYPE = "text/markdown";
-/** The file chooser's filter; browsers often report no type for a Markdown file, so its extensions are listed too. */
-export const ATTACHMENT_ACCEPT = "image/png,image/jpeg,image/webp,application/pdf,text/markdown,.md,.markdown";
+export const TEX_TYPE = "application/x-tex";
+/** The file chooser's filter; browsers often report no type for Markdown or TeX files, so their extensions are listed too. */
+export const ATTACHMENT_ACCEPT = "image/png,image/jpeg,image/webp,application/pdf,text/markdown,.md,.markdown,application/x-tex,text/x-tex,.tex";
+/** What the attach button offers, said once for its tooltip and refusals. */
+export const ATTACHMENT_KINDS = "pictures, PDFs, Markdown or TeX";
+/** The short badge a file without a thumbnail shows, and the colour family it uses. */
+export const fileBadge = (mime: string) => mime.startsWith("image/") ? "IMG" : mime === MARKDOWN_TYPE ? "MD" : mime === TEX_TYPE ? "TEX" : "PDF";
 const REF = /^\/api\/organizations\/([a-f0-9]{32})\/topics\/([a-f0-9]{32})\/media\/([a-f0-9]{32})\/([a-f0-9]{64})\/content$/;
 export function mediaReference(url: string | undefined, organizationId?: string) {
   const match = REF.exec(url ?? "");
@@ -49,6 +54,9 @@ function EmbeddedMedia({ src, alt }: { src: string; alt: string }) {
   if (mime === MARKDOWN_TYPE) return <div className="topic-pdf topic-markdown"><p role="status">{markdownLabel(size, extraction)}</p>
     <details onToggle={event => setExpanded(event.currentTarget.open)}><summary>{alt || "Markdown"}</summary>
     {expanded && <><MarkdownPreview url={src} /><a href={src} download={alt || true}>Download Markdown</a></>}</details></div>;
+  if (mime === TEX_TYPE) return <div className="topic-pdf topic-tex"><p role="status">{texLabel(size, extraction)}</p>
+    <details onToggle={event => setExpanded(event.currentTarget.open)}><summary>{alt || "TeX"}</summary>
+    {expanded && <><TexPreview url={src} /><a href={src} download={alt || true}>Download TeX</a></>}</details></div>;
   return <span role="status">Loading attachment…</span>;
 }
 
@@ -58,8 +66,8 @@ const previewComponents = {
   a: ({ href, children }: { href?: string; children?: React.ReactNode }) => <a href={href} target="_blank" rel="noopener noreferrer">{children}</a>,
 };
 
-/** An attached Markdown file, rendered as messages are: GitHub-flavoured Markdown and KaTeX, without raw HTML or images. */
-export function MarkdownPreview({ url }: { url: string }) {
+/** An attached text file's own text, fetched when its preview opens; `failed` when it cannot be read. */
+function useAttachmentText(url: string) {
   const [text, setText] = useState<string | null>(null), [failed, setFailed] = useState(false);
   React.useEffect(() => {
     const controller = new AbortController();
@@ -68,15 +76,48 @@ export function MarkdownPreview({ url }: { url: string }) {
       .then(setText).catch(cause => { if (cause?.name !== "AbortError") setFailed(true); });
     return () => controller.abort();
   }, [url]);
+  return { text, failed };
+}
+
+/** An attached Markdown file, rendered as messages are: GitHub-flavoured Markdown and KaTeX, without raw HTML or images. */
+export function MarkdownPreview({ url }: { url: string }) {
+  const { text, failed } = useAttachmentText(url);
   if (failed) return <p className="org-help">Markdown preview unavailable</p>;
   if (text === null) return <span role="status">Loading Markdown…</span>;
   return <div className="topic-markdown-preview"><ReactMarkdown remarkPlugins={[remarkGfm, remarkMath]} rehypePlugins={[rehypeKatex]}
     skipHtml components={previewComponents}>{normalizeMathDelimiters(text)}</ReactMarkdown></div>;
 }
 
+// Comments, commands (including escaped characters such as \%), and inline or display math, in the order TeX reads them.
+const TEX_TOKEN = /(%[^\n]*)|(\\(?:[A-Za-z@]+\*?|.))|(\$\$[\s\S]*?\$\$|\$(?:\\.|[^$\\\n])*\$)/g;
+
+/** TeX source split into plain text and the parts it colours: comments, commands and math. Nothing is interpreted. */
+export function texTokens(source: string): { kind: "text" | "comment" | "command" | "math"; text: string }[] {
+  const tokens: { kind: "text" | "comment" | "command" | "math"; text: string }[] = [];
+  let last = 0;
+  for (const match of source.matchAll(TEX_TOKEN)) {
+    if (match.index! > last) tokens.push({ kind: "text", text: source.slice(last, match.index) });
+    tokens.push({ kind: match[1] ? "comment" : match[2] ? "command" : "math", text: match[0] });
+    last = match.index! + match[0].length;
+  }
+  if (last < source.length) tokens.push({ kind: "text", text: source.slice(last) });
+  return tokens;
+}
+
+/** An attached TeX file shown as its source, with comments, commands and math lightly coloured. */
+export function TexPreview({ url }: { url: string }) {
+  const { text, failed } = useAttachmentText(url);
+  if (failed) return <p className="org-help">TeX preview unavailable</p>;
+  if (text === null) return <span role="status">Loading TeX…</span>;
+  return <pre className="topic-tex-preview" aria-label="TeX source">{texTokens(text).map((token, index) => token.kind === "text"
+    ? token.text : <span key={index} className={"topic-tex-" + token.kind}>{token.text}</span>)}</pre>;
+}
+
 const kilobytes = (bytes: number) => bytes < 1024 * 1024 ? Math.max(1, Math.round(bytes / 1024)) + " KB" : (bytes / 1024 / 1024).toFixed(1) + " MB";
 export const markdownLabel = (size: number, value?: Extraction | null) => value?.truncated
   ? `Text available for research up to its first 2 MiB · ${kilobytes(size)}.` : `Text available for research · ${kilobytes(size)}.`;
+export const texLabel = (size: number, value?: Extraction | null) => value?.truncated
+  ? `TeX source available for research up to its first 2 MiB · ${kilobytes(size)}.` : `TeX source available for research · ${kilobytes(size)}.`;
 
 export function MarkdownMedia({ src, alt }: { src?: string; alt?: string }) {
   const scope = useContext(MediaScope);
@@ -117,13 +158,14 @@ export function extractionLabel(value?: Extraction | null): string {
 }
 
 export const attachmentMime = (file: File) => /\.(md|markdown)$/i.test(file.name) ? MARKDOWN_TYPE
-  : file.type || (file.name.toLowerCase().endsWith(".pdf") ? "application/pdf" : "");
+  : /\.tex$/i.test(file.name) || file.type === "text/x-tex" ? TEX_TYPE
+    : file.type || (file.name.toLowerCase().endsWith(".pdf") ? "application/pdf" : "");
 
 /** Chunked upload to a media collection (`root` ends in `/media`); `finish` supplies the body that completes it. */
 export async function uploadAttachment<T>(file: File, root: string, finish: (mime: string) => Promise<object> = async () => ({})): Promise<T> {
   const mime = attachmentMime(file);
-  if ((!IMAGE_TYPES.has(mime) && mime !== "application/pdf" && mime !== MARKDOWN_TYPE) || file.size < 1 || file.size > 8 * 1024 * 1024) {
-    throw new Error("Choose a PNG, JPEG, WebP, PDF or Markdown file of at most 8 MiB.");
+  if ((!IMAGE_TYPES.has(mime) && mime !== "application/pdf" && mime !== MARKDOWN_TYPE && mime !== TEX_TYPE) || file.size < 1 || file.size > 8 * 1024 * 1024) {
+    throw new Error("Choose a PNG, JPEG, WebP, PDF, Markdown or TeX file of at most 8 MiB.");
   }
   const bytes = new Uint8Array(await file.arrayBuffer());
   const sha256 = Array.from(new Uint8Array(await crypto.subtle.digest("SHA-256", bytes)), byte => byte.toString(16).padStart(2, "0")).join("");
@@ -147,8 +189,8 @@ export function AttachmentButton({ organizationId, topicId, onInsert, onError, d
   organizationId: string; topicId: string; onInsert: (markdown: string) => void; onError?: (error: unknown) => void; disabled?: boolean;
 }) {
   const input = useRef<HTMLInputElement>(null), [busy, setBusy] = useState(false), [error, setError] = useState("");
-  return <span className="topic-attachment-control"><button type="button" className="org-upload-plus" disabled={disabled || busy} aria-label="Attach picture, PDF or Markdown"
-    title="Attach picture, PDF or Markdown" onClick={() => input.current?.click()}>{busy ? <span aria-hidden="true">…</span> : <PlusIcon />}</button>
+  return <span className="topic-attachment-control"><button type="button" className="org-upload-plus" disabled={disabled || busy} aria-label="Attach a file"
+    title="Attach a picture, PDF, Markdown or TeX file" onClick={() => input.current?.click()}>{busy ? <span aria-hidden="true">…</span> : <PlusIcon />}</button>
     <input hidden ref={input} type="file" accept={ATTACHMENT_ACCEPT} onChange={event => {
       const file = event.target.files?.[0]; event.target.value = ""; if (!file) return;
       setBusy(true); setError(""); void uploadMedia(file, organizationId, topicId).then(value => {

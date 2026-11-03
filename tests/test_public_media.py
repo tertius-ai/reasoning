@@ -295,7 +295,7 @@ def test_markdown_must_be_utf8_without_nul_and_its_model_text_is_bounded(install
     topic = structure(client, org)[2][0]["id"]
     media = ResearchMedia(store)
     for body in (b"caf\xe9 latin-1", b"text\x00with NUL", PNG):
-        with pytest.raises(StoreError, match="image, PDF or Markdown format"):
+        with pytest.raises(StoreError, match="image, PDF, Markdown or TeX format"):
             upload(media, owner, topic, body, "text/markdown", "bad.md")
     # A multibyte character straddling the 2 MiB boundary is dropped whole, never split.
     long = ("x" * (2 * 1024 * 1024 - 1) + "é" + "y" * 1000).encode()
@@ -304,6 +304,30 @@ def test_markdown_must_be_utf8_without_nul_and_its_model_text_is_bounded(install
     text = media.read(user, org, topic, result["id"], result["sha256"])
     assert text["total_characters"] == 2 * 1024 * 1024 - 1
     assert client.get(result["url"]).content == long, "the original bytes stay complete"
+
+
+TEX_SOURCE = ("\\section{Higher regulators}\n\\begin{theorem}\\label{thm:inj}\n"
+              "The regulator $r_{\\mathcal D}$ is injective. Café.\n\\end{theorem}\n").encode()
+
+
+def test_tex_upload_is_its_own_source_for_reading_and_models(installation):
+    _, store, client, owner = installation
+    org, user = owner["organization_id"], owner["user_id"]
+    topic = structure(client, org)[2][0]["id"]
+    media = ResearchMedia(store)
+    result = upload(media, owner, topic, TEX_SOURCE, "application/x-tex", "regulators.tex", preview_text="An uploader's summary.")
+    assert result["mime"] == "application/x-tex" and result["markdown"] == f"![regulators.tex]({result['url']})"
+    assert result["extraction"] == {"status": "ready", "method": "text", "truncated": False}
+    read = media.read(user, org, topic, result["id"], result["sha256"])
+    assert read["text"] == TEX_SOURCE.decode() and read["inspection"] == "TeX source text as uploaded"
+    blob = client.get(result["url"])
+    assert blob.content == TEX_SOURCE and blob.headers["content-type"].startswith("application/x-tex")
+    with store.transaction() as db:
+        messages, references, _ = attachment_context(store, db, user, org, [{"content": result["markdown"]}], QUOTES[:1], 100000)
+    assert references[0]["sha256"] == result["sha256"] and "\\section{Higher regulators}" in messages[0]["content"]
+    for body in (b"caf\xe9 latin-1", b"text\x00with NUL", PNG):
+        with pytest.raises(StoreError, match="image, PDF, Markdown or TeX format"):
+            upload(media, owner, topic, body, "application/x-tex", "bad.tex")
 
 
 def test_bad_formats_hashes_oversized_images_and_paths_are_refused(installation):

@@ -112,7 +112,7 @@ test("a model's answer replies to its prompt, a reply to the answer asks a follo
     const dialog = page.getByRole("dialog", { name: "Thread", exact: true });
     await dialog.getByText("3 messages", { exact: true }).waitFor();
     const reply = dialog.getByLabel("Reply in thread", { exact: true });
-    const plus = dialog.getByRole("button", { name: "Attach pictures, PDFs or Markdown", exact: true });
+    const plus = dialog.getByRole("button", { name: "Attach files", exact: true });
     const [plusBox, replyBox] = await Promise.all([plus.boundingBox(), reply.boundingBox()]);
     assert.equal(plusBox.width, 28); assert.equal(plusBox.height, 28);
     assert.ok(plusBox.x + plusBox.width <= replyBox.x, "the plus is left of the text");
@@ -199,6 +199,19 @@ test("a model's answer replies to its prompt, a reply to the answer asks a follo
     await dialog.getByText("5 messages", { exact: true }).waitFor();
     await working.waitFor({ state: "detached" });
     await dialog.getByRole("button", { name: "2 steps", exact: true }).waitFor();
+
+    // The topic's own box keeps chosen files as chips too: its text stays the writer's words, and the files follow it when sent.
+    await page.keyboard.press("Escape");
+    await dialog.waitFor({ state: "detached" });
+    const box = page.locator("form.org-composer");
+    await box.locator('input[type="file"]').setInputFiles({ name: "k3.png", mimeType: "image/png", buffer: png });
+    const chips = box.getByRole("list", { name: "Attachments to send", exact: true }).getByRole("listitem");
+    await chips.filter({ hasText: "k3.png" }).waitFor();
+    assert.equal(await composer.inputValue(), "", "no link is pasted into the text");
+    await composer.fill("Here is the figure.");
+    await box.getByRole("button", { name: "Send", exact: true }).click();
+    await chips.first().waitFor({ state: "detached" });
+    assert.equal(posts.at(-1).content, `Here is the figure.\n\n![k3.png](${picture})`);
     assert.deepEqual(errors, []);
   } finally {
     await browser.close(); await server.close();

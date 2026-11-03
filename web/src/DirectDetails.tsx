@@ -2,6 +2,7 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import { useOwnBot } from "./BotDirect";
 import { DirectFile, fileSize } from "./DirectMedia";
+import { fileBadge } from "./TopicMedia";
 import { DirectConversation, directPath } from "./DirectMessages";
 import { chatTones, mentionInitials, toneClass } from "./mentions";
 import { ApiError, Member, errorMessage, organizationPath, request } from "./organization-api";
@@ -36,7 +37,7 @@ function FilesDialog({ name, files, userId, onShow, onClose }: {
     </nav>
     <input type="search" aria-label="Search file names" placeholder="Search file names…" value={query} onChange={event => setQuery(event.target.value)} />
     {shown.length ? <ul className="org-direct-files-list">{shown.map(file => <li key={file.id}>
-      {isImage(file) ? <img src={file.url} alt="" loading="lazy" referrerPolicy="no-referrer" /> : <span className="direct-file-icon" aria-hidden="true">PDF</span>}
+      {isImage(file) ? <img src={file.url} alt="" loading="lazy" referrerPolicy="no-referrer" /> : <span className="direct-file-icon" data-kind={fileBadge(file.mime)} aria-hidden="true">{fileBadge(file.mime)}</span>}
       <span className="org-direct-files-text"><a href={file.url} target="_blank" rel="noreferrer">{file.name}</a>
         <small>{file.shared_by === userId ? "You" : name} · {day(file.shared_at)} · {fileSize(file.size_bytes)}</small></span>
       <button type="button" onClick={() => onShow(file)}>Show in chat</button>

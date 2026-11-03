@@ -17,8 +17,10 @@ MAX_PENDING_FILES = 32
 BEGINS_PER_MINUTE = 30
 MEDIA_READ_TOOLS = {"media_list", "media_read", "media_download_chunk"}
 MARKDOWN = "text/markdown"
-MIMES = {"image/png", "image/jpeg", "image/webp", "application/pdf", MARKDOWN}
-# Markdown is read as its own UTF-8 text, bounded like extracted PDF text.
+TEX = "application/x-tex"
+# Text attachments are read as their own UTF-8 source, bounded like extracted PDF text.
+TEXT_TYPES = {MARKDOWN: "Markdown", TEX: "TeX"}
+MIMES = {"image/png", "image/jpeg", "image/webp", "application/pdf", *TEXT_TYPES}
 MAX_TEXT_BYTES = 2 * 1024 * 1024
 REFERENCE = re.compile(r"/api/organizations/([a-f0-9]{32})/topics/([a-f0-9]{32})/media/([a-f0-9]{32})/([a-f0-9]{64})/content")
 # Native models read extracted PDF text; CLI bots can also download exact bytes.
@@ -42,7 +44,7 @@ def view(row):
     value = {key: row[key] for key in ("id", "name", "mime", "sha256", "size_bytes", "topic_id", "created_at")}
     value["url"] = content_path(row)
     value["markdown"] = f"![{row['name']}]({value['url']})"
-    if row["mime"] in {"application/pdf", MARKDOWN}:
+    if row["mime"] == "application/pdf" or row["mime"] in TEXT_TYPES:
         metadata = json.loads(dict(row).get("extraction_json", "{}"))
         value["extraction"] = {key: metadata[key] for key in (
             "status", "method", "error", "truncated", "pages_read", "total_pages"
@@ -58,11 +60,10 @@ def valid_signature(body, mime):
         "image/jpeg": body.startswith(b"\xff\xd8\xff"),
         "image/webp": body.startswith(b"RIFF") and body[8:12] == b"WEBP",
         "application/pdf": body.startswith(b"%PDF-") and b"%%EOF" in body[-1024:],
-        MARKDOWN: mime == MARKDOWN and markdown_text(body) is not None,
-    }.get(mime, False)
+    }.get(mime, mime in TEXT_TYPES and source_text(body) is not None)
 
 
-def markdown_text(body):
+def source_text(body):
     """The upload's own text, or None unless it is UTF-8 without NUL characters."""
     try:
         text = body.decode("utf-8")
@@ -125,7 +126,7 @@ def check_upload(name, mime, size_bytes, sha256):
         or not isinstance(sha256, str)
         or not re.fullmatch(r"[a-f0-9]{64}", sha256)
     ):
-        raise StoreError(400, "attach a named PNG, JPEG, WebP, PDF or Markdown file of at most 8 MiB with an exact SHA-256")
+        raise StoreError(400, "attach a named PNG, JPEG, WebP, PDF, Markdown or TeX file of at most 8 MiB with an exact SHA-256")
 
 
 def check_chunk(index, data_base64):
@@ -266,7 +267,7 @@ class ResearchMedia:
             body = self._bytes(db, row)
             valid = bounded_image(body, row["mime"]) if row["mime"].startswith("image/") else valid_signature(body, row["mime"])
             if not valid:
-                raise StoreError(400, "attachment content does not match its declared image, PDF or Markdown format")
+                raise StoreError(400, "attachment content does not match its declared image, PDF, Markdown or TeX format")
             if vision and not row["mime"].startswith("image/"):
                 raise StoreError(400, "only image attachments can supply an image preview")
         metadata = {"input_text_sha256": input_hash}
@@ -274,9 +275,9 @@ class ResearchMedia:
         if row["mime"] == "application/pdf":
             text, extraction = self._extract(body, preview_text)
             metadata.update(extraction)
-        elif row["mime"] == MARKDOWN:
+        elif row["mime"] in TEXT_TYPES:
             # The uploaded bytes are the text; an uploader preview is never substituted for them.
-            source = markdown_text(body)
+            source = source_text(body)
             text = source.encode("utf-8")[:MAX_TEXT_BYTES].decode("utf-8", "ignore")
             metadata.update(status="ready", method="text", truncated=len(text) < len(source))
         with self.store.transaction(write=True) as db:
@@ -346,8 +347,8 @@ class ResearchMedia:
                 "source": "extracted reference text; mathematical content and transcription remain unverified",
                 "inspection": "image pixels require a vision-capable model"
                 if row["mime"].startswith("image/")
-                else "Markdown source text as uploaded"
-                if row["mime"] == MARKDOWN
+                else f"{TEXT_TYPES[row['mime']]} source text as uploaded"
+                if row["mime"] in TEXT_TYPES
                 else "PDF text preview only; layout, diagrams and unextracted pages require direct inspection",
             }
             if row["mime"] == "application/pdf":

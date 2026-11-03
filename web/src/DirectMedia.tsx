@@ -2,7 +2,8 @@
 import React, { lazy, Suspense, useEffect, useRef, useState } from "react";
 import { request } from "./organization-api";
 import { PlusIcon } from "./ComposerIcons";
-import { ATTACHMENT_ACCEPT, MARKDOWN_TYPE, MarkdownPreview, attachmentMime, uploadAttachment } from "./TopicMedia";
+import { ATTACHMENT_ACCEPT, ATTACHMENT_KINDS, MARKDOWN_TYPE, MarkdownPreview, TEX_TYPE, TexPreview, attachmentMime, fileBadge,
+  uploadAttachment } from "./TopicMedia";
 import "./topic-media.css";
 
 const PdfViewer = lazy(() => import("./PdfViewer").then(module => ({ default: module.PdfViewer })));
@@ -51,15 +52,15 @@ const isImage = (mime: string) => mime.startsWith("image/");
 
 function DocumentRow({ reference }: { reference: DirectReference }) {
   const { file, failed } = useDirectFile(reference.url), [open, setOpen] = useState(false);
-  const markdown = file?.mime === MARKDOWN_TYPE;
+  const badge = fileBadge(file?.mime ?? "application/pdf");
   return <div className="direct-file">
-    <div className="direct-file-row"><span className="direct-file-icon" aria-hidden="true">{markdown ? "MD" : "PDF"}</span>
+    <div className="direct-file-row"><span className="direct-file-icon" data-kind={badge} aria-hidden="true">{badge}</span>
       <span className="direct-file-text"><strong>{reference.name}</strong>
         <small>{failed ? "Unavailable" : file ? fileSize(file.size_bytes) : "…"}
           {!failed && <> · <button type="button" className="direct-file-link" aria-expanded={open} onClick={() => setOpen(!open)}>{open ? "Close" : "Open"}</button>
             {" · "}<a className="direct-file-link" href={reference.url + "?download=true"} download={reference.name}>Download</a></>}</small></span></div>
-    {open && <div className="topic-pdf direct-file-viewer">{markdown ? <MarkdownPreview url={reference.url} />
-      : <Suspense fallback={<span role="status">Loading PDF…</span>}><PdfViewer url={reference.url} name={reference.name} /></Suspense>}</div>}
+    {open && <div className="topic-pdf direct-file-viewer">{file?.mime === MARKDOWN_TYPE ? <MarkdownPreview url={reference.url} />
+      : file?.mime === TEX_TYPE ? <TexPreview url={reference.url} /> : <Suspense fallback={<span role="status">Loading PDF…</span>}><PdfViewer url={reference.url} name={reference.name} /></Suspense>}</div>}
   </div>;
 }
 
@@ -126,18 +127,18 @@ export function PendingFiles({ files, onRemove }: { files: PendingFile[]; onRemo
   if (!files.length) return null;
   return <ul className="direct-pending" aria-label="Attachments to send">{files.map(file => <li key={file.key}
     className={"direct-pending-file" + (file.error ? " direct-pending-failed" : file.markdown ? "" : " direct-pending-uploading")} title={file.error ?? file.name}>
-    {file.preview ? <img src={file.preview} alt="" /> : <span className="direct-file-icon" aria-hidden="true">{isImage(file.mime) ? "IMG" : "PDF"}</span>}
+    {file.preview ? <img src={file.preview} alt="" /> : <span className="direct-file-icon" data-kind={fileBadge(file.mime)} aria-hidden="true">{fileBadge(file.mime)}</span>}
     <span className="direct-pending-name">{file.name}</span>
     <small role={file.error ? "alert" : undefined}>{file.error ? "Upload failed" : file.markdown ? "" : "Uploading…"}</small>
     <button type="button" aria-label={"Remove " + file.name} onClick={() => onRemove(file.key)}>×</button>
   </li>)}</ul>;
 }
 
-/** The composer's attach control: several pictures, PDFs and Markdown files at once. */
+/** The composer's attach control: several pictures, PDFs, Markdown and TeX files at once. */
 export function AttachFilesButton({ disabled, onFiles }: { disabled: boolean; onFiles: (files: File[]) => void }) {
   const input = useRef<HTMLInputElement>(null);
-  return <><button type="button" className="org-upload-plus" disabled={disabled} aria-label="Attach pictures, PDFs or Markdown"
-    title="Attach pictures, PDFs or Markdown" onClick={() => input.current?.click()}><PlusIcon /></button>
+  return <><button type="button" className="org-upload-plus" disabled={disabled} aria-label="Attach files"
+    title={"Attach " + ATTACHMENT_KINDS} onClick={() => input.current?.click()}><PlusIcon /></button>
     <input hidden ref={input} type="file" multiple accept={ATTACHMENT_ACCEPT} onChange={event => {
       const files = Array.from(event.target.files ?? []); event.target.value = ""; if (files.length) onFiles(files);
     }} /></>;
