@@ -18,6 +18,8 @@ import httpx
 from .reasoning_effort import openrouter_efforts as reasoning_efforts
 
 OPENROUTER_URL = "https://openrouter.ai/api/v1"
+# How long one model turn may run, and so the longest any single provider call within it may take.
+MAX_TURN_SECONDS = 3600
 OUTPUT_RESERVATION_TOKENS = 8192
 CATALOG_TTL = 60
 CATALOG_RETRY = 5
@@ -807,7 +809,7 @@ class OpenRouter:
                     quote.origin(self.base_url) + "/chat/completions",
                     headers={"Authorization": "Bearer " + key, "Accept": "text/event-stream"},
                     json=payload,
-                    timeout=httpx.Timeout(1800, connect=10),
+                    timeout=httpx.Timeout(MAX_TURN_SECONDS, connect=10),
                 ) as response,
             ):
                 if response.status_code != 200:

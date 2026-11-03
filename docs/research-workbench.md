@@ -417,7 +417,7 @@ explicit limits and do not mutate the original workflow.
 Each answer, continuation, compaction, and independent review has its own priced
 inference receipt and budget admission. Output limits apply per provider call;
 compaction does not consume the final answer's output ceiling. Organization
-research turns have no extra tool-count ceiling and allow 30 minutes; a goal
+research turns have no extra tool-count ceiling and allow 60 minutes; a goal
 continues through multiple bounded
 turns, up to its explicit time/turn/tool/USD limits. Reviews count against the
 same goal cost and tool budget. Goals wait for pending reviews and queued/running computation

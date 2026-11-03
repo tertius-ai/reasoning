@@ -19,6 +19,7 @@ from .inference_timing import Spans
 from .openrouter import (
     MAX_EVENT_BYTES,
     MAX_STREAM_BYTES,
+    MAX_TURN_SECONDS,
     ProviderError,
     StreamLines,
     Usage,
@@ -602,7 +603,7 @@ class ResearchCompletion:
                 self.quote.origin(self.provider.base_url) + "/chat/completions",
                 json=payload,
                 headers={"Authorization": "Bearer " + key, "Accept": "text/event-stream"},
-                timeout=httpx.Timeout(min(timeout, 1800), connect=10),
+                timeout=httpx.Timeout(min(timeout, MAX_TURN_SECONDS), connect=10),
             ) as response,
         ):
             self._stream_response_headers()

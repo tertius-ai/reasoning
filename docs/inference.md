@@ -483,7 +483,7 @@ minutes. Retries of an accepted request do not consume another request slot.
 ## Execution and recovery
 
 `reasoning-server serve` starts one installation-owned inference worker with
-eight concurrent turns by default and a 1,800-second execution timeout per turn. A private exclusive
+eight concurrent turns by default and a 3,600-second (60-minute) execution timeout per turn; no single provider call within a turn may take longer. A private exclusive
 file lock prevents a second executor from using the same installation. Queues,
 attempt fencing, text deltas, terminal state, and assistant messages are stored
 in SQLite. Provider SSE is incrementally decoded, including split UTF-8 chunks;
