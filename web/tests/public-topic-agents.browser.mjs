@@ -37,7 +37,8 @@ test("ordinary beta conversation delegates, streams roles and integrates without
       response.writeHead(200, { "Content-Type": "application/json" });
       response.end(JSON.stringify({ data: { usage_daily: 0, limit: 50, limit_remaining: 50, limit_reset: "daily" } })); return;
     }
-    if (request.url.split("?")[0] === "/api/v1/models") {
+    // The account-filtered list (/models/user) serves the same catalog.
+    if (["/api/v1/models", "/api/v1/models/user"].includes(request.url.split("?")[0])) {
       response.writeHead(200, { "Content-Type": "application/json" });
       response.end(JSON.stringify({ data: ["fixture/model", "fixture/new"].map(id => ({ id, architecture: { input_modalities: ["text"], output_modalities: ["text"] },
         pricing: { prompt: "0.000001", completion: "0.000002" }, context_length: 200000,
