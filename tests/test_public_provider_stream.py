@@ -134,6 +134,125 @@ def test_research_parser_accepts_more_than_twenty_four_tool_calls(state):
     assert len(response["choices"][0]["message"]["tool_calls"]) == 40 and responses[0].closed
 
 
+def synthetic_latex():
+    """Public synthetic source, with both nested JSON escapes and UTF-8 text."""
+    paragraph = '\\section{A "quoted" result}\nFor α, β and 研究, $\\sum_{i=1}^{n} a_i = \\frac{n(n+1)}{2}$.\n'
+    return "\\documentclass{article}\n\\begin{document}\n" + paragraph * 1300 + "\\end{document}\n"
+
+
+def artifact_stream(arguments, *, done=True):
+    frames = []
+    for offset in range(0, len(arguments), 8192):
+        function = {"arguments": arguments[offset:offset + 8192]}
+        if offset == 0:
+            function["name"] = "tool_call"
+        frames.append(event({"id": "gen-fixture", "choices": [{"index": 0, "delta": {"tool_calls": [{
+            "index": 0, "id": "call-large-file", "type": "function", "function": function,
+        }]}}]}))
+    frames.append(event({"id": "gen-fixture", "choices": [{"index": 0, "delta": {}, "finish_reason": "tool_calls"}]}))
+    return b"".join(frames) + (b"data: [DONE]\n\n" if done else b"")
+
+
+def artifact_payload():
+    return {"model": MODEL, "tools": [{"type": "function", "function": {
+        "name": "tool_call", "parameters": {"type": "object"},
+    }}]}
+
+
+@pytest.mark.parametrize("ascii_escaped", [False, True])
+def test_research_file_tool_preserves_large_latex_source_through_sse(state, ascii_escaped):
+    from reasoning_ledger.server.research_file_limits import MAX_ARTIFACT_TEXT_BYTES
+    from reasoning_ledger.server.research_provider import ResearchCompletion
+
+    source = synthetic_latex()
+    assert len(source) > 90609 and len(source.encode("utf8")) < MAX_ARTIFACT_TEXT_BYTES
+    arguments = json.dumps({"name": "artifact_write", "arguments": {
+        "path": "synthetic-survey.tex", "text": source,
+    }}, ensure_ascii=ascii_escaped)
+    ledger, _, _ = state
+    enqueue(state, "large-latex-file")
+    completion = ResearchCompletion(ledger, None, ledger.claim(), QUOTE)
+    completion.provider, responses, requests = fixture_provider(artifact_stream(arguments), split=7)
+    completion.stream_visible = False
+    response = asyncio.run(completion._read_agent_stream(KEY, artifact_payload(), 30))
+    saved_arguments = response["choices"][0]["message"]["tool_calls"][0]["function"]["arguments"]
+    assert json.loads(saved_arguments)["arguments"]["text"].encode("utf8") == source.encode("utf8")
+    assert len(requests) == 1 and responses[0].closed
+
+
+def test_research_file_tool_allows_full_source_budget_with_worst_case_json_escaping(state):
+    from reasoning_ledger.server.research_file_limits import MAX_ARTIFACT_TEXT_BYTES, MAX_TOOL_ARGUMENT_BYTES
+    from reasoning_ledger.server.research_provider import ResearchCompletion
+
+    # A control character other than NUL is valid UTF-8 and expands to six
+    # argument bytes in JSON. Escaped paths and checksums also need room.
+    source = "\x01" * MAX_ARTIFACT_TEXT_BYTES
+    arguments = json.dumps({"name": "artifact_write", "arguments": {
+        "path": "a" * 196 + ".tex", "text": source, "expected_sha256": "a" * 64,
+    }})
+    assert len(arguments.encode("utf8")) < MAX_TOOL_ARGUMENT_BYTES
+    ledger, _, _ = state
+    enqueue(state, "escaped-source-budget")
+    completion = ResearchCompletion(ledger, None, ledger.claim(), QUOTE)
+    completion.provider, responses, _ = fixture_provider(artifact_stream(arguments))
+    completion.stream_visible = False
+    response = asyncio.run(completion._read_agent_stream(KEY, artifact_payload(), 30))
+    assert json.loads(response["choices"][0]["message"]["tool_calls"][0]["function"]["arguments"])["arguments"]["text"] == source
+    assert responses[0].closed
+
+
+@pytest.mark.parametrize("complete_json", [False, True])
+def test_interrupted_file_tool_retains_received_arguments_without_execution(state, complete_json):
+    from reasoning_ledger.server.research_provider import ResearchCompletion
+
+    arguments = json.dumps({"name": "artifact_write", "arguments": {
+        "path": "synthetic-survey.tex", "text": synthetic_latex(),
+    }}, ensure_ascii=False)
+    if not complete_json:
+        arguments = arguments[:-20]
+    ledger, _, _ = state
+    enqueue(state, "interrupted-file-stream")
+    completion = ResearchCompletion(ledger, None, ledger.claim(), QUOTE)
+    completion.provider, responses, requests = fixture_provider(artifact_stream(arguments, done=False))
+    completion.stream_visible = False
+    with pytest.raises(ProviderError) as error:
+        asyncio.run(completion._read_agent_stream(KEY, artifact_payload(), 30))
+    assert error.value.code == "provider_incomplete"
+    with ledger.store.transaction() as db:
+        events = [json.loads(row[0]) for row in db.execute("SELECT event_json FROM llm_events WHERE run_id=?", (completion.row["id"],))]
+        assert db.execute("SELECT COUNT(*) FROM research_artifacts").fetchone()[0] == 0
+        assert db.execute("SELECT COUNT(*) FROM research_tool_receipts").fetchone()[0] == 0
+    partial = next(value["response"] for value in events if value.get("phase") == "provider_partial_response")
+    assert partial["partial"] is True
+    assert partial["choices"][0]["message"]["tool_calls"][0]["function"]["arguments"] == arguments
+    assert len(requests) == 1 and responses[0].closed
+
+
+def test_tool_argument_limit_counts_utf8_bytes_and_retains_bounded_received_evidence(state):
+    from reasoning_ledger.server.research_file_limits import MAX_TOOL_ARGUMENT_BYTES
+    from reasoning_ledger.server.research_provider import ResearchCompletion
+
+    arguments = "α" * (MAX_TOOL_ARGUMENT_BYTES // 2 + 1)
+    assert len(arguments) < MAX_TOOL_ARGUMENT_BYTES < len(arguments.encode("utf8"))
+    ledger, _, _ = state
+    enqueue(state, "tool-argument-overflow")
+    completion = ResearchCompletion(ledger, None, ledger.claim(), QUOTE)
+    completion.provider, responses, requests = fixture_provider(event(usage()) + artifact_stream(arguments))
+    completion.stream_visible = False
+    with pytest.raises(ProviderError) as error:
+        asyncio.run(completion._read_agent_stream(KEY, artifact_payload(), 30))
+    assert error.value.code == "provider_protocol"
+    assert error.value.diagnostics["protocol_rule"] == "tool_argument_size"
+    assert "smaller chunks" in error.value.diagnostics["action"]
+    assert completion.partial_usage.cost_microusd == 8
+    with ledger.store.transaction() as db:
+        events = [json.loads(row[0]) for row in db.execute("SELECT event_json FROM llm_events WHERE run_id=?", (completion.row["id"],))]
+    partial = next(value["response"] for value in events if value.get("phase") == "provider_partial_response")
+    assert partial["choices"][0]["message"]["tool_calls"][0]["function"]["arguments"] == arguments
+    assert partial["usage"]["cost_microusd"] == 8
+    assert len(requests) == 1 and responses[0].closed
+
+
 def test_incremental_line_framing_bounds_unicode_and_handles_tiny_fragments():
     from reasoning_ledger.server.openrouter import MAX_EVENT_BYTES, StreamLines
 

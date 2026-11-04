@@ -32,7 +32,15 @@ def retained_answer(db, row, status, error):
     checkpoint = state["checkpoint"]
     text = unwrapped_reply(row["output_text"])
     if not text.strip() and not checkpoint:
-        return ""
+        from .research_artifacts import reply_files
+
+        topic = db.execute("SELECT topic_id FROM llm_requests WHERE organization_id=? AND id=?",
+                           (row["organization_id"], row["request_id"])).fetchone()
+        files = reply_files(db, {"organization_id": row["organization_id"], "topic_id": topic[0],
+                                "inference_run_id": row["id"]}) if topic else []
+        if not files:
+            return ""
+        text = "Saved project files:\n\n" + "\n".join(f"- [{file['path']}]({file['download_url']})" for file in files)
     if checkpoint and (not text.strip() or status != "succeeded" or state["status"] == "waiting"):
         text = (text + "\n\nLatest answer checkpoint:\n" if text.strip() else "") + checkpoint["summary"]
         if checkpoint.get("remaining"):

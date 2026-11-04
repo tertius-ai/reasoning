@@ -40,6 +40,7 @@ from .openrouter import OPENROUTER_URL, OpenRouter, ProviderError, provider_orig
 from .references import install_routes as install_reference_routes
 from .request_input import RequestInput as Input
 from .research_api import install_routes as install_research_routes
+from .research_file_limits import MAX_TOOL_ARGUMENT_BYTES
 from .store import Store, StoreError
 from .topic_events import SAFE_METHODS, TopicEvents
 from .topic_events import install_routes as install_topic_event_routes
@@ -162,14 +163,28 @@ class Config:
 
 
 class BodyLimit:
-    def __init__(self, app: ASGIApp, maximum: int = 65536, worker_store=None):
+    def __init__(self, app: ASGIApp, maximum: int = 65536, worker_store=None, file_authorize=None):
         self.app, self.maximum, self.worker_store = app, maximum, worker_store
+        self.file_authorize = file_authorize
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         if scope["type"] != "http":
             await self.app(scope, receive, send)
             return
         maximum, allowance = self.maximum, "64 KiB"
+        file_match = re.fullmatch(
+            r"/api/organizations/([a-f0-9]{32})/topics/([a-f0-9]{32})/research-files"
+            r"(?:/drafts/[a-f0-9]{32}/append)?", scope.get("path", ""),
+        )
+        if scope.get("method") == "POST" and file_match and self.file_authorize is not None:
+            try:
+                # Reuse the normal session, CSRF and topic-write checks before
+                # accepting a larger body. The route checks access again on save.
+                await run_in_threadpool(self.file_authorize, Request(scope), *file_match.groups())
+            except StoreError as exc:
+                await JSONResponse({"detail": exc.message}, status_code=exc.status)(scope, receive, send)
+                return
+            maximum, allowance = MAX_TOOL_ARGUMENT_BYTES, "the research-file JSON allowance"
         match = re.fullmatch(r"/api/work-worker/jobs/([a-f0-9]{32})/inference", scope.get("path", ""))
         if match and self.worker_store is not None:
             from .work_jobs import WorkJobs
@@ -513,7 +528,13 @@ def create_app(config: Config, *, provider: OpenRouter | None = None, mail_provi
     app.state.webhooks = webhooks
     app.state.webhook_worker = webhook_worker
     app.state.topic_events = topic_events
-    app.add_middleware(BodyLimit, worker_store=store)
+
+    def authorize_file_body(request, org, topic):
+        user = authenticated(request)
+        with store.transaction() as db:
+            store._topic_access(db, user, org, topic, write=True)
+
+    app.add_middleware(BodyLimit, worker_store=store, file_authorize=authorize_file_body)
 
     @app.middleware("http")
     async def security_headers(request: Request, call_next):

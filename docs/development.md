@@ -152,7 +152,7 @@ node --test --test-concurrency=1 web/tests/public-ledger.browser.mjs web/tests/p
   web/tests/bot-controls.browser.mjs web/tests/bot-approvals.browser.mjs \
   web/tests/model-selection.browser.mjs web/tests/chat-polish.browser.mjs \
   web/tests/invitations.browser.mjs web/tests/organization-responsiveness.browser.mjs \
-  web/tests/organization-requests.browser.mjs web/tests/research-requests.browser.mjs \
+  web/tests/organization-requests.browser.mjs web/tests/research-requests.browser.mjs web/tests/research-files.browser.mjs \
   web/tests/model-picker.browser.mjs web/tests/chat-links.browser.mjs
 ```
 

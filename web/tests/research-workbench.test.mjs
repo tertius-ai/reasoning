@@ -46,6 +46,26 @@ test("files and bibliography retain compact useful empty states", () => {
   assert.match(refs, /Search research bibliography/);
 });
 
+test("file recovery separates retained source and unfinished drafts from completed files", () => {
+  const props = {
+    retained: [{ path: "survey.tex", recovery_path: "survey.recovered-42-0.tex", event_sequence: 42, tool_index: 0,
+      size_bytes: 90609, sha256: "a".repeat(64) }],
+    drafts: [{ draft_id: "unfinished", path: "sections.tex", size_bytes: 31000 }],
+    root: "/organizations/org/topics/beta/research-files", canWrite: true, busy: false,
+    recover: () => { throw new Error("Rendering must never recover or replay work"); },
+  };
+  const writer = renderToStaticMarkup(React.createElement(files.FileRecovery, props));
+  assert.match(writer, /Recover a copy/);
+  assert.match(writer, /without another model call/);
+  assert.match(writer, /source may need review/);
+  assert.match(writer, /Unfinished drafts/);
+  assert.match(writer, /Download unfinished source/);
+  assert.match(writer, /\/api\/organizations\/org\/topics\/beta\/research-files\/drafts\/unfinished\/content/);
+  const reader = renderToStaticMarkup(React.createElement(files.FileRecovery, { ...props, canWrite: false }));
+  assert.doesNotMatch(reader, /<button/);
+  assert.doesNotMatch(writer, /Download complete file/);
+});
+
 test("ledger layout becomes a bounded single column on phones", () => {
   const css = readFileSync(new URL("../src/mathematics-browser.css", import.meta.url), "utf8");
   assert.match(css, /max-width:\s*650px/);

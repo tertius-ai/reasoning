@@ -15,6 +15,7 @@
     "test:dev": "node --test tests/development.browser.mjs",
     "test:public-compute": "node --test tests/public-compute.browser.mjs",
     "test:topic-agents": "node --test tests/public-topic-agents.browser.mjs",
+    "test:research-files": "node --test tests/research-files.browser.mjs",
     "test:public-workflows": "node --test tests/public-workflows.browser.mjs",
     "test:public-webhooks": "node --test tests/public-webhooks.browser.mjs",
     "test:public-desktop": "node --test tests/public-desktop.browser.mjs",

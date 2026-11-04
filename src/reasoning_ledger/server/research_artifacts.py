@@ -6,6 +6,7 @@ import re
 import time
 from urllib.parse import urlencode
 
+from .research_file_limits import MAX_ARTIFACT_TEXT_BYTES
 from .store import StoreError, _id, _row
 
 PATH = re.compile(r"[A-Za-z0-9_.-][A-Za-z0-9._/-]{0,199}\Z")
@@ -26,24 +27,36 @@ BOT_REPLY = re.compile(r"bot-run-([0-9a-f]{32})-([0-9]+)")
 
 
 def reply_files(db, message):
-    """Project files a reply's own run saved, from that run's write receipts: the last saved revision of each,
-    in save order. A bot reply split into several messages lists them under its last part.
+    """Project files a reply's own run saved: the last saved revision of each, in save order.
+    Atomic publication receipts survive a failed outer tool receipt. A bot reply split into
+    several messages lists files under its last part.
     """
     org, topic = message["organization_id"], message["topic_id"]
     if message.get("inference_run_id"):
         rows = db.execute(
             "SELECT name,arguments_json,result_json FROM research_tool_receipts WHERE organization_id=? AND run_id=? "
-            "AND status='completed' AND name IN ('artifact_write','tool_call') ORDER BY sequence",
+            "AND status='completed' AND name IN ('artifact_write','artifact_finish','tool_call') ORDER BY sequence",
             (org, message["inference_run_id"]),
         ).fetchall()
         results = []
         for row in rows:
             result = json.loads(row["result_json"] or "null")
             if row["name"] == "tool_call":
-                if json.loads(row["arguments_json"]).get("name") != "artifact_write" or not isinstance(result, dict):
+                actual = json.loads(row["arguments_json"]).get("name")
+                if actual not in {"artifact_write", "artifact_finish"} or not isinstance(result, dict):
                     continue
                 result = result.get("result")
             results.append(result)
+        results.extend(dict(row) for row in db.execute(
+            "SELECT a.path,p.revision FROM research_artifact_publications p "
+            "JOIN research_artifacts a ON a.id=p.artifact_id AND a.organization_id=p.organization_id "
+            "WHERE p.organization_id=? AND p.run_id=? ORDER BY p.sequence",
+            (org, message["inference_run_id"]),
+        ))
+        results.extend(json.loads(row[0]) for row in db.execute(
+            "SELECT result_json FROM research_artifact_recoveries WHERE organization_id=? AND run_id=? ORDER BY event_sequence,tool_index",
+            (org, message["inference_run_id"]),
+        ))
     else:
         match = BOT_REPLY.fullmatch(message.get("client_id") or "")
         if not match or message.get("author_kind", message.get("sender_kind")) != "bot":
@@ -57,6 +70,8 @@ def reply_files(db, message):
     saved = {}
     for result in results:
         if isinstance(result, dict) and safe_path(result.get("path")) and type(result.get("revision")) is int:
+            if saved.get(result["path"], 0) >= result["revision"]:
+                continue  # A retry can return an older pinned revision without saving it again.
             saved.pop(result["path"], None)
             saved[result["path"]] = result["revision"]
     files = []
@@ -140,7 +155,7 @@ class ResearchArtifacts:
 
     def write(self, user, org, topic, path, text, expected_sha256=None, run_id=None, *, actor_id=None):
         try:
-            valid = isinstance(text, str) and len(text.encode("utf8")) <= 256 * 1024 and "\0" not in text
+            valid = isinstance(text, str) and len(text.encode("utf8")) <= MAX_ARTIFACT_TEXT_BYTES and "\0" not in text
         except UnicodeError:
             valid = False
         if not safe_path(path) or not valid:
@@ -148,7 +163,25 @@ class ResearchArtifacts:
         with self.store.transaction(write=True) as db:
             project = self._topic(db, user, org, topic, write=True)
             saved = self._write(db, actor_id or user, org, project, path, text, expected_sha256, topic=topic, run_id=run_id)
+            self._record_publication(db, user, org, topic, run_id, saved)
             return {**saved, **file_links(org, topic, path, saved["revision"])}
+
+    @staticmethod
+    def _record_publication(db, user, org, topic, run_id, saved):
+        if run_id is None:
+            return
+        if not db.execute(
+            "SELECT 1 FROM llm_runs r JOIN llm_requests q ON q.id=r.request_id AND q.organization_id=r.organization_id "
+            "WHERE r.organization_id=? AND r.id=? AND q.topic_id=? AND q.requested_by=?",
+            (org, run_id, topic, user),
+        ).fetchone():
+            raise StoreError(404, "file publication source run not found")
+        # Commit the saved revision's run binding with the file itself, before
+        # the generic tool runner can be cancelled or lose its completion receipt.
+        db.execute(
+            "INSERT OR IGNORE INTO research_artifact_publications(organization_id,run_id,artifact_id,revision) VALUES(?,?,?,?)",
+            (org, run_id, saved["id"], saved["revision"]),
+        )
 
     def _write(self, db, user, org, project, path, text, expected_sha256=None, *, topic=None, run_id=None, strict=False):
         from .artifact_chunks import MAX_BYTES, put
@@ -206,17 +239,22 @@ def register_artifacts(research):
     )(lambda: artifacts.list(research.user, research.org, research.topic))
     research.registry.tool(
         name="artifact_write",
-        description="Save a persistent project text file. Return its clickable revision link to the user. "
-                    "Overwrites require the current SHA-256; all revisions are retained.",
+        description="Save a persistent project text file of at most 256 KiB UTF-8. Return its clickable revision link to the user. "
+                    "Overwrites require the current SHA-256; all revisions are retained. For longer documents or incremental "
+                    "drafting, discover artifact_begin, artifact_append and artifact_finish; saved chunks survive interruptions.",
         risk="write",
         input_schema=schema(
-            {"path": string(200), "text": {"type": "string", "maxLength": 64000}, "expected_sha256": string(64)}, ["path", "text"]
+            {"path": string(200), "text": {"type": "string", "maxLength": MAX_ARTIFACT_TEXT_BYTES},
+             "expected_sha256": string(64)}, ["path", "text"]
         ),
     )(
         lambda path, text, expected_sha256=None: artifacts.write(
             research.user, research.org, research.topic, path, text, expected_sha256, research.row["id"]
         )
     )
+    from .research_artifact_drafts import register_drafts
+
+    register_drafts(research)
     research.registry.tool(
         name="research_file_read",
         description="Read an exact bounded revision of a shared research file; returns its checksum and recovery offsets.",

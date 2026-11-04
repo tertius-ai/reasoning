@@ -15,7 +15,7 @@ from .research_profiles import SYSTEM_PROMPT as SYSTEM_PROMPT
 from .research_profiles import instructions, topic_instructions
 from .store import StoreError, _row
 
-HARNESS_VERSION = "reasoning-native-topic-agents-v7"
+HARNESS_VERSION = "reasoning-native-topic-agents-v8"
 
 
 def encoded(value) -> str:

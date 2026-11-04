@@ -29,6 +29,7 @@ from .openrouter import (
     stream_error_diagnostics,
 )
 from .research_context import HARNESS_VERSION, PROMPT_VERSION, encoded
+from .research_file_limits import MAX_TOOL_ARGUMENT_BYTES
 from .store import StoreError
 from .usage_store import UsageStore
 
@@ -269,7 +270,7 @@ class ResearchCompletion:
         self.stream_visible = purpose != "compaction"
         self._dispatch = Spans("dispatch")
         opening = {"type": "agent", "phase": "round", "round": len(self.responses) + 1, "purpose": purpose}
-        usage, generation, submitted, recorded_usage = None, None, False, False
+        usage, generation, response, submitted, recorded_usage = None, None, None, False, False
         try:
             request = {key: value for key, value in payload.items() if key not in {"max_tokens", "stream"}}
             if maximum is not None:
@@ -345,6 +346,8 @@ class ResearchCompletion:
             self.inference.reserve_next_call(self.row, 0)
             return response
         except BaseException as exc:
+            if response is not None:
+                await self._retain_completed_response(response)
             usage = usage or self.partial_usage
             generation = generation or self.partial_generation
             if isinstance(exc, ProviderError):
@@ -472,10 +475,24 @@ class ResearchCompletion:
                 await asyncio.wait({pending}, timeout=0.1)
                 await self._check_cancel_async()
             return await pending
+        except BaseException:
+            if pending.done() and not pending.cancelled() and pending.exception() is None:
+                # Cancellation can arrive between a completed parser task and
+                # returning its response to the caller. Do not lose received work.
+                await self._retain_completed_response(pending.result())
+            raise
         finally:
             if not pending.done():
                 pending.cancel()
                 await asyncio.gather(pending, return_exceptions=True)
+
+    async def _retain_completed_response(self, response):
+        try:
+            # Accounting or final protocol validation can fail before tool
+            # dispatch. Preserve evidence without duplicating streamed text.
+            await self._save_failed_stream({**response, "partial": True}, "", stream_content=False)
+        except Exception:
+            logger.warning("completed provider response could not be retained; original failure preserved")
 
     def _stream_prefix(self):
         prefix, self._prefix = self._prefix, None
@@ -536,7 +553,7 @@ class ResearchCompletion:
                 logger.warning("partial provider response could not be retained; original failure preserved")
             raise
 
-    async def _save_failed_stream(self, response, prefix):
+    async def _save_failed_stream(self, response, prefix, *, stream_content=True):
         message = response["choices"][0]["message"]
         text = message.get("content") or ""
         for field in tuple(message):
@@ -545,7 +562,7 @@ class ResearchCompletion:
             except (UnicodeError, ValueError, TypeError, RecursionError):
                 message.pop(field)
                 response.setdefault("omitted_fields", []).append(field)
-        if self.stream_visible and text:
+        if stream_content and self.stream_visible and text:
             from .inference_store import MAX_OUTPUT_CHARS
 
             if not await self._stream_content_async(self._display_round(prefix, text)[:MAX_OUTPUT_CHARS], response["id"]):
@@ -561,6 +578,7 @@ class ResearchCompletion:
     async def _read_agent_stream(self, key, payload, timeout):
         self.protocol_stage = "stream_framing"
         text, generation, usage, finish, tools = "", None, None, None, {}
+        argument_bytes = {}
         valid_text, valid_content = "", True
         reasoning, details = "", ReasoningDetails()
         prefix = await self._stream_prefix_async()
@@ -737,7 +755,17 @@ class ResearchCompletion:
                                 current["id"] = call.get("id") or current["id"]
                                 function = call.get("function") or {}
                                 for field in ("name", "arguments"):
-                                    current["function"][field] += function.get(field) or ""
+                                    addition = function.get(field) or ""
+                                    current["function"][field] += addition
+                                    if field == "arguments":
+                                        # Count only the new fragment; the final response still
+                                        # receives strict UTF-8 validation before execution.
+                                        argument_bytes[index] = argument_bytes.get(index, 0) + len(
+                                            addition.encode("utf8", errors="surrogatepass")
+                                        )
+                                        if argument_bytes[index] > MAX_TOOL_ARGUMENT_BYTES:
+                                            raise ProviderError("provider_protocol", diagnostics=protocol_diagnostics(
+                                                "tool_calls", "tool_argument_size", total))
                         if "error" in body:
                             raise ProviderError("provider_stream_error", diagnostics=stream_error_diagnostics(body["error"]))
             if not done:
@@ -766,7 +794,6 @@ class ResearchCompletion:
                         not isinstance(call["id"], str)
                         or not re.fullmatch(r"[A-Za-z0-9_.:-]{1,200}", call["id"])
                         or not re.fullmatch(r"[A-Za-z0-9_-]{1,200}", call["function"]["name"])
-                        or len(call["function"]["arguments"]) > 65536
                     ):
                         raise ProviderError("provider_protocol")
             return {
