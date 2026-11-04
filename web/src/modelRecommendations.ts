@@ -42,3 +42,18 @@ export function modelOptionGroups(allowedModels: string[], catalog: Organization
   const preferred = new Set(recommended);
   return { recommended, other: allowedModels.filter((id) => !preferred.has(id) && matching(id)) };
 }
+
+/**
+ * The reply model to keep selected when the allowed models change, and the model that is no longer available, if any.
+ * An unavailable choice is never silently replaced: it stays unavailable until someone chooses another model, or the
+ * model is allowed again. With nothing chosen, the topic's default applies, then the first allowed model.
+ */
+export function keptReplyModel(current: string, lost: string | null, topicDefault: string | null | undefined, allowed: string[]):
+  { model: string; lost: string | null } {
+  const usable = (id: string) => id.startsWith("bot/") || allowed.includes(id);
+  const keep = (id: string) => usable(id) ? { model: id, lost: null } : { model: "", lost: id };
+  if (current) return keep(current);
+  if (lost) return keep(lost);
+  if (topicDefault) return keep(topicDefault);
+  return { model: allowed[0] ?? "", lost: null };
+}

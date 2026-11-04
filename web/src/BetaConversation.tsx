@@ -134,7 +134,7 @@ export const replacedByReply = (run: ModelRun, transcript?: LoadedTranscript) =>
 /** A queued request whose agent conversation is paused: it does not start until someone resumes it. */
 export const pausedRun = (run: ModelRun) => run.status === "queued" && run.agent?.thread_status === "paused";
 
-export function BetaConversation({ organizationId, topicId, userId, canWrite, canManage, online, attempt, onAttempt, onAuthLost, onActivity, toolbarTarget, hidePlay, wake, transcript, onReplyPending, onRuns, stopRef, addingTo, onAddTo, onUndoAddition, names }: {
+export function BetaConversation({ organizationId, topicId, userId, canWrite, canManage, online, attempt, onAttempt, onAuthLost, onActivity, toolbarTarget, hidePlay, wake, transcript, onReplyPending, onRuns, stopRef, addingTo, onAddTo, onUndoAddition, names, refusal }: {
   organizationId: string; topicId: string; userId: string; canWrite: boolean; canManage: boolean;
   online: boolean; attempt?: PendingModelAttempt; onAttempt: (attempt?: PendingModelAttempt) => void; onAuthLost: () => void;
   onActivity: (entries: TopicActivity[]) => void;
@@ -155,6 +155,8 @@ export function BetaConversation({ organizationId, topicId, userId, canWrite, ca
   onUndoAddition?: (addition: ReplyAddition) => void;
   /** Member names, for who added a message to a reply. */
   names?: Record<string, string>;
+  /** Ways forward from a reply the privacy settings refused: the model it suggests, and what each choice does. */
+  refusal?: { replacement: (model: string) => string | null; onSendWith: (run: ModelRun, model: string) => void; onChoose: () => void };
 }) {
   const [runs, setRuns] = useState<ModelRun[]>([]), [reconciled, setReconciled] = useState<ReadonlySet<string>>(new Set());
   const [threads, setThreads] = useState<{ root_run: string; status: string; reason?: string | null; requested_by: string; tasks: number }[]>([]);
@@ -302,6 +304,8 @@ export function BetaConversation({ organizationId, topicId, userId, canWrite, ca
     // A cost reconciled in this page stays on its card: the already loaded reply shows it only after a reload.
     && (!replacedByReply(run, transcript) || reconciled.has(run.id)));
   useEffect(() => { onRuns?.(runs); }, [runs, onRuns]);
+  // Only the latest reply offers to send again: an older refusal answered a conversation that has moved on.
+  const latestRun = runs.reduce<ModelRun | undefined>((latest, run) => !latest || (run.created_at ?? 0) >= (latest.created_at ?? 0) ? run : latest, undefined);
   // Each running reply shows its thread line once, on its first visible card.
   const running = replyThreads(runs).filter(thread => thread.active);
   const hosts = new Map<string, ReturnType<typeof replyThreads>[number]>();
@@ -328,8 +332,11 @@ export function BetaConversation({ organizationId, topicId, userId, canWrite, ca
       } : undefined}
       timeline={{ additions: hosts.get(run.id)?.additions ?? [], userId, names, onUndo: canWrite ? onUndoAddition : undefined }}
       onStop={stoppable.has(run.id) && online ? () => void stopReply(stoppable.get(run.id)!) : undefined} stopping={busy}
+      refusal={refusal && canWrite && run.id === latestRun?.id && privacyRefusal(run) ? {
+        replacement: refusal.replacement(run.model), disabled: busy || !online || !!attempt,
+        onSendWith: model => refusal.onSendWith(run, model), onChoose: refusal.onChoose } : undefined}
       onUpdated={() => setRefresh(value => value + 1)} onAuthLost={onAuthLost} />,
-  }))); }, [runs, reconciled, transcript, busy, online, connected, canWrite, canManage, userId, root, organizationId, topicId, onActivity, onAuthLost, addingTo, onAddTo, onUndoAddition, names, threads]);
+  }))); }, [runs, reconciled, transcript, busy, online, connected, canWrite, canManage, userId, root, organizationId, topicId, onActivity, onAuthLost, addingTo, onAddTo, onUndoAddition, names, threads, refusal, latestRun, attempt]);
   return <section className="org-beta" aria-label="Agent activity">
     {toolbarTarget && createPortal(<TransportControls {...{ canPlay, hidePlay }}
       playTitle={attempt?.unconfirmed ? "Retry the unconfirmed reply request"
@@ -356,8 +363,15 @@ export function RunProgress({ run }: { run: ModelRun }) {
   return <p role="status" className="org-working" aria-label="Research progress">{progress}…</p>;
 }
 
-function BetaRunCard({ root, organizationId, topicId, run, canManage, canControl, canReact, awaiting, thread, timeline, onStop, stopping, onReconciled, onUpdated, onAuthLost }: {
+/** A reply the organization's privacy settings refused before it was sent: OpenRouter has no allowed endpoint for its model. */
+export const privacyRefusal = (run: ModelRun) => run.status === "failed" && run.diagnostics?.unmatched === "data_policy";
+
+/** Ways forward from a reply its model's privacy settings refused, offered on the topic's latest reply only. */
+export type RefusalActions = { replacement: string | null; disabled: boolean; onSendWith: (model: string) => void; onChoose: () => void };
+
+function BetaRunCard({ root, organizationId, topicId, run, canManage, canControl, canReact, awaiting, thread, timeline, onStop, stopping, onReconciled, onUpdated, onAuthLost, refusal }: {
   root: string; organizationId: string; topicId: string; run: ModelRun; canManage: boolean; canReact: boolean;
+  refusal?: RefusalActions;
   /** Stops this reply, shown in the header while it runs. */
   onStop?: () => void; stopping?: boolean;
   /** The thread line of a running reply: a button that adds the next message to it. */
@@ -370,9 +384,10 @@ function BetaRunCard({ root, organizationId, topicId, run, canManage, canControl
   awaiting?: boolean;
   onUpdated: () => void; onAuthLost: () => void;
 }) {
-  const active = ["queued", "running"].includes(run.status), expanded = active || !!awaiting, [open, setOpen] = useState(expanded);
-  const paused = pausedRun(run), [busy, setBusy] = useState(false), [error, setError] = useState("");
-  useEffect(() => { if (!expanded) setOpen(false); }, [expanded]);
+  // A refusal that offers a way forward opens, so its explanation and choices are seen without a click.
+  const active = ["queued", "running"].includes(run.status), expanded = active || !!awaiting || !!refusal, [open, setOpen] = useState(expanded);
+  const paused = pausedRun(run), [busy, setBusy] = useState(false), [error, setError] = useState(""), refused = privacyRefusal(run);
+  useEffect(() => { setOpen(expanded); }, [expanded]);
   const control = (path: string, body: object) => {
     setBusy(true); setError("");
     void request(path, { method: "POST", body }).then(onUpdated).catch(cause => {
@@ -382,8 +397,8 @@ function BetaRunCard({ root, organizationId, topicId, run, canManage, canControl
   return <details data-run-id={run.id} data-status={run.status} className="org-model-run org-run-compact" open={open}
     onToggle={event => { if (event.target === event.currentTarget) setOpen(event.currentTarget.open); }}>
     <summary><strong>{run.agent ? `${run.agent.role.replaceAll("_", " ")} · ` : ""}{run.model}</strong><span role="status">{run.cancel_requested && active ? "Cancelling…" : paused ? "paused" : run.answer_state?.status === "waiting" ? "Waiting · answer incomplete"
-      : run.answer_state?.status === "continued" ? "Continued in a later reply" : run.status}</span>
-      {!active && run.error_code && <span title={run.diagnostics?.message}>{run.diagnostics?.http_status
+      : run.answer_state?.status === "continued" ? "Continued in a later reply" : refused ? "not sent" : run.status}</span>
+      {!active && run.error_code && !refused && <span title={run.diagnostics?.message}>{run.diagnostics?.http_status
         ? `${run.diagnostics.phase === "stream" ? "Stream error" : "HTTP"} ${run.diagnostics.http_status}`
         : run.error_code.replaceAll("_", " ")}</span>}
       {run.actual_microusd != null && <small>{usd(run.actual_microusd)}</small>}
@@ -414,6 +429,10 @@ function BetaRunCard({ root, organizationId, topicId, run, canManage, canControl
       {active && !paused && run.cost_progress && <small>Confirmed {usd(run.cost_progress.confirmed_microusd)} · next-call estimate {usd(run.cost_progress.next_call_estimate_microusd)}</small>}</div>
     {run.error_code && <p className="org-error">{run.diagnostics?.message ?? runFailureMessage(run.error_code)}</p>}
     {run.diagnostics && <p className="org-help">{run.diagnostics.action}</p>}
+    {refused && refusal && <div className="org-run-refusal-actions">
+      {refusal.replacement && <button type="button" className="org-run-send-with" disabled={refusal.disabled}
+        onClick={() => refusal.onSendWith(refusal.replacement!)}>Send with {refusal.replacement}</button>}
+      <button type="button" disabled={refusal.disabled} onClick={refusal.onChoose}>Choose another model</button></div>}
     {run.accounting_state === "uncertain" && <p className="org-help">Charge unknown; internal hold {usd(run.reserved_microusd)} is not a charge. Check provider activity.</p>}
     {run.accounting_state === "uncertain" && canManage && <ReconcileCost root={root} run={run} onUpdated={() => { onReconciled(); onUpdated(); }} onAuthLost={onAuthLost} />}
   </details>;

@@ -20,7 +20,8 @@ const models = Array.from({ length: 451 }, (_, index) => {
     input_usd_per_million: 0.1 + index % 17, output_usd_per_million: 0.4 + index % 23, request_usd: null,
     cache_read_usd_per_million: null, cache_write_usd_per_million: null, reasoning_usd_per_million: null, image_usd: null,
     web_search_usd: null, context_length: 32000 + index * 1000, max_completion_tokens: index === 0 ? 943718 : 16384,
-    weights_repository: index % 7 === 0 ? `${provider}/weights-${index}` : null };
+    weights_repository: index % 7 === 0 ? `${provider}/weights-${index}` : null,
+    routing_availability: { zdr: index % 4 === 0, regions: [], source: "fixture" } };
 });
 const ids = models.map(model => model.id), useful = models.filter(model => model.supports_tools || model.supports_reasoning).map(model => model.id);
 const user = "a".repeat(32), org = "b".repeat(32), topic = "c".repeat(32);
@@ -41,9 +42,13 @@ after(async () => {
   if (outDir) await rm(outDir, { recursive: true, force: true });
 });
 
-/** A production build of a beta topic against a mocked API serving the large catalog. */
-async function open() {
+/**
+ * A production build of a beta topic against a mocked API serving the large catalog. `allowed` is what the
+ * organization may use; `runs` are the topic's replies; reply requests are recorded in `requests`.
+ */
+async function open({ allowed = ids, runs = [] } = {}) {
   const page = await browser.newPage({ viewport: { width: 1280, height: 900 } }), errors = [], favorites = new Set([ids[1]]), writes = [];
+  const requests = [];
   page.on("pageerror", error => errors.push(error.message));
   await page.route("**/api/**", async route => {
     const request = route.request(), url = new URL(request.url()), path = url.pathname;
@@ -61,8 +66,11 @@ async function open() {
       topics: [{ id: topic, name: "Algebra", channel_id: "channel", kind: "beta", default_model: ids[0], knowledge_tools: [] }], topic_state: [] };
     else if (path.endsWith("/members")) data = [{ id: user, name: "Alice", role: "owner" }];
     else if (path.endsWith("/presence")) data = { humans: [], bots: [] };
-    else if (path.endsWith("/inference-configuration")) data = { allowed_models: ids, tools: [], routing: { strategy: "recommended", zdr: false, region: "global" } };
-    else if (path.endsWith("/model-prices")) data = { models, allowed_models: ids, fetched_at: 1_800_000_000, routing: "recommended", source: "fixture",
+    else if (path.endsWith("/inference-configuration")) data = { allowed_models: allowed, tools: [], routing: { strategy: "recommended", retention: "prefer_zdr", region: "global" } };
+    else if (path.endsWith("/inference-runs") && request.method() === "POST") { requests.push(request.postDataJSON()); data = []; }
+    else if (path.endsWith("/inference-runs")) data = runs;
+    else if (path.endsWith("/model-prices")) data = { models, allowed_models: allowed, fetched_at: 1_800_000_000, routing: "recommended", source: "fixture",
+      retention: "prefer_zdr",
       recommendations: { version: "fixture", reviewed_at: "2026-10-01", source: "fixture", method: "fixture", organization_override: false,
         model_ids: [ids[44]], evidence: [] } };
     else if (path.endsWith("/model-benchmarks")) data = { models: {}, status: "unavailable", meta: null };
@@ -78,7 +86,7 @@ async function open() {
   });
   await page.goto(server.resolvedUrls.local[0] + "organization.html");
   await page.locator("#message-13").waitFor();
-  return { page, errors, writes };
+  return { page, errors, writes, requests };
 }
 const rowCount = page => page.locator(".org-model-card").count();
 /** Rows mount in batches after opening; wait for the complete list. */
@@ -169,4 +177,43 @@ test("the Model capabilities browser lists, filters and expands the large catalo
   await row.getByText("Context/output figures are provider capacities", { exact: false }).waitFor();
   assert.deepEqual(errors, []);
   await page.close();
+});
+
+test("a reply the privacy settings refused offers an allowed model, and the topic names its unavailable model", { timeout: 90000 }, async () => {
+  // The topic's default model, ids[0], has no endpoint allowed by the organization's privacy settings.
+  const allowed = ids.slice(1), refused = { id: "d".repeat(32), model: ids[0], status: "failed", error_code: "provider_rejected",
+    diagnostics: { http_status: 404, phase: "http", category: "availability", unmatched: "data_policy",
+      message: "This model isn't available under your organization's privacy settings.", action: "Nothing was charged. Choose another model." },
+    accounting_state: "settled", reserved_microusd: 0, actual_microusd: 0, output_text: "", message_id: null, context_through_sequence: 13,
+    created_at: 1_800_000_100, requested_by: user, agent: null };
+  const { page, errors, requests } = await open({ allowed, runs: [refused] });
+  const notice = page.locator(".org-composer-notice");
+  await notice.filter({ hasText: `${ids[0]} is no longer available. Choose another model.` }).waitFor();
+  const picker = page.getByRole("button", { name: "Choose reply model", exact: true });
+  await picker.filter({ hasText: "Choose model" }).waitFor();
+
+  const card = page.locator(`[data-run-id="${refused.id}"]`);
+  assert.equal(await card.evaluate(element => element.open), true, "the refusal opens without a click");
+  await card.getByText("not sent", { exact: true }).waitFor();
+  assert.equal(await card.getByText("HTTP 404").count(), 0);
+  await card.getByText("This model isn't available under your organization's privacy settings.", { exact: true }).waitFor();
+  await card.getByText("Nothing was charged. Choose another model.", { exact: true }).waitFor();
+  if (process.env.REFUSAL_SCREENSHOT) await page.screenshot({ path: process.env.REFUSAL_SCREENSHOT + "-card.png" });
+
+  await card.getByRole("button", { name: "Choose another model", exact: true }).click();
+  await page.waitForFunction(() => document.querySelector("[aria-label=\"Choose reply model\"]")?.getAttribute("aria-expanded") === "true");
+  await page.getByRole("searchbox", { name: "Search models" }).waitFor();
+  // Under Prefer ZDR, rows show ZDR where OpenRouter lists zero-data-retention endpoints and no training elsewhere.
+  await page.locator(".org-model-options .org-model-retention.org-model-zdr").first().waitFor();
+  await page.locator(".org-model-options .org-model-retention:not(.org-model-zdr)").first().waitFor();
+  if (process.env.REFUSAL_SCREENSHOT) await page.screenshot({ path: process.env.REFUSAL_SCREENSHOT + "-picker.png" });
+  await page.keyboard.press("Escape");
+
+  // The recommended model is the suggestion when neither the paid route nor the topic default is allowed.
+  await card.getByRole("button", { name: `Send with ${ids[44]}`, exact: true }).click();
+  await page.waitForFunction(() => !document.querySelector(".org-composer-notice"));
+  await picker.filter({ hasText: ids[44] }).waitFor();
+  assert.equal(requests.length, 1);
+  assert.deepEqual(requests[0].models, [ids[44]]); assert.equal(requests[0].through_sequence, 13);
+  assert.deepEqual(errors, []);
 });

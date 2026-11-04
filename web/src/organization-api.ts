@@ -82,10 +82,17 @@ export type ModelRecommendations = { version: string; reviewed_at: string; sourc
 export type BenchmarkScores = { intelligence_index: number | null; agentic_index: number | null; coding_index: number | null };
 export type ModelBenchmarks = { models: Record<string, BenchmarkScores>; status: "live" | "cached" | "stale" | "unavailable";
   meta: { source: string; source_url: string; citation: string; as_of: string } | null };
+/**
+ * How long providers may keep prompts; every mode denies training on them. Prefer ZDR asks for zero data retention
+ * when a model has such endpoints, Require ZDR offers only those models.
+ */
+export type Retention = "no_training" | "prefer_zdr" | "require_zdr";
 export type OrganizationPrices = { models: ModelPrice[]; allowed_models: string[]; fetched_at: number; routing: string; source: string;
-  recommendations?: ModelRecommendations; benchmarks?: ModelBenchmarks };
+  retention?: Retention; recommendations?: ModelRecommendations; benchmarks?: ModelBenchmarks };
 export type ProviderDiagnostics = { http_status?: number; category: string; message: string; action: string;
-  phase?: "http" | "stream"; limit_source?: string; reason?: string; protocol_stage?: string };
+  phase?: "http" | "stream"; limit_source?: string; reason?: string; protocol_stage?: string;
+  /** Why OpenRouter found no endpoint: "data_policy" when the organization's privacy settings exclude the model. */
+  unmatched?: "data_policy" | "parameters" | "providers" | "model" };
 export type InferenceCall = { id: string; sequence: number; run_id: string; request_id: string; requested_by: string; actor_name: string;
   usage?: MessageUsage;
   project_id: string; project_name: string; topic_id: string; topic_name: string; model: string; purpose: string; parent_call_id: string | null;
@@ -137,7 +144,7 @@ export type InferenceConfiguration = {
   allowed_models: string[]; has_organization_key: boolean; enabled: boolean; worker_running: boolean;
   spent_microusd: number; reserved_microusd: number; uncertain_microusd: number;
 };
-export type RoutingPolicy = { strategy: "recommended" | "cheapest" | "latency" | "throughput"; zdr: boolean; region: "global" | "us" | "eu" };
+export type RoutingPolicy = { strategy: "recommended" | "cheapest" | "latency" | "throughput"; retention: Retention; region: "global" | "us" | "eu" };
 export type ModelAttempt = {
   client_id: string; models: string[]; max_completion_tokens?: number | null; context_message_limit: number; through_sequence: number;
   effort?: string | null;

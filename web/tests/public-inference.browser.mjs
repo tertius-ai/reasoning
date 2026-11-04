@@ -54,7 +54,8 @@ for (const loss of ["network", "gateway-timeout"]) test(`shared beta responses s
       response.end(JSON.stringify({ data: { usage_daily: calls.length * 0.000008,
         limit: 50, limit_remaining: 50 - calls.length * 0.000008, limit_reset: "daily" } })); return;
     }
-    if (request.url.split("?")[0] === "/api/v1/models") {
+    // The account-filtered list (/models/user) serves the same catalog.
+    if (["/api/v1/models", "/api/v1/models/user"].includes(request.url.split("?")[0])) {
       catalogRequests++;
       response.writeHead(200, { "Content-Type": "application/json" });
       response.end(JSON.stringify({ data: models.map((id) => ({

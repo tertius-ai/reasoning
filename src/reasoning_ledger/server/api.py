@@ -428,7 +428,7 @@ class KnowledgeWrite(Input):
 
 class RoutingWrite(Input):
     strategy: Literal["recommended", "cheapest", "latency", "throughput"]
-    zdr: Annotated[bool, Field(strict=True)] = False
+    retention: Literal["no_training", "prefer_zdr", "require_zdr"] = "prefer_zdr"
     region: Literal["global", "us", "eu"] = "global"
 
 
@@ -851,12 +851,25 @@ def create_app(config: Config, *, provider: OpenRouter | None = None, mail_provi
         with store.transaction() as db:
             store._require(db, user, organization_id)
 
+    async def usable_models(user: str, organization_id: str, models: list[str], routing: dict) -> list[str]:
+        """The catalog models this organization can use: those its OpenRouter account allows under its privacy and
+        provider settings, and only models with zero-data-retention endpoints when routing requires them."""
+        credential = await run_in_threadpool(metadata_key, store, user, organization_id)
+        account = await provider.account_models(credential)
+        usable = [model for model in models if account is None or model in account]
+        if routing["retention"] == "require_zdr":
+            zdr = (await provider.routing_availability())["zdr"]
+            if zdr is not None:
+                usable = [model for model in usable if model in zdr]
+        return usable
+
     @app.get("/api/organizations/{organization_id}/inference-configuration")
     async def inference_configuration(organization_id: str, user: User):
         await run_in_threadpool(catalog_access, user, organization_id)
         models = await provider.prices()
         configuration = await run_in_threadpool(inference.configuration, user, organization_id, models=[model["id"] for model in models])
         return {**configuration,
+                "allowed_models": await usable_models(user, organization_id, configuration["allowed_models"], configuration["routing"]),
                 "enabled": config.inference_enabled, "worker_running": worker.running}
 
     install_blog_routes(app, store, authenticated, frontend=config.frontend_dir)
@@ -870,10 +883,11 @@ def create_app(config: Config, *, provider: OpenRouter | None = None, mail_provi
         pinned = await run_in_threadpool(usage.recommendation_preferences, user, organization_id)
         return {
             "models": models,
-            "allowed_models": [model["id"] for model in models],
+            "allowed_models": await usable_models(user, organization_id, [model["id"] for model in models], policy["routing"]),
             "recommendations": recommendations(models, pinned=pinned),
             "fetched_at": getattr(provider, "prices_fetched_at", None) or int(time.time()),
             "routing": policy["routing"]["strategy"],
+            "retention": policy["routing"]["retention"],
             "source": "OpenRouter public model catalog",
         }
 

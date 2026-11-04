@@ -30,7 +30,7 @@ import { MessageUsageDetails } from "./MessageUsageDetails";
 import { ReplyFiles } from "./ReplyFiles";
 import { ReplyTimeline, WorkingCard } from "./ReplyTimeline";
 import { normalizeMathDelimiters, rehypeMath } from "./markdownMath";
-import { catalogModel, modelOptionGroups } from "./modelRecommendations";
+import { catalogModel, keptReplyModel, modelOptionGroups } from "./modelRecommendations";
 import { EffortPicker, ModelPicker, compactTokens } from "./ModelBrowser";
 import { ResearchControls, RESEARCH_TOOLS, ResearchTool, TOOL_LABELS, goalCommand } from "./ResearchControls";
 import { TopicCopyButton, TopicSystemPrompt } from "./TopicDiagnostics";
@@ -591,15 +591,17 @@ function OrganizationCreationDialog({ organizations, onClose, onCreate }: {
 }
 
 /** Memoized: composer edits re-render the conversation, but leave the reply picker untouched unless its props change. */
-export const BetaModelMenu = React.memo(function BetaModelMenu({ configuration, catalog, selected, tools, disabled, error, onSelect, effort = "", onEffortChange }: {
+export const BetaModelMenu = React.memo(function BetaModelMenu({ configuration, catalog, selected, tools, disabled, error, onSelect, effort = "", onEffortChange, openSignal }: {
   configuration: Pick<InferenceConfiguration, "allowed_models"> | null; catalog: OrganizationPrices | null; selected: string; disabled: boolean;
   tools: KnowledgeTool[]; error: string; onSelect: (model: string) => void;
   effort?: string; onEffortChange?: (effort: string) => void;
+  /** Opens the list on each new value. */
+  openSignal?: number;
 }) {
   const maximum = catalogModel(catalog, selected)?.max_completion_tokens ?? 8192;
   const sourceLabels = tools.map((tool) => tool === "journal" ? "journal" : tool === "workflows" ? "workflows" : tool);
   return <ModelPicker label="Choose reply model" models={configuration?.allowed_models ?? []} catalog={catalog} value={selected}
-    onChange={onSelect} effort={effort} onEffortChange={onEffortChange} disabled={disabled}>
+    onChange={onSelect} effort={effort} onEffortChange={onEffortChange} disabled={disabled} openSignal={openSignal}>
       {error && <p className="org-error">{error}</p>}
       {!configuration && !error && <p role="status">Loading models…</p>}
       {configuration && !configuration.allowed_models.length && <p>No models are enabled for this organization.</p>}
@@ -797,6 +799,13 @@ function Conversation({ organizationId, topic, members, user, canWrite, canManag
   const [promptRevision, setPromptRevision] = useState(0);
   useEffect(() => { try { if (selectedModel) localStorage.setItem(modelStorageKey, selectedModel); } catch { /* Storage is optional. */ } }, [modelStorageKey, selectedModel]);
   const [modelError, setModelError] = useState("");
+  // A reply model that is no longer allowed stays named, and unselected, until someone chooses another.
+  const [lostModel, setLostModel] = useState<string | null>(null);
+  const replyChoice = useRef({ selectedModel, lostModel });
+  replyChoice.current = { selectedModel, lostModel };
+  // Each increment opens the reply model list.
+  const [pickModel, setPickModel] = useState(0);
+  const chooseReplyModel = useCallback((model: string) => { setSelectedModel(model); setLostModel(null); }, []);
   const [goalDraft, setGoalDraft] = useState<string | null>(null);
   const [composerTools, setComposerTools] = useState<HTMLDivElement | null>(null);
   // In the message box, right of the text: the topic's start, resume or stop button. Under it, beside the model: the ⓘ.
@@ -962,9 +971,9 @@ function Conversation({ organizationId, topic, members, user, canWrite, canManag
           maxAge: 2000, signal: controller.signal });
         if (controller.signal.aborted) return;
         setInferenceConfiguration(configuration);
-        setSelectedModel((current) => configuration.allowed_models.includes(current) || current.startsWith("bot/") ? current
-          : topic.default_model && configuration.allowed_models.includes(topic.default_model) ? topic.default_model
-            : configuration.allowed_models[0] ?? "");
+        const kept = keptReplyModel(replyChoice.current.selectedModel, replyChoice.current.lostModel, topic.default_model,
+          configuration.allowed_models);
+        setSelectedModel(kept.model); setLostModel(kept.lost);
       } catch (cause) {
         if (aborted(cause)) return;
         if (cause instanceof ApiError && cause.status === 401) onAuthLost(); else setModelError(errorMessage(cause));
@@ -1218,6 +1227,33 @@ function Conversation({ organizationId, topic, members, user, canWrite, canManag
   // that returns no change, and model-menu updates reuse the same elements. Callbacks read current values from refs.
   const replyAgain = useRef({ selectedModel, selectedEffort, modelCatalog, onModelAttempt, onForked });
   replyAgain.current = { selectedModel, selectedEffort, modelCatalog, onModelAttempt, onForked };
+  /** Sends a privacy-refused reply's request again with an allowed model, which also becomes the topic's reply model here. */
+  const sendWith = useCallback(async (run: ModelRun, model: string) => {
+    const { modelCatalog, onModelAttempt } = replyAgain.current;
+    chooseReplyModel(model);
+    const metadata = modelCatalog?.models.find(item => item.id === model);
+    const attempt = automaticModelAttempt(model, run.context_through_sequence, metadata?.max_completion_tokens ?? 8192);
+    onModelAttempt(attempt);
+    try {
+      await requestModelReply(organizationId, topic.id, attempt, onModelAttempt);
+    } catch (cause) {
+      if (!alive.current) return;
+      if (cause instanceof ApiError && cause.status === 401) onAuthLost();
+      // An unconfirmed request is explained, with retry, in the conversation.
+      else if (definitiveRejection(cause)) setError(errorMessage(cause));
+    }
+  }, [organizationId, topic.id, onAuthLost, chooseReplyModel]);
+  const refusal = useMemo(() => {
+    const allowed = inferenceConfiguration?.allowed_models ?? [];
+    const recommended = modelOptionGroups(allowed, modelCatalog).recommended;
+    return {
+      // The same model's paid route first, then the topic's default, then the recommended and first allowed models.
+      replacement: (failed: string) => [failed.replace(/:free$/, ""), topic.default_model, ...recommended, allowed[0]]
+        .find((id): id is string => !!id && id !== failed && allowed.includes(id)) ?? null,
+      onSendWith: (run: ModelRun, model: string) => void sendWith(run, model),
+      onChoose: () => setPickModel(value => value + 1),
+    };
+  }, [inferenceConfiguration, modelCatalog, topic.default_model, sendWith]);
   // Running replies change the transcript only through what they offer each message, so polling rebuilds it rarely.
   const runsNow = useRef({ betaRuns, threads });
   runsNow.current = { betaRuns, threads };
@@ -1411,7 +1447,7 @@ function Conversation({ organizationId, topic, members, user, canWrite, canManag
         canWrite={canWrite} canManage={canManage} online={online} toolbarTarget={composerButton} hidePlay={Boolean(draft.text.trim() || files.length)}
         attempt={modelAttempt} onAttempt={onModelAttempt} onAuthLost={onAuthLost} onActivity={setBetaActivity} wake={activityWake}
         onRuns={setBetaRuns} stopRef={stopReply} addingTo={adding?.root.id} onAddTo={onAddTo} onUndoAddition={undoFromReply} names={memberNames}
-        transcript={transcript} onReplyPending={refreshMessages} />}
+        transcript={transcript} onReplyPending={refreshMessages} refusal={refusal} />}
       <BotConversation organizationId={organizationId} topicId={topic.id} names={botNames} userId={user.id}
         canWrite={canWrite} canManage={canManage} onActivity={setBotActivity} onAuthLost={onAuthLost} wake={activityWake} />
 
@@ -1451,6 +1487,8 @@ function Conversation({ organizationId, topic, members, user, canWrite, canManag
             ?? adding.root.created_at ?? 0) * 1000).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" })} question</span>
         <button type="button" aria-label="Stop adding" title="Back to a new question · Esc" onClick={cancelAdding}>×</button></div>}
       {draft.replyTo && <ReplyBar original={replyOriginal} label={replyOriginal && authorLabel(replyOriginal, members)} onCancel={cancelReply} />}
+      {topic.kind === "beta" && lostModel && !selectedModel && <p className="org-composer-notice" role="status">{lostModel} is no longer available.{" "}
+        <button type="button" className="org-composer-notice-action" onClick={() => setPickModel(value => value + 1)}>Choose another model.</button></p>}
       <PendingFiles files={files} onRemove={removeFile} />
       <label className="org-visually-hidden" htmlFor="org-message">Message</label>
       <div className="org-composer-row">{(topic.kind !== "beta" || adding) && attach}<div className="org-composer-input"><MentionMirror ref={mirror} text={draft.text} bindings={draft.mentions} self={user.id} />
@@ -1509,7 +1547,7 @@ function Conversation({ organizationId, topic, members, user, canWrite, canManag
         <div className="org-composer-model">
           <span className="org-composer-capabilities" ref={setCapabilitiesSlot} />
           <BetaModelMenu configuration={replyConfiguration} catalog={replyCatalog} selected={selectedModel} tools={topic.knowledge_tools}
-            disabled={sending || !!modelAttempt} error={selectedModel.startsWith("bot/") ? "" : modelError} onSelect={setSelectedModel} />
+            disabled={sending || !!modelAttempt} error={selectedModel.startsWith("bot/") ? "" : modelError} onSelect={chooseReplyModel} openSignal={pickModel} />
           <EffortPicker model={selectedModel} catalog={replyCatalog} effort={effort} disabled={sending || !!modelAttempt} onSelect={chooseEffort} />
         </div>
       </div>}

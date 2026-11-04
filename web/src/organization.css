@@ -994,3 +994,16 @@ a.org-reference:hover, a.org-reference:focus-visible { text-decoration: underlin
 @media (max-width: 600px) {
   .org-user-administration .org-admin-list .org-user-actions { flex-basis: 100%; justify-content: flex-start; }
 }
+/* What a model's requests get under the organization's data retention mode. */
+.org-model-retention { flex: none; padding: 0 6px; border-radius: 999px; font-size: 10px; line-height: 16px;
+  background: color-mix(in srgb, var(--muted) 16%, transparent); color: var(--muted); }
+.org-model-retention.org-model-zdr { background: color-mix(in srgb, var(--teal) 18%, transparent); color: color-mix(in srgb, var(--teal) 80%, var(--foreground)); }
+/* A reply refused by the organization's privacy settings offers an allowed model or the model list. */
+.org-run-refusal-actions { display: flex; flex-wrap: wrap; gap: 6px; margin: 4px 0 2px; }
+.org-run-refusal-actions .org-run-send-with { background: color-mix(in srgb, var(--teal) 18%, transparent);
+  color: color-mix(in srgb, var(--teal) 80%, var(--foreground)); border-color: transparent; }
+/* The topic's reply model is no longer allowed. */
+.org-composer-notice { margin: 0 0 6px; padding: 5px 10px; border-radius: var(--radius-control); font-size: 12px;
+  background: color-mix(in srgb, var(--amber) 14%, var(--surface)); color: color-mix(in srgb, var(--amber) 75%, var(--foreground)); }
+.org-app .org-composer-notice-action, .org-app .org-composer-notice-action:hover { min-height: 0; padding: 0; border: 0; background: none;
+  color: inherit; font: inherit; text-decoration: underline; cursor: pointer; }

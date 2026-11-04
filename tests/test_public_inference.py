@@ -28,11 +28,11 @@ QUOTES = [Quote(model, "0.000001", "0.000002", "0", 200000, 8192) for model in M
 def test_routing_is_enforced_and_pinned_to_each_accepted_request(installation):
     _, state, client, owner, topics = prepare(installation)
     org, user, topic = owner["organization_id"], owner["user_id"], topics[1]["id"]
-    policy = {"strategy": "recommended", "zdr": True, "region": "eu"}
+    policy = {"strategy": "recommended", "retention": "require_zdr", "region": "eu"}
     assert client.put(f"/api/organizations/{org}/routing", json=policy).status_code == 200
     assert state.configuration(user, org)["routing"] == policy
     run = enqueue(state, owner, topic, models=MODELS[:1])[0]
-    changed = {"strategy": "cheapest", "zdr": False, "region": "global"}
+    changed = {"strategy": "cheapest", "retention": "no_training", "region": "global"}
     assert client.put(f"/api/organizations/{org}/routing", json=changed).status_code == 200
     with state.store.transaction() as db:
         quote = Quote(**json.loads(db.execute("SELECT quote_json FROM llm_runs WHERE id=?", (run["id"],)).fetchone()[0]))
@@ -44,16 +44,78 @@ def test_routing_is_enforced_and_pinned_to_each_accepted_request(installation):
     sent = [item for item in fixture.requests if item.method == "POST"][0]
     assert str(sent.url) == "https://eu.openrouter.ai/api/v1/chat/completions"
     assert json.loads(sent.content)["provider"] == quote.route()
-    cheap = Quote(**{**quote.record(), "routing": {"strategy": "cheapest", "zdr": False, "region": "global"}})
+    cheap = Quote(**{**quote.record(), "routing": {"strategy": "cheapest", "retention": "no_training", "region": "global"}})
     assert cheap.route()["sort"] == "price" and cheap.route()["max_price"] == {"prompt": 1, "completion": 2}
-    assert client.put(f"/api/organizations/{org}/routing", json={**policy, "zdr": "yes"}).status_code == 422
+    assert client.put(f"/api/organizations/{org}/routing", json={**policy, "retention": "maybe"}).status_code == 422
+    assert client.put(f"/api/organizations/{org}/routing", json={**policy, "zdr": True}).status_code == 422
+
+
+@pytest.mark.parametrize(("retention", "zdr_available", "route"), [
+    ("no_training", True, {"data_collection": "deny"}),
+    ("prefer_zdr", True, {"zdr": True, "data_collection": "deny"}),
+    ("prefer_zdr", False, {"data_collection": "deny"}),
+    ("require_zdr", False, {"zdr": True, "data_collection": "deny"}),
+])
+def test_every_retention_mode_denies_training_and_prefer_zdr_never_refuses_a_model(retention, zdr_available, route):
+    quote = Quote(**{**QUOTES[0].record(), "zdr_available": zdr_available,
+                     "routing": {"strategy": "recommended", "retention": retention, "region": "global"}})
+    assert quote.route() == {"allow_fallbacks": True, "require_parameters": True, **route}
+
+
+def test_a_policy_stored_before_retention_modes_reads_as_its_nearest_mode(installation):
+    from reasoning_ledger.server.openrouter import routing_policy
+
+    assert routing_policy({"strategy": "latency", "zdr": True, "region": "us"}) == {
+        "strategy": "latency", "retention": "require_zdr", "region": "us"}
+    assert routing_policy({"strategy": "recommended", "zdr": False, "region": "global"})["retention"] == "prefer_zdr"
+    _, state, client, owner, _ = prepare(installation)
+    org, user = owner["organization_id"], owner["user_id"]
+    assert state.configuration(user, org)["routing"] == {"strategy": "recommended", "retention": "prefer_zdr", "region": "global"}
+
+
+def test_quotes_carry_zero_data_retention_availability_from_the_filtered_catalog():
+    fixture = Fixture()
+
+    async def handler(request):
+        if request.url.params.get("zdr"):
+            return httpx.Response(200, json={"data": [{"id": "test/one"}]})
+        if request.url.params.get("region"):
+            return httpx.Response(200, json={"data": []})
+        return await fixture.handle(request)
+
+    provider = OpenRouter("http://127.0.0.1:9/api/v1", transport=httpx.MockTransport(handler))
+    quotes = asyncio.run(provider.quotes(MODELS))
+    assert [quote.zdr_available for quote in quotes] == [True, False]
+    assert quotes[0].route()["zdr"] is True and "zdr" not in quotes[1].route()
+
+
+def test_account_models_come_from_the_keys_filtered_catalog_and_survive_a_failed_refresh():
+    clock = [0.0]
+    answers = [httpx.Response(200, json={"data": [{"id": "test/one"}, {"id": 7}]}), httpx.Response(500),
+               httpx.Response(200, json={"data": []})]
+    seen = []
+
+    def handler(request):
+        seen.append((request.url.path, request.headers.get("authorization")))
+        return answers.pop(0)
+
+    provider = OpenRouter("http://127.0.0.1:9/api/v1", transport=httpx.MockTransport(handler), clock=lambda: clock[0])
+    assert asyncio.run(provider.account_models(None)) is None
+    assert asyncio.run(provider.account_models(("key-1", KEY))) == {"test/one"}
+    assert seen == [("/api/v1/models/user", "Bearer " + KEY)]
+    assert asyncio.run(provider.account_models(("key-1", KEY))) == {"test/one"} and len(seen) == 1
+    clock[0] += 301
+    assert asyncio.run(provider.account_models(("key-1", KEY))) == {"test/one"}, "a failed refresh keeps the last list"
+    clock[0] += 61
+    assert asyncio.run(provider.account_models(("key-1", KEY))) == {"test/one"}, "an empty list is not trusted"
+    assert len(seen) == 3
 
 
 @pytest.mark.parametrize("strategy", ["latency", "throughput"])
 def test_speed_routing_is_explicit_and_preserves_privacy_and_regional_constraints(installation, strategy):
     _, state, client, owner, topics = prepare(installation)
     org, user = owner["organization_id"], owner["user_id"]
-    policy = {"strategy": strategy, "zdr": True, "region": "us"}
+    policy = {"strategy": strategy, "retention": "require_zdr", "region": "us"}
     assert client.put(f"/api/organizations/{org}/routing", json=policy).status_code == 200
     row = enqueue(state, owner, topics[1]["id"], models=MODELS[:1])[0]
     with state.store.transaction() as db:
@@ -153,8 +215,10 @@ class Fixture:
         self.provider = OpenRouter(transport=httpx.MockTransport(self.handle))
 
     async def handle(self, request):
-        self.requests.append(request)
-        if request.url.path.endswith("/models"):
+        # Filtered catalog reads (zero data retention, regions, the account's allowed models) are metadata, not recorded.
+        if not (request.url.path.endswith("/models/user") or request.url.path.endswith("/models") and request.url.params):
+            self.requests.append(request)
+        if request.url.path.endswith(("/models", "/models/user")):
             return httpx.Response(
                 200,
                 json={
@@ -286,7 +350,9 @@ def test_group_models_use_one_immutable_scoped_context_and_organization_key(inst
     assert payloads[0]["messages"] == payloads[1]["messages"]
     assert "Later message" not in json.dumps(payloads)
     assert all(payload["max_completion_tokens"] == 256 for payload in payloads)
-    assert all(payload["provider"] == {"allow_fallbacks": True, "require_parameters": True} for payload in payloads)
+    # These quotes list no zero-data-retention endpoints, so the default Prefer ZDR denies training only.
+    assert all(payload["provider"] == {"allow_fallbacks": True, "require_parameters": True, "data_collection": "deny"}
+               for payload in payloads)
     messages = Store(config.data_dir).messages(owner["user_id"], org, topic)
     assistants = [message for message in messages if message["author_kind"] == "assistant"]
     assert len(assistants) == 2 and {message["assistant_model"] for message in assistants} == set(MODELS)

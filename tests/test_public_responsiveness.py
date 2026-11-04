@@ -52,7 +52,9 @@ def test_catalog_failure_backoff_expires_and_admission_quotes_always_fetch_curre
         requests, clock, failing, rate = [], [100.0], [False], ["0.000001"]
 
         def catalog(request):
-            requests.append(request)
+            # Quotes also read the cached zero-data-retention and regional lists; only full catalog reads count here.
+            if not request.url.params:
+                requests.append(request)
             if failing[0]:
                 return httpx.Response(503, text="untrusted provider error")
             model = copy.deepcopy(MODEL)
