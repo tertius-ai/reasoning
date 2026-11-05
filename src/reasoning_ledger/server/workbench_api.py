@@ -8,7 +8,9 @@ from pydantic import Field
 
 from ..service import RevisionObservations
 from .request_input import RequestInput
-from .research_artifacts import ResearchArtifacts
+from .research_artifact_recovery import ResearchArtifactRecovery
+from .research_artifacts import MAX_ASSEMBLY_PARTS, ResearchArtifacts
+from .research_file_limits import MAX_ARTIFACT_TEXT_BYTES
 from .workbench_tools import MathematicalLedger
 
 
@@ -22,8 +24,26 @@ class LedgerOperation(RequestInput):
 
 class ArtifactWrite(RequestInput):
     path: Annotated[str, Field(max_length=200)]
-    text: Annotated[str, Field(max_length=64000)]
+    text: Annotated[str, Field(max_length=MAX_ARTIFACT_TEXT_BYTES)]
     expected_sha256: str | None = None
+
+
+class ArtifactPart(RequestInput):
+    path: Annotated[str, Field(min_length=1, max_length=200)]
+    revision: Annotated[int, Field(ge=1, le=2**63 - 1, strict=True)]
+
+
+class ArtifactAssemble(RequestInput):
+    path: Annotated[str, Field(min_length=1, max_length=200)]
+    parts: Annotated[list[ArtifactPart], Field(min_length=1, max_length=MAX_ASSEMBLY_PARTS)]
+    expected_sha256: Annotated[str | None, Field(pattern=r"^[a-f0-9]{64}$")] = None
+
+
+class ArtifactRecover(RequestInput):
+    sha256: Annotated[str, Field(pattern=r"^[a-f0-9]{64}$")]
+    event_sequence: Annotated[int, Field(ge=1, le=2**63 - 1, strict=True)]
+    tool_index: Annotated[int, Field(ge=0, le=10000, strict=True)]
+    path: Annotated[str | None, Field(min_length=1, max_length=200)] = None
 
 
 class LedgerImport(RequestInput):
@@ -117,6 +137,7 @@ def install_routes(app, store, authenticated):
         )
 
     artifacts = ResearchArtifacts(store)
+    recovery = ResearchArtifactRecovery(store)
     artifact_prefix = "/api/organizations/{organization_id}/topics/{topic_id}/research-files"
 
     @app.get(artifact_prefix)
@@ -140,3 +161,15 @@ def install_routes(app, store, authenticated):
     @app.post(artifact_prefix)
     def write_file(organization_id: str, topic_id: str, body: ArtifactWrite, user: User):
         return artifacts.write(user, organization_id, topic_id, **body.model_dump())
+
+    @app.post(artifact_prefix + "/assemble")
+    def assemble_file(organization_id: str, topic_id: str, body: ArtifactAssemble, user: User):
+        return artifacts.assemble(user, organization_id, topic_id, **body.model_dump())
+
+    @app.get(artifact_prefix + "/recovery")
+    def recoverable_files(organization_id: str, topic_id: str, user: User):
+        return recovery.list(user, organization_id, topic_id)
+
+    @app.post(artifact_prefix + "/recovery")
+    def recover_file(organization_id: str, topic_id: str, body: ArtifactRecover, user: User):
+        return recovery.recover(user, organization_id, topic_id, **body.model_dump())

@@ -54,3 +54,11 @@ permission. Retrieve original evidence on demand. Respect current project/topic
 access, spending authorization and approved execution backends; never expose
 credentials. Share files through their returned revision links. Produce or
 publish standalone writeups and blog posts only when requested or authorized.
+
+For a requested document, save the source before attempting optional compilation.
+artifact_write accepts up to 256 KiB of UTF-8 text. For a larger document, save
+it as section files with artifact_write (for example paper/01-introduction.tex),
+then call artifact_assemble with the sections' paths and returned revisions in
+order to publish one file. After an interruption, artifact_list shows the sections
+already saved; write only the missing ones. Only a successful write or assembly
+returns a completed file link; a proposed tool call is not a delivered document.

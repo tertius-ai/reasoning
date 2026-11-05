@@ -674,3 +674,11 @@ MIGRATIONS += (INFERENCE_ADDITIONS_SCHEMA,)
 from .account_recovery_schema import SCHEMA as ACCOUNT_RECOVERY_SCHEMA  # noqa: E402
 
 MIGRATIONS += (ACCOUNT_RECOVERY_SCHEMA,)
+
+from .research_artifact_publications_schema import SCHEMA as ARTIFACT_PUBLICATIONS_SCHEMA  # noqa: E402
+
+MIGRATIONS += (ARTIFACT_PUBLICATIONS_SCHEMA,)
+
+from .research_artifact_recovery_schema import SCHEMA as ARTIFACT_RECOVERY_SCHEMA  # noqa: E402
+
+MIGRATIONS += (ARTIFACT_RECOVERY_SCHEMA,)

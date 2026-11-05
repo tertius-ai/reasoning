@@ -215,7 +215,9 @@ PROTOCOL_STAGES = {
 # emit large events and many small SSE frames before returning their answer.
 MAX_STREAM_BYTES = 64 * 1024 * 1024
 MAX_EVENT_BYTES = 2 * 1024 * 1024
-PROTOCOL_RULES = {"content_type", "stream_size", "event_size", "invalid_json", "invalid_utf8", "response_structure"}
+PROTOCOL_RULES = {
+    "content_type", "stream_size", "event_size", "tool_argument_size", "invalid_json", "invalid_utf8", "response_structure",
+}
 # Closed names for the response field that failed validation, with the JSON
 # shape the parser accepts there. Diagnostics never echo provider values.
 PROTOCOL_FIELDS = {
@@ -281,6 +283,12 @@ def protocol_diagnostics(stage: str, rule=None, received_bytes=None, field=None,
         result["protocol_rule"] = rule
         if rule in {"stream_size", "event_size"}:
             result["message"] = "Provider transport exceeded its safety allowance: " + rule.replace("_", " ") + "."
+        elif rule == "tool_argument_size":
+            result["message"] = "The generated tool arguments exceed the per-call byte allowance."
+            result["action"] = (
+                "Save large files in smaller chunks. Inspect the retained received output before explicitly retrying; "
+                "do not automatically replay the provider call."
+            )
     if isinstance(field, str) and field in PROTOCOL_FIELDS:
         result["protocol_field"] = field
         received = ""

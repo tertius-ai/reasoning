@@ -3,6 +3,8 @@
 
 def remove_collaboration_schema(db):
     """Strip collaboration migrations in foreign-key dependency order, preserving core rows."""
+    db.execute("DROP TABLE IF EXISTS research_artifact_recoveries")
+    db.execute("DROP TABLE IF EXISTS research_artifact_publications")
     db.execute("DROP TABLE IF EXISTS inference_additions")
     db.execute("DROP TABLE IF EXISTS feedback_reports")
     db.execute("DROP TABLE IF EXISTS research_account_versions")

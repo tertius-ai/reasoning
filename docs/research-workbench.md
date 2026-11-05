@@ -270,7 +270,7 @@ Discovery never adds permissions. Each invocation has a durable receipt.
 | Literature | arXiv search/lookup/text/source archive reads; Crossref search/lookup; OEIS lookup/search |
 | Mathematical sources | `math_search`, `math_read`: MathOverflow, Wikipedia, nLab, Stacks Project, Encyclopedia of Mathematics, LMFDB |
 | LMFDB | `lmfdb_catalog`, `lmfdb_schema`, `lmfdb_query`: all collections exposed by its public API, discovered live |
-| Private files | `artifact_list`, `artifact_write`, `research_file_read`; compute `artifact_read` |
+| Private files | `artifact_list`, `artifact_write`, `artifact_assemble`, `research_file_read`; compute `artifact_read` |
 | Private research blog | `blog_search`, `blog_read`, `blog_create`, `blog_revise`, `blog_publish` (authorized, revision-guarded writes) |
 | Gamma authoring | `workflow_read`, `workflow_create`, `workflow_update`, `workflow_preflight`, `workflow_propose_run` |
 | Sandbox computation | `compute_submit`, `compute_cancel`, `compute_log_read`, image/job/artifact inspection; `lean_check`; `noether_operations`, `noether_compute`, `noether_status`, `noether_describe` |
@@ -283,6 +283,7 @@ and deny private networks, redirects, credentials, and executable HTML. General
 web search needs the operator's `REASONING_BRAVE_API_KEY`; the mathematical
 adapters do not need separate search credentials. Sources can fail or rate-limit;
 the agent must report missing evidence, not invent retrieved text.
+
 Search providers receive query text; inference and compute providers receive
 their submitted inputs. A private audience is not a promise of offline execution.
 LMFDB supports
@@ -310,6 +311,60 @@ was refused, why, and what to do instead: an invalid argument and its schema
 path, an ungranted tool, an unsupported media type, a size limit, a redirect
 target, a missing identifier or version, or a rate-limit wait. Unexpected
 exception text is not returned.
+
+### Delivering research files
+
+Native research agents can save UTF-8 source such as `.tex`, `.md` and `.bib`
+without a compiler or compute job. `artifact_write` and the human file editor
+accept at most 256 KiB of UTF-8 text per save, including non-ASCII text. Tool-call
+arguments allow six times that byte budget plus 4 KiB for JSON escaping and
+metadata; the provider stream and event bounds remain enforced.
+
+For a file larger than one save, up to 64 MiB, the agent saves sections as
+ordinary project files with `artifact_write`, then `artifact_assemble` joins pinned
+revisions of them, in order and byte for byte, into one file. It takes the
+destination `path`, up to 256 `parts` (each a saved `path` and `revision`) and,
+to replace an existing file, its current `expected_sha256`. Sections are never
+resent: after an interruption the agent writes only the missing sections, and
+after a conflict with an intervening edit it assembles again with the new hash.
+Repeating an assembly with the same parts returns the same revision.
+
+Successful writes and assemblies attach complete, revision-pinned downloads to the
+reply; section revisions that the run joined into an assembled file are listed
+only through that file, and remain in **Project files**. Save requested source
+before attempting optional compilation; a saved source file is not a compilation
+result. If the agent saves a file and then fails without producing reply text, the
+server still posts the saved file links alongside the incomplete-answer status.
+Each native save records its publication receipt, including an assembly's parts,
+in the same transaction as the file revision. A crash or cancellation before the
+outer tool receipt completes does not lose that download, and a retry that returns
+an older revision cannot replace a newer saved revision in the reply.
+
+The editor loads the complete pinned source before editing a previewed file.
+Navigation cancels stale reads and prevents older responses from changing a later
+editor. Text exceeding the editor's byte allowance remains intact, with saving
+disabled and an explicit error; pasting never silently clips source to the limit.
+
+**Project files** also lists recoverable source from the latest 50 retained
+partial-response events in failed, cancelled or interrupted runs in this topic,
+with at most 50 candidate files. Only complete, unambiguous `artifact_write`
+arguments within the direct-save byte limit qualify. **Recover a copy** explicitly
+saves that exact text under a new filename, with a checksum-bound receipt. It
+does not execute the retained tool call, overwrite another file, resume inference
+or contact a model. Incomplete JSON and other tool calls are excluded. Recovered
+source still needs review; recovery does not assert that a document is complete
+or compiles. Current topic write access is required to recover, and repeated
+requests return the original recovered revision.
+Complete received file arguments are retained even if the stream finishes and
+subsequent accounting or protocol validation fails; retention does not authorize
+execution or establish that an unreported provider charge is zero.
+
+The authenticated topic API mirrors these operations under `research-files`:
+`POST /assemble` takes the same `path`, `parts` and `expected_sha256` as the tool.
+`GET /recovery` lists retained file metadata; `POST /recovery` supplies its
+`event_sequence`, `tool_index` and `sha256`, with an optional safe new `path`.
+These routes retain current project/topic authorization and the download
+content-safety headers.
 
 ## Computation, approvals, and the private blog
 
