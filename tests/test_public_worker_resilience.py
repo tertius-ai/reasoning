@@ -576,6 +576,13 @@ def test_a_fenced_failure_still_records_its_failure(installation, monkeypatch):
     assert [event["reason"] for event in failed] == ["agent_execution_error"], "only stopping for shutdown ends the turn early"
 
 
+def completion_recorded(state, run_id):
+    # Each poll reads in its own transaction; a held read transaction would keep its snapshot and miss the commit.
+    with state.store.transaction() as db:
+        return db.execute("SELECT 1 FROM inference_call_events e JOIN inference_calls c ON c.id=e.call_id "
+                          "WHERE c.run_id=? AND e.kind='completion'", (run_id,)).fetchone() is not None
+
+
 def test_busy_plain_completion_is_retried_with_its_outcome(installation, monkeypatch, caplog):
     _, state, _, owner, topics = prepare(installation)
     user, org = owner["user_id"], owner["organization_id"]
@@ -600,6 +607,8 @@ def test_busy_plain_completion_is_retried_with_its_outcome(installation, monkeyp
     worker.start()
     try:
         wait(lambda: state.run(user, org, row["id"])["status"] == "succeeded")
+        # The worker records the call's completion in a separate transaction after the run finishes.
+        wait(lambda: completion_recorded(state, row["id"]))
         assert len(outcomes) == 3 and all(outcome == outcomes[0] for outcome in outcomes) and outcomes[0][0] == "succeeded"
         assert worker.running
         with state.store.transaction() as db:
