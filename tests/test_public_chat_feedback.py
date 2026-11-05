@@ -419,6 +419,8 @@ def test_more_reactions_are_accepted_and_older_installations_widen_the_check(ins
     feedback.set(user, org, topic, "message", message["id"], "upside_down", True)
     with store.transaction(write=True) as db:
         _reaction_check(db, " CHECK(emoji IN ('up','down','upside_down'))")
+        db.execute("DROP TABLE research_artifact_recoveries")
+        db.execute("DROP TABLE research_artifact_publications")
         db.execute("DROP TABLE account_mail")
         db.execute("DROP TABLE inference_additions")
         db.execute("DROP TABLE feedback_reports")
