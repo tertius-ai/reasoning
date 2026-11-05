@@ -3,14 +3,13 @@
 from typing import Annotated
 from urllib.parse import quote
 
-from fastapi import Depends, Query, Response
+from fastapi import Depends, Response
 from pydantic import Field
 
 from ..service import RevisionObservations
 from .request_input import RequestInput
-from .research_artifact_drafts import ResearchArtifactDrafts
 from .research_artifact_recovery import ResearchArtifactRecovery
-from .research_artifacts import ResearchArtifacts
+from .research_artifacts import MAX_ASSEMBLY_PARTS, ResearchArtifacts
 from .research_file_limits import MAX_ARTIFACT_TEXT_BYTES
 from .workbench_tools import MathematicalLedger
 
@@ -29,34 +28,22 @@ class ArtifactWrite(RequestInput):
     expected_sha256: str | None = None
 
 
-class ArtifactBegin(RequestInput):
+class ArtifactPart(RequestInput):
     path: Annotated[str, Field(min_length=1, max_length=200)]
-    client_id: Annotated[str, Field(min_length=1, max_length=200)]
+    revision: Annotated[int, Field(ge=1, le=2**63 - 1, strict=True)]
+
+
+class ArtifactAssemble(RequestInput):
+    path: Annotated[str, Field(min_length=1, max_length=200)]
+    parts: Annotated[list[ArtifactPart], Field(min_length=1, max_length=MAX_ASSEMBLY_PARTS)]
     expected_sha256: Annotated[str | None, Field(pattern=r"^[a-f0-9]{64}$")] = None
 
 
-class ArtifactAppend(RequestInput):
-    offset: Annotated[int, Field(ge=0, le=64 * 1024 * 1024, strict=True)]
-    text: Annotated[str, Field(min_length=1, max_length=MAX_ARTIFACT_TEXT_BYTES)]
-
-
-class ArtifactFinish(RequestInput):
+class ArtifactRecover(RequestInput):
     sha256: Annotated[str, Field(pattern=r"^[a-f0-9]{64}$")]
-
-
-class ArtifactRecover(ArtifactFinish):
     event_sequence: Annotated[int, Field(ge=1, le=2**63 - 1, strict=True)]
     tool_index: Annotated[int, Field(ge=0, le=10000, strict=True)]
     path: Annotated[str | None, Field(min_length=1, max_length=200)] = None
-
-
-def _source_response(body, checksum, filename, download):
-    disposition = "attachment" if download else "inline"
-    return Response(body, media_type="text/plain; charset=utf-8", headers={
-        "Content-Disposition": disposition + "; filename*=UTF-8''" + quote(filename, safe=""),
-        "ETag": '"' + checksum + '"', "Cache-Control": "no-store", "X-Content-Type-Options": "nosniff",
-        "Content-Security-Policy": "default-src 'none'; sandbox; frame-ancestors 'none'",
-    })
 
 
 class LedgerImport(RequestInput):
@@ -150,7 +137,6 @@ def install_routes(app, store, authenticated):
         )
 
     artifacts = ResearchArtifacts(store)
-    drafts = ResearchArtifactDrafts(store)
     recovery = ResearchArtifactRecovery(store)
     artifact_prefix = "/api/organizations/{organization_id}/topics/{topic_id}/research-files"
 
@@ -165,38 +151,20 @@ def install_routes(app, store, authenticated):
     @app.get(artifact_prefix + "/content")
     def file_content(organization_id: str, topic_id: str, user: User, path: str, revision: int, download: bool = False):
         body, checksum = artifacts.content(user, organization_id, topic_id, path, revision)
-        return _source_response(body, checksum, path.rsplit("/", 1)[-1], download)
+        disposition = "attachment" if download else "inline"
+        return Response(body, media_type="text/plain; charset=utf-8", headers={
+            "Content-Disposition": disposition + "; filename*=UTF-8''" + quote(path.rsplit("/", 1)[-1], safe=""),
+            "ETag": '"' + checksum + '"', "Cache-Control": "no-store", "X-Content-Type-Options": "nosniff",
+            "Content-Security-Policy": "default-src 'none'; sandbox; frame-ancestors 'none'",
+        })
 
     @app.post(artifact_prefix)
     def write_file(organization_id: str, topic_id: str, body: ArtifactWrite, user: User):
         return artifacts.write(user, organization_id, topic_id, **body.model_dump())
 
-    @app.get(artifact_prefix + "/drafts")
-    def file_drafts(organization_id: str, topic_id: str, user: User):
-        return drafts.list(user, organization_id, topic_id)
-
-    @app.post(artifact_prefix + "/drafts")
-    def begin_file(organization_id: str, topic_id: str, body: ArtifactBegin, user: User):
-        return drafts.begin(user, organization_id, topic_id, **body.model_dump())
-
-    @app.get(artifact_prefix + "/drafts/{draft_id}")
-    def read_draft(organization_id: str, topic_id: str, draft_id: str, user: User,
-                   offset: Annotated[int, Query(ge=0, le=64 * 1024 * 1024)] = 0,
-                   length: Annotated[int, Query(ge=1, le=16000)] = 12000):
-        return drafts.read(user, organization_id, topic_id, draft_id, offset, length)
-
-    @app.post(artifact_prefix + "/drafts/{draft_id}/append")
-    def append_file(organization_id: str, topic_id: str, draft_id: str, body: ArtifactAppend, user: User):
-        return drafts.append(user, organization_id, topic_id, draft_id, **body.model_dump())
-
-    @app.post(artifact_prefix + "/drafts/{draft_id}/finish")
-    def finish_file(organization_id: str, topic_id: str, draft_id: str, body: ArtifactFinish, user: User):
-        return drafts.finish(user, organization_id, topic_id, draft_id, **body.model_dump())
-
-    @app.get(artifact_prefix + "/drafts/{draft_id}/content")
-    def draft_content(organization_id: str, topic_id: str, draft_id: str, user: User):
-        body, checksum = drafts.content(user, organization_id, topic_id, draft_id)
-        return _source_response(body, checksum, "unfinished-" + draft_id + ".txt", True)
+    @app.post(artifact_prefix + "/assemble")
+    def assemble_file(organization_id: str, topic_id: str, body: ArtifactAssemble, user: User):
+        return artifacts.assemble(user, organization_id, topic_id, **body.model_dump())
 
     @app.get(artifact_prefix + "/recovery")
     def recoverable_files(organization_id: str, topic_id: str, user: User):

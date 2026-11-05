@@ -56,8 +56,6 @@ createRoot(document.getElementById('root')).render(React.createElement(ResearchF
     const recovered = makeFile("recovered", "retained.recovered-42-0.tex", 1);
     const candidate = { event_sequence: 42, tool_index: 0, path: "retained.tex", recovery_path: recovered.path,
       sha256: checksum, size_bytes: Buffer.byteLength(source) };
-    const draftText = "\\documentclass{article}\nOnly the first saved section.\n";
-    const draft = { draft_id: "unfinished-draft", path: "work-in-progress.tex", size_bytes: Buffer.byteLength(draftText) };
     let wasRecovered = false, recoveryStarted;
     const recoveryRequest = new Promise(resolve => { recoveryStarted = resolve; });
     const recoveryGate = new Promise(resolve => { releaseRecovery = resolve; });
@@ -68,9 +66,7 @@ createRoot(document.getElementById('root')).render(React.createElement(ResearchF
       if (!path.startsWith("/api/")) return false;
       apiRequests.push({ method: request.method, path, query: url.search });
       let bytes, filename;
-      if (request.method === "GET" && path === apiRoot + `/drafts/${draft.draft_id}/content`) {
-        bytes = Buffer.from(draftText); filename = "unfinished-source.txt";
-      } else if (request.method === "GET" && path === apiRoot + "/content" && url.searchParams.get("download") === "true") {
+      if (request.method === "GET" && path === apiRoot + "/content" && url.searchParams.get("download") === "true") {
         const file = url.searchParams.get("path") === published.path ? published
           : wasRecovered && url.searchParams.get("path") === recovered.path ? recovered : null;
         assert.ok(file && url.searchParams.get("revision") === String(file.revision), "download selects the saved revision");
@@ -102,8 +98,7 @@ createRoot(document.getElementById('root')).render(React.createElement(ResearchF
         recoveryStarted();
         await recoveryGate;
         wasRecovered = true; data = recovered;
-      } else if (path === apiRoot + "/drafts" && request.method() === "GET") data = [draft];
-      else if (path === `/api/organizations/${org}/topics/${topic}/media` && request.method() === "GET") data = [];
+      } else if (path === `/api/organizations/${org}/topics/${topic}/media` && request.method() === "GET") data = [];
       else if (path === apiRoot + "/read" && request.method() === "GET") {
         const file = url.searchParams.get("path") === published.path ? published
           : wasRecovered && url.searchParams.get("path") === recovered.path ? recovered : null;
@@ -115,10 +110,6 @@ createRoot(document.getElementById('root')).render(React.createElement(ResearchF
         assert.ok(file && url.searchParams.get("revision") === String(file.revision), "content is pinned to the saved revision");
         await route.fulfill({ status: 200, contentType: "text/plain; charset=utf-8", body: Buffer.from(source),
           headers: url.searchParams.get("download") === "true" ? { "Content-Disposition": `attachment; filename="${file.path}"` } : {} });
-        return;
-      } else if (path === apiRoot + `/drafts/${draft.draft_id}/content` && request.method() === "GET") {
-        await route.fulfill({ status: 200, contentType: "text/plain; charset=utf-8", body: draftText,
-          headers: { "Content-Disposition": 'attachment; filename="unfinished-source.txt"' } });
         return;
       } else {
         unexpected.push({ method: request.method(), path });
@@ -136,18 +127,10 @@ createRoot(document.getElementById('root')).render(React.createElement(ResearchF
     };
     await page.goto(server.resolvedUrls.local[0] + "research-files-fixture.html");
     const recoverable = page.getByRole("region", { name: "Recoverable files", exact: true });
-    const unfinished = page.getByRole("region", { name: "Unfinished file drafts", exact: true });
     await recoverable.getByText(candidate.path, { exact: true }).waitFor().catch(error => {
       throw new Error("Recovery fixture did not load: " + JSON.stringify({ errors, loadFailures, apiRequests }), { cause: error });
     });
-    await unfinished.getByText(draft.path, { exact: true }).waitFor();
     assert.match(await recoverable.innerText(), /without another model call/);
-    assert.match(await unfinished.innerText(), /only the sections saved so far/);
-    assert.equal(await unfinished.getByRole("button", { name: "Recover a copy", exact: true }).count(), 0);
-    const draftLink = unfinished.getByRole("link", { name: "Download unfinished source", exact: true });
-    assert.equal(await draftLink.getAttribute("href"), `${apiRoot}/drafts/${draft.draft_id}/content`);
-    const partial = await downloadedBytes(draftLink);
-    assert.ok(partial.bytes.equals(Buffer.from(draftText)), "unfinished download contains only the retained sections");
 
     const recover = recoverable.getByRole("button", { name: "Recover a copy", exact: true });
     await recover.click();
@@ -169,7 +152,6 @@ createRoot(document.getElementById('root')).render(React.createElement(ResearchF
     await page.getByRole("button", { name: "Open " + recovered.path, exact: true }).waitFor();
     await recoverable.waitFor({ state: "detached" });
     assert.equal(await recoverable.count(), 0, "the recovered copy is now a published file");
-    await unfinished.getByRole("link", { name: "Download unfinished source", exact: true }).waitFor();
 
     await page.getByRole("button", { name: "Open " + published.path, exact: true }).click();
     const preview = page.getByLabel("File source", { exact: true });
@@ -272,7 +254,7 @@ document.getElementById('next-topic').onclick = () => render('${nextTopic}');`;
       else if (path === apiRoot && request.method() === "POST") {
         const body = request.postDataJSON(); writes.push(body); pending = holds.save;
         value = { ...b, text: body.text, revision: 2, sha256: createHash("sha256").update(body.text).digest("hex") };
-      } else if (!path.endsWith("/recovery") && !path.endsWith("/drafts") && !path.endsWith("/media")
+      } else if (!path.endsWith("/recovery") && !path.endsWith("/media")
         && path !== apiRoot.replace(topic, nextTopic)) unexpected.push(path);
       if (pending) {
         for (const name of Object.keys(holds)) if (holds[name] === pending) delete holds[name];

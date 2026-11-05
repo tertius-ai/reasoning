@@ -675,9 +675,9 @@ from .account_recovery_schema import SCHEMA as ACCOUNT_RECOVERY_SCHEMA  # noqa: 
 
 MIGRATIONS += (ACCOUNT_RECOVERY_SCHEMA,)
 
-from .research_artifact_drafts_schema import SCHEMA as RESEARCH_ARTIFACT_DRAFTS_SCHEMA  # noqa: E402
+from .research_artifact_publications_schema import SCHEMA as ARTIFACT_PUBLICATIONS_SCHEMA  # noqa: E402
 
-MIGRATIONS += (RESEARCH_ARTIFACT_DRAFTS_SCHEMA,)
+MIGRATIONS += (ARTIFACT_PUBLICATIONS_SCHEMA,)
 
 from .research_artifact_recovery_schema import SCHEMA as ARTIFACT_RECOVERY_SCHEMA  # noqa: E402
 

@@ -174,7 +174,7 @@ class BodyLimit:
         maximum, allowance = self.maximum, "64 KiB"
         file_match = re.fullmatch(
             r"/api/organizations/([a-f0-9]{32})/topics/([a-f0-9]{32})/research-files"
-            r"(?:/drafts/[a-f0-9]{32}/append)?", scope.get("path", ""),
+            r"(?:/assemble)?", scope.get("path", ""),
         )
         if scope.get("method") == "POST" and file_match and self.file_authorize is not None:
             try:

@@ -95,16 +95,15 @@ def test_saved_file_is_delivered_even_when_the_final_model_answer_fails(installa
 
 
 @pytest.mark.parametrize("wrapped", [False, True])
-def test_finishing_sections_attaches_the_saved_revision_without_an_extra_model_answer(installation, wrapped):
+def test_assembling_sections_attaches_the_saved_revision_without_an_extra_model_answer(installation, wrapped):
     state, owner, topics, row, tools = source_run(installation)
-    draft = tools.invoke("artifact_begin", {"path": "sections.tex", "client_id": "sections-reply"})["result"]
     source = "\\documentclass{article}\nA saved section with α and 研究.\n"
-    progress = tools.invoke("artifact_append", {"draft_id": draft["draft_id"], "offset": 0, "text": source})["result"]
-    arguments = {"draft_id": draft["draft_id"], "sha256": progress["sha256"]}
+    section = tools.invoke("artifact_write", {"path": "sections/01.tex", "text": source})["result"]
+    arguments = {"path": "sections.tex", "parts": [{"path": "sections/01.tex", "revision": section["revision"]}]}
     if wrapped:
-        saved = tools.invoke("tool_call", {"name": "artifact_finish", "arguments": arguments})["result"]["result"]
+        saved = tools.invoke("tool_call", {"name": "artifact_assemble", "arguments": arguments})["result"]["result"]
     else:
-        saved = tools.invoke("artifact_finish", arguments)["result"]
+        saved = tools.invoke("artifact_assemble", arguments)["result"]
     state.finish(row, "succeeded", no_charge=True)
     messages = state.store.messages(owner["user_id"], owner["organization_id"], topics[1]["id"])
     reply = next(message for message in messages if message.get("inference_run_id") == row["id"])
@@ -151,7 +150,7 @@ def test_interrupted_file_is_retained_and_only_complete_source_can_be_recovered(
     assert reply["files"][0]["sha256"] == saved["sha256"]
 
 
-def test_file_routes_enforce_utf8_byte_budget_and_resumable_offsets(installation):
+def test_file_routes_enforce_utf8_byte_budget(installation):
     _, _, client, owner, topics = prepare(installation)
     root = f"/api/organizations/{owner['organization_id']}/topics/{topics[1]['id']}/research-files"
     source = "α" * (MAX_ARTIFACT_TEXT_BYTES // 2)
@@ -173,22 +172,6 @@ def test_file_routes_enforce_utf8_byte_budget_and_resumable_offsets(installation
                        headers={"Content-Type": "application/json"}).status_code == 413
     assert client.post(root, json={"path": "over.tex", "text": source + "α"}).status_code == 400
     assert client.post(root, json={"path": "over-ascii.tex", "text": "x" * (MAX_ARTIFACT_TEXT_BYTES + 1)}).status_code == 422
-    begin = {"path": "sections.tex", "client_id": "stable-ui-draft"}
-    draft = client.post(root + "/drafts", json=begin).json()
-    path = root + "/drafts/" + draft["draft_id"]
-    first = client.post(path + "/append", json={"offset": 0, "text": source}).json()
-    assert first["next_offset"] == len(source)
-    assert client.post(path + "/append", json={"offset": 0, "text": source}).json() == first
-    assert client.post(root + "/drafts", json=begin).json() == first
-    assert client.post(path + "/append", json={"offset": True, "text": "bad"}).status_code == 422
-    assert client.get(path + "/content").content == source.encode()
-    assert len(client.get(root).json()) == 2  # Draft is not a completed file.
-    second = client.post(path + "/append", json={"offset": len(source), "text": "\\end{document}\n"}).json()
-    whole = source + "\\end{document}\n"
-    assert second["sha256"] == hashlib.sha256(whole.encode()).hexdigest()
-    finished = client.post(path + "/finish", json={"sha256": second["sha256"]}).json()
-    assert client.get(finished["download_url"]).content == whole.encode()
-    assert client.get(root + "/drafts").json() == []
 
 
 def test_recovery_rechecks_topic_access_and_does_not_expose_other_topics(installation):
@@ -244,9 +227,8 @@ def test_recovery_always_proposes_a_safe_new_bounded_filename(path):
     assert safe_path(result) and result != path and len(result) <= 200
 
 
-def test_file_delivery_migration_preserves_existing_source_and_allows_resuming_new_drafts(tmp_path, monkeypatch):
+def test_file_delivery_migration_preserves_existing_source_and_allows_assembling_new_files(tmp_path, monkeypatch):
     from reasoning_ledger.server import store as store_module
-    from reasoning_ledger.server.research_artifact_drafts import ResearchArtifactDrafts
 
     migrations = store_module.MIGRATIONS
     with monkeypatch.context() as previous:
@@ -261,10 +243,8 @@ def test_file_delivery_migration_preserves_existing_source_and_allows_resuming_n
         saved = ResearchArtifacts(old).write(user, org, topic, "existing.tex", source)
     upgraded = store_module.Store(old.data_dir)
     assert ResearchArtifacts(upgraded).content(user, org, topic, "existing.tex", saved["revision"])[0] == source.encode()
-    drafts = ResearchArtifactDrafts(upgraded)
-    draft = drafts.begin(user, org, topic, "new.tex", "migration-draft")
-    progress = drafts.append(user, org, topic, draft["draft_id"], 0, source)
-    result = drafts.finish(user, org, topic, draft["draft_id"], progress["sha256"])
-    assert ResearchArtifacts(upgraded).content(user, org, topic, "new.tex", result["revision"])[0] == source.encode()
+    files = ResearchArtifacts(upgraded)
+    result = files.assemble(user, org, topic, "new.tex", [{"path": "existing.tex", "revision": saved["revision"]}] * 2)
+    assert files.content(user, org, topic, "new.tex", result["revision"])[0] == (source * 2).encode()
     with upgraded.transaction() as db:
         assert db.execute("PRAGMA user_version").fetchone()[0] == len(migrations)

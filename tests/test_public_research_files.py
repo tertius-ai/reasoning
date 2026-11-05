@@ -1,209 +1,166 @@
-"""Exact, resumable file delivery without provider calls."""
+"""Large files assembled from saved sections, without resending source or calling a provider."""
 
 import hashlib
+import json
 
 import pytest
 from test_public_inference import prepare
 from test_public_server import installation as installation
 from test_public_server import invited
 
-from reasoning_ledger.server.research_artifact_drafts import ResearchArtifactDrafts
-from reasoning_ledger.server.research_artifacts import ResearchArtifacts
+from reasoning_ledger.server import artifact_chunks
+from reasoning_ledger.server.research_artifacts import MAX_ASSEMBLY_PARTS, ResearchArtifacts
+from reasoning_ledger.server.research_file_limits import MAX_ARTIFACT_TEXT_BYTES
 from reasoning_ledger.server.store import Store, StoreError
 
 
-def draft_setup(installation):
-    config, state, client, owner, topics = prepare(installation)
-    user, org, topic = owner["user_id"], owner["organization_id"], topics[1]["id"]
-    return config, state.store, client, (user, org, topic), topics
+@pytest.fixture
+def project_files(tmp_path):
+    store = Store(tmp_path / "files")
+    owner = store.bootstrap(store._setup_token, "owner@example.org", "Owner", "a long fixture password", "Research")
+    user, org = owner["user_id"], owner["organization_id"]
+    topics = []
+    for name in ("Research", "Elsewhere"):
+        project = store.create_entity(user, org, "projects", name)
+        channel = store.create_entity(user, org, "channels", "Files", project["id"])
+        topics.append(store.create_entity(user, org, "topics", "Documents", channel["id"], "beta")["id"])
+    return store, ResearchArtifacts(store), (user, org, topics[0]), (user, org, topics[1])
 
 
-def test_file_draft_survives_restart_and_publishes_exact_source_once(installation):
-    config, store, client, scope, _ = draft_setup(installation)
-    files, drafts = ResearchArtifacts(store), ResearchArtifactDrafts(store)
-    source = "\\documentclass{article}\n\\begin{document}\n" + "\\textbf{αβγ 😀}: \\\\ and \"quoted\".\n" * 15000 + "\\end{document}\n"
-    chunks = [source[offset:offset + 30000] for offset in range(0, len(source), 30000)]
-    first = drafts.begin(*scope, "exact.tex", "stable-file-id")
-    identity = first["draft_id"]
-    progress = drafts.append(*scope, identity, 0, chunks[0])
-    assert progress["next_offset"] == len(chunks[0]) and progress["status"] == "draft"
-    assert files.list(*scope) == []
-    assert drafts.append(*scope, identity, 0, chunks[0]) == progress
-    drafts = ResearchArtifactDrafts(Store(config.data_dir))
-    assert drafts.begin(*scope, "exact.tex", "stable-file-id") == progress
-    assert drafts.content(*scope, identity)[0] == chunks[0].encode()
-    offset = len(chunks[0])
-    for chunk in chunks[1:]:
-        progress = drafts.append(*scope, identity, offset, chunk)
-        offset += len(chunk)
-        assert progress["next_offset"] == offset
-    boundary = drafts.read(*scope, identity, offset=29990, length=40)
-    assert boundary["text"] == source[29990:30030] and boundary["next_offset"] == 30030
-    checksum = hashlib.sha256(source.encode()).hexdigest()
-    assert progress["sha256"] == checksum
-    saved = drafts.finish(*scope, identity, checksum)
-    assert saved["revision"] == 1 and saved["sha256"] == checksum
-    assert client.get(saved["download_url"]).content == source.encode()
-    assert drafts.list(*scope) == []
-    replacement = files.write(*scope, "exact.tex", "A later independent revision.", expected_sha256=checksum)
-    assert replacement["revision"] == 2
-    assert drafts.finish(*scope, identity, checksum) == saved
-    assert drafts.append(*scope, identity, 0, chunks[0])["result"] == saved
-    assert client.get(saved["download_url"]).content == source.encode()
-    assert len(files.list(*scope)) == 1
+def sections(count=3):
+    # Each section is close to the direct-save limit, so the whole exceeds it and is kept in blob storage.
+    line = "\\textbf{αβγ 😀}: \\\\ and \"quoted\" source.\n"
+    return [f"% section {index}\n" + line * ((MAX_ARTIFACT_TEXT_BYTES - 64) // len(line.encode())) for index in range(count)]
 
 
-def test_file_draft_retries_reject_conflicts_and_validate_utf8_byte_limits(installation, monkeypatch):
-    _, store, _, scope, _ = draft_setup(installation)
-    drafts = ResearchArtifactDrafts(store)
-    first = drafts.begin(*scope, "safe.tex", "stable-id")
-    identity = first["draft_id"]
-    with pytest.raises(StoreError, match="different content"):
-        drafts.begin(*scope, "other.tex", "stable-id")
-    with pytest.raises(StoreError, match="safe relative"):
-        drafts.begin(*scope, "../escape.tex", "escape-id")
-    with pytest.raises(StoreError, match="exact current SHA"):
-        drafts.begin(*scope, "safe.tex", "invalid-sha", expected_sha256="not-a-sha")
-    for text in ["\0", "\ud800", "😀" * 65537, ""]:
-        with pytest.raises(StoreError):
-            drafts.append(*scope, identity, 0, text)
-    progress = drafts.append(*scope, identity, 0, "α")
-    assert progress["total_characters"] == 1 and progress["size_bytes"] == 2
-    with pytest.raises(StoreError, match="conflicts"):
-        drafts.append(*scope, identity, 0, "β")
-    with pytest.raises(StoreError, match="next offset changed"):
-        drafts.append(*scope, identity, 2, "gap")
-    with pytest.raises(StoreError, match="current checksum"):
-        drafts.finish(*scope, identity, "0" * 64)
-    monkeypatch.setattr("reasoning_ledger.server.research_artifact_drafts.MAX_BYTES", 3)
-    with pytest.raises(StoreError, match="allowance"):
-        drafts.append(*scope, identity, 1, "β")
-    monkeypatch.setattr("reasoning_ledger.server.research_artifact_drafts.MAX_DRAFT_CHUNKS", 1)
-    with pytest.raises(StoreError, match="allowance"):
-        drafts.append(*scope, identity, 1, "a")
-    assert drafts.content(*scope, identity)[0] == "α".encode()
-    assert drafts.read(*scope, identity)["sha256"] == progress["sha256"]
+def test_assembly_joins_pinned_sections_exactly_and_repeats_return_the_same_revision(project_files):
+    store, files, scope, _ = project_files
+    texts = sections()
+    parts = [{"path": f"paper/{index:02d}.tex", "revision": files.write(*scope, f"paper/{index:02d}.tex", text)["revision"]}
+             for index, text in enumerate(texts)]
+    whole = "".join(texts)
+    assert len(whole.encode()) > MAX_ARTIFACT_TEXT_BYTES
+    saved = files.assemble(*scope, "paper.tex", parts)
+    assert saved["revision"] == 1 and saved["parts"] == 3 and saved["size_bytes"] == len(whole.encode())
+    assert saved["sha256"] == hashlib.sha256(whole.encode()).hexdigest()
+    assert files.content(*scope, "paper.tex", 1)[0] == whole.encode()
+    assert files.assemble(*scope, "paper.tex", parts, saved["sha256"]) == saved
+    # Parts are pinned: revising a section later does not change what an assembly of the old revision joins.
+    revised = files.write(*scope, "paper/01.tex", "A revised middle section.\n", files.read(*scope, "paper/01.tex")["sha256"])
+    assert files.assemble(*scope, "paper.tex", parts, saved["sha256"]) == saved
+    updated = files.assemble(*scope, "paper.tex", [parts[0], {"path": "paper/01.tex", "revision": revised["revision"]}, parts[2]],
+                             saved["sha256"])
+    assert updated["revision"] == 2
+    assert files.content(*scope, "paper.tex", 2)[0] == (texts[0] + "A revised middle section.\n" + texts[2]).encode()
+    assert files.content(*scope, "paper.tex", 1)[0] == whole.encode()
+    assert sorted(file["path"] for file in files.list(*scope)) == ["paper.tex", "paper/00.tex", "paper/01.tex", "paper/02.tex"]
+    with store.transaction() as db:
+        assert db.execute("SELECT COUNT(*) FROM sqlite_schema WHERE name LIKE 'research_artifact_draft%'").fetchone()[0] == 0
 
 
-def test_file_draft_keeps_source_when_publication_conflicts(installation):
-    _, store, _, scope, _ = draft_setup(installation)
-    files, drafts = ResearchArtifacts(store), ResearchArtifactDrafts(store)
-    old = files.write(*scope, "shared.tex", "An earlier version.")
-    identity = drafts.begin(*scope, "shared.tex", "update-file", expected_sha256=old["sha256"])["draft_id"]
-    progress = drafts.append(*scope, identity, 0, "A recovered author draft.")
-    current = files.write(*scope, "shared.tex", "An intervening edit.", expected_sha256=old["sha256"])
-    with pytest.raises(StoreError, match="artifact changed"):
-        drafts.finish(*scope, identity, progress["sha256"])
-    assert files.read(*scope, "shared.tex")["sha256"] == current["sha256"]
-    assert drafts.content(*scope, identity)[0] == b"A recovered author draft."
-    assert drafts.list(*scope)[0]["status"] == "draft"
+def test_an_intervening_edit_is_resolved_by_assembling_again_with_the_current_hash(project_files):
+    _, files, scope, _ = project_files
+    first = files.write(*scope, "intro.tex", "Introduction.\n")
+    parts = [{"path": "intro.tex", "revision": first["revision"]}]
+    with pytest.raises(StoreError, match="does not yet exist") as missing:
+        files.assemble(*scope, "fresh.tex", parts, "0" * 64)
+    assert missing.value.status == 409
+    saved = files.assemble(*scope, "paper.tex", parts)
+    colleague = files.write(*scope, "paper.tex", "A colleague's edit.\n", saved["sha256"])
+    with pytest.raises(StoreError) as conflict:
+        files.assemble(*scope, "paper.tex", parts + parts, saved["sha256"])
+    assert conflict.value.status == 409
+    with pytest.raises(StoreError) as unguarded:
+        files.assemble(*scope, "paper.tex", parts + parts)
+    assert unguarded.value.status == 409
+    # Nothing is stuck: the saved sections are still there, so the same assembly succeeds with the current hash.
+    again = files.assemble(*scope, "paper.tex", parts + parts, colleague["sha256"])
+    assert again["revision"] == 3 and files.content(*scope, "paper.tex", 3)[0] == b"Introduction.\nIntroduction.\n"
 
 
-def test_file_draft_validates_destination_before_drafting_but_retains_resumable_sessions(installation):
-    _, store, _, scope, _ = draft_setup(installation)
-    files, drafts = ResearchArtifacts(store), ResearchArtifactDrafts(store)
-    first = files.write(*scope, "shared.tex", "An existing saved file.")
-    for base in [None, "0" * 64]:
-        with pytest.raises(StoreError, match="current hash before starting"):
-            drafts.begin(*scope, "shared.tex", "invalid-base", expected_sha256=base)
-        assert drafts.list(*scope) == []
-    with pytest.raises(StoreError, match="does not yet exist"):
-        drafts.begin(*scope, "missing.tex", "missing-destination", expected_sha256=first["sha256"])
-    assert drafts.list(*scope) == []
-    draft = drafts.begin(*scope, "shared.tex", "valid-base", expected_sha256=first["sha256"])
-    progress = drafts.append(*scope, draft["draft_id"], 0, "An unfinished replacement.")
-    files.write(*scope, "shared.tex", "A subsequent edit.", expected_sha256=first["sha256"])
-    # Resume returns the original draft instead of discarding work when its base is stale.
-    assert drafts.begin(*scope, "shared.tex", "valid-base", expected_sha256=first["sha256"]) == progress
-    assert drafts.content(*scope, draft["draft_id"])[0] == b"An unfinished replacement."
+@pytest.mark.parametrize("parts", [
+    [], [{"path": "intro.tex"}], [{"path": "intro.tex", "revision": 0}], [{"path": "intro.tex", "revision": True}],
+    [{"path": "../intro.tex", "revision": 1}], [{"path": "intro.tex", "revision": 1, "text": "inline"}],
+    [{"path": "intro.tex", "revision": 1}] * (MAX_ASSEMBLY_PARTS + 1), {"path": "intro.tex", "revision": 1},
+])
+def test_assembly_rejects_malformed_parts_before_saving(project_files, parts):
+    _, files, scope, _ = project_files
+    files.write(*scope, "intro.tex", "Introduction.\n")
+    with pytest.raises(StoreError) as invalid:
+        files.assemble(*scope, "paper.tex", parts)
+    assert invalid.value.status == 400
+    assert [file["path"] for file in files.list(*scope)] == ["intro.tex"]
 
 
-def test_file_drafts_are_owner_topic_and_current_permission_bound(installation):
-    _, store, _, scope, topics = draft_setup(installation)
-    drafts = ResearchArtifactDrafts(store)
-    user, org, topic = scope
-    identity = drafts.begin(*scope, "private-draft.tex", "private-draft")["draft_id"]
-    progress = drafts.append(*scope, identity, 0, "Not yet a shared file.")
-    _, _, member = invited(installation)
-    member_scope = member["user_id"], org, topic
-    assert drafts.list(*member_scope) == []
-    for other_scope in [member_scope, (user, org, topics[2]["id"]), (user, "0" * 32, topic)]:
-        for operation in [lambda other_scope=other_scope: drafts.read(*other_scope, identity),
-                          lambda other_scope=other_scope: drafts.content(*other_scope, identity),
-                          lambda other_scope=other_scope: drafts.append(*other_scope, identity, 21, "more"),
-                          lambda other_scope=other_scope: drafts.finish(*other_scope, identity, progress["sha256"])]:
-            with pytest.raises(StoreError) as denied:
-                operation()
-            assert denied.value.status in {403, 404}
-    with store.transaction(write=True) as db:
-        db.execute("UPDATE memberships SET role='viewer' WHERE user_id=? AND organization_id=?", (user, org))
-    assert drafts.content(*scope, identity)[0] == b"Not yet a shared file."
-    with pytest.raises(StoreError) as denied:
-        drafts.append(*scope, identity, 21, "more")
-    assert denied.value.status == 403
-    with pytest.raises(StoreError) as denied:
-        drafts.finish(*scope, identity, progress["sha256"])
-    assert denied.value.status == 403
-    with store.transaction(write=True) as db:
-        db.execute("DELETE FROM memberships WHERE user_id=? AND organization_id=?", (user, org))
-    with pytest.raises(StoreError):
-        drafts.content(*scope, identity)
+def test_assembly_reads_only_saved_revisions_of_this_project_within_the_size_allowance(project_files, monkeypatch):
+    _, files, scope, elsewhere = project_files
+    files.write(*elsewhere, "secret.tex", "Another project's source.\n")
+    local = files.write(*scope, "intro.tex", "Introduction.\n")
+    for parts in ([{"path": "secret.tex", "revision": 1}], [{"path": "intro.tex", "revision": local["revision"] + 1}]):
+        with pytest.raises(StoreError) as missing:
+            files.assemble(*scope, "paper.tex", parts)
+        assert missing.value.status == 404
+    with pytest.raises(StoreError) as unsafe:
+        files.assemble(*scope, "../paper.tex", [{"path": "intro.tex", "revision": 1}])
+    assert unsafe.value.status == 400
+    monkeypatch.setattr(artifact_chunks, "MAX_BYTES", 20)
+    with pytest.raises(StoreError) as oversized:
+        files.assemble(*scope, "paper.tex", [{"path": "intro.tex", "revision": 1}] * 2)
+    assert oversized.value.status == 413
+    assert [file["path"] for file in files.list(*elsewhere)] == ["secret.tex"]
+    assert [file["path"] for file in files.list(*scope)] == ["intro.tex"]
 
 
-def test_file_draft_verifies_retained_chunk_content_before_download_or_publication(installation):
-    _, store, _, scope, _ = draft_setup(installation)
-    drafts = ResearchArtifactDrafts(store)
-    identity = drafts.begin(*scope, "checked.tex", "checked-draft")["draft_id"]
-    progress = drafts.append(*scope, identity, 0, "Exact retained source.")
-    with store.transaction(write=True) as db:
-        db.execute("DROP TRIGGER research_artifact_draft_chunk_update")
-        db.execute("UPDATE research_artifact_draft_chunks SET text='corrupt' WHERE draft_id=?", (identity,))
-    for operation in [lambda: drafts.content(*scope, identity), lambda: drafts.read(*scope, identity),
-                      lambda: drafts.finish(*scope, identity, progress["sha256"])]:
-        with pytest.raises(StoreError, match="retained content"):
-            operation()
-    assert ResearchArtifacts(store).list(*scope) == []
-
-
-def test_native_research_tools_resume_and_finish_an_exact_file_draft(installation):
+def test_native_assembly_attaches_only_the_assembled_file_and_records_its_parts(installation):
     from test_organization_research_workbench import source_run
 
     state, owner, topics, run, tools = source_run(installation)
-    first = tools.invoke("artifact_begin", {"path": "native.tex", "client_id": "native-file-draft"})["result"]
-    appended = tools.invoke("artifact_append", {"draft_id": first["draft_id"], "offset": 0,
-                                                 "text": "\\documentclass{article}\nαβγ\n"})["result"]
-    progress = tools.invoke("artifact_drafts", {})["result"]
-    assert progress[0]["next_offset"] == appended["next_offset"]
-    source = tools.invoke("artifact_draft_read", {"draft_id": first["draft_id"]})["result"]
-    assert source["text"] == "\\documentclass{article}\nαβγ\n"
-    saved = tools.invoke("artifact_finish", {"draft_id": first["draft_id"], "sha256": appended["sha256"]})["result"]
-    assert saved["revision"] == 1 and saved["sha256"] == source["sha256"]
+    first = tools.invoke("artifact_write", {"path": "paper/01.tex", "text": "\\documentclass{article}\n"})["result"]
+    second = tools.invoke("tool_call", {"name": "artifact_write",
+                                        "arguments": {"path": "paper/02.tex", "text": "Section α and 研究.\n"}})["result"]["result"]
+    notes = tools.invoke("artifact_write", {"path": "notes.md", "text": "Reviewer notes.\n"})["result"]
+    parts = [{"path": "paper/01.tex", "revision": first["revision"]}, {"path": "paper/02.tex", "revision": second["revision"]}]
+    saved = tools.invoke("artifact_assemble", {"path": "paper.tex", "parts": parts})["result"]
+    assert saved["parts"] == 2
+    state.finish(run, "succeeded", no_charge=True)
+    messages = state.store.messages(owner["user_id"], owner["organization_id"], topics[1]["id"])
+    reply = next(message for message in messages if message.get("inference_run_id") == run["id"])
+    # The sections stay in Project files; the reply lists the assembled file and the unrelated note.
+    assert [(file["path"], file["revision"]) for file in reply["files"]] == [("notes.md", notes["revision"]), ("paper.tex", 1)]
+    assert installation[2].get(reply["files"][1]["download_url"]).content == "\\documentclass{article}\nSection α and 研究.\n".encode()
     with state.store.transaction() as db:
+        receipt = db.execute("SELECT assembled_from_json FROM research_artifact_publications WHERE artifact_id=?",
+                             (saved["id"],)).fetchone()
+        assert json.loads(receipt[0]) == parts
         assert db.execute("SELECT run_id FROM research_artifact_versions WHERE artifact_id=?", (saved["id"],)).fetchone()[0] == run["id"]
 
 
-@pytest.mark.parametrize("operation", ["begin", "append", "finish"])
-def test_file_draft_mutations_recheck_run_authorization_inside_the_write(installation, monkeypatch, operation):
+def test_section_files_stay_hidden_when_the_assembly_tool_receipt_is_lost(installation):
     from test_organization_research_workbench import source_run
 
     state, owner, topics, run, tools = source_run(installation)
-    scope = owner["user_id"], owner["organization_id"], topics[1]["id"]
-    drafts = ResearchArtifactDrafts(state.store)
-    first = tools.invoke("artifact_begin", {"path": "fenced.tex", "client_id": "fenced-draft"})["result"]
-    progress = tools.invoke("artifact_append", {"draft_id": first["draft_id"], "offset": 0, "text": "Retained source."})["result"]
-    original = tools._authorize
+    section = tools.invoke("artifact_write", {"path": "part.tex", "text": "Only section.\n"})["result"]
+    files = ResearchArtifacts(state.store)
+    # A crash after the save commits but before the outer tool receipt: only the publication receipt remains.
+    files.assemble(owner["user_id"], owner["organization_id"], topics[1]["id"], "whole.tex",
+                   [{"path": "part.tex", "revision": section["revision"]}], run_id=run["id"])
+    state.finish(run, "succeeded", no_charge=True)
+    reply = next(message for message in state.store.messages(owner["user_id"], owner["organization_id"], topics[1]["id"])
+                 if message.get("inference_run_id") == run["id"])
+    assert [file["path"] for file in reply["files"]] == ["whole.tex"]
 
-    def cancel_after_precheck():
-        original()
-        with state.store.transaction(write=True) as db:
-            db.execute("UPDATE llm_runs SET cancel_requested=1 WHERE id=?", (run["id"],))
 
-    monkeypatch.setattr(tools, "_authorize", cancel_after_precheck)
-    arguments = {"begin": {"path": "late.tex", "client_id": "late-draft"},
-                 "append": {"draft_id": first["draft_id"], "offset": progress["next_offset"], "text": "Late source."},
-                 "finish": {"draft_id": first["draft_id"], "sha256": progress["sha256"]}}[operation]
-    with pytest.raises(ValueError, match="execution no longer authorized"):
-        tools.invoke("artifact_" + operation, arguments)
-    assert drafts.content(*scope, first["draft_id"])[0] == b"Retained source."
-    assert len(drafts.list(*scope)) == 1
-    assert ResearchArtifacts(state.store).list(*scope) == []
+def test_assembly_route_requires_topic_write_access_and_validates_its_body(installation):
+    _, _, client, owner, topics = prepare(installation)
+    root = f"/api/organizations/{owner['organization_id']}/topics/{topics[1]['id']}/research-files"
+    section = client.post(root, json={"path": "intro.tex", "text": "Introduction.\n"}).json()
+    body = {"path": "paper.tex", "parts": [{"path": "intro.tex", "revision": section["revision"]}] * MAX_ASSEMBLY_PARTS}
+    saved = client.post(root + "/assemble", json=body)
+    assert saved.status_code == 200 and saved.json()["parts"] == MAX_ASSEMBLY_PARTS
+    assert client.get(saved.json()["download_url"]).content == b"Introduction.\n" * MAX_ASSEMBLY_PARTS
+    assert client.post(root + "/assemble", json={**body, "expected_sha256": saved.json()["sha256"]}).json()["revision"] == 1
+    for invalid in ({**body, "parts": []}, {**body, "parts": [{"path": "intro.tex", "revision": "1"}]},
+                    {**body, "parts": body["parts"] + body["parts"][:1]}, {**body, "expected_sha256": "short"}):
+        assert client.post(root + "/assemble", json=invalid).status_code == 422
+    _, reader, _ = invited(installation, role="viewer")
+    assert reader.post(root + "/assemble", json=body).status_code == 403

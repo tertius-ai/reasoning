@@ -270,7 +270,7 @@ Discovery never adds permissions. Each invocation has a durable receipt.
 | Literature | arXiv search/lookup/text/source archive reads; Crossref search/lookup; OEIS lookup/search |
 | Mathematical sources | `math_search`, `math_read`: MathOverflow, Wikipedia, nLab, Stacks Project, Encyclopedia of Mathematics, LMFDB |
 | LMFDB | `lmfdb_catalog`, `lmfdb_schema`, `lmfdb_query`: all collections exposed by its public API, discovered live |
-| Private files | `artifact_list`, `artifact_write`, `research_file_read`; `artifact_begin`, `artifact_append`, `artifact_drafts`, `artifact_draft_read`, `artifact_finish`; compute `artifact_read` |
+| Private files | `artifact_list`, `artifact_write`, `artifact_assemble`, `research_file_read`; compute `artifact_read` |
 | Private research blog | `blog_search`, `blog_read`, `blog_create`, `blog_revise`, `blog_publish` (authorized, revision-guarded writes) |
 | Gamma authoring | `workflow_read`, `workflow_create`, `workflow_update`, `workflow_preflight`, `workflow_propose_run` |
 | Sandbox computation | `compute_submit`, `compute_cancel`, `compute_log_read`, image/job/artifact inspection; `lean_check`; `noether_operations`, `noether_compute`, `noether_status`, `noether_describe` |
@@ -320,30 +320,25 @@ accept at most 256 KiB of UTF-8 text per save, including non-ASCII text. Tool-ca
 arguments allow six times that byte budget plus 4 KiB for JSON escaping and
 metadata; the provider stream and event bounds remain enforced.
 
-For incremental drafting or files up to 64 MiB, use `artifact_begin` with a stable
-`client_id`, then `artifact_append` at the returned character offset. Each call
-saves up to 256 KiB, with at most 4096 chunks per draft. Identical retries at the
-same offset return the saved progress; conflicting content and gaps are rejected.
-`artifact_drafts` locates unfinished sessions owned by the requester in this
-topic, and `artifact_draft_read` retrieves exact bounded source slices. Sessions
-and chunks survive a server restart. Draft sessions are scoped to their owner
-and topic; ordinary topic diagnostics still retain agent tool arguments.
+For a file larger than one save, up to 64 MiB, the agent saves sections as
+ordinary project files with `artifact_write`, then `artifact_assemble` joins pinned
+revisions of them, in order and byte for byte, into one file. It takes the
+destination `path`, up to 256 `parts` (each a saved `path` and `revision`) and,
+to replace an existing file, its current `expected_sha256`. Sections are never
+resent: after an interruption the agent writes only the missing sections, and
+after a conflict with an intervening edit it assembles again with the new hash.
+Repeating an assembly with the same parts returns the same revision.
 
-`artifact_finish` takes the current whole-draft SHA-256, verifies all saved
-sections, and atomically publishes a versioned file. Replacing an existing file
-requires the current hash validated at `artifact_begin`; invalid starting hashes
-are rejected before creating a draft, and intervening edits leave the draft
-intact. Retrying a completed finish returns the original saved revision, including
-after subsequent edits. A draft is listed separately from completed files and
-has an explicitly unfinished download. Successful writes and finishes attach
-complete, revision-pinned downloads to the reply. Save requested source before
-attempting optional compilation; a saved source file is not a compilation result.
-If the agent saves a file and then fails without producing reply text, the server
-still posts the saved file links alongside the incomplete-answer status.
-Each native save records its publication receipt in the same transaction as the
-file revision. A crash or cancellation before the outer tool receipt completes
-does not lose that download. A resumed draft is linked to the run that finishes
-it, and retrying an old finish cannot replace a newer saved revision in the reply.
+Successful writes and assemblies attach complete, revision-pinned downloads to the
+reply; section revisions that the run joined into an assembled file are listed
+only through that file, and remain in **Project files**. Save requested source
+before attempting optional compilation; a saved source file is not a compilation
+result. If the agent saves a file and then fails without producing reply text, the
+server still posts the saved file links alongside the incomplete-answer status.
+Each native save records its publication receipt, including an assembly's parts,
+in the same transaction as the file revision. A crash or cancellation before the
+outer tool receipt completes does not lose that download, and a retry that returns
+an older revision cannot replace a newer saved revision in the reply.
 
 The editor loads the complete pinned source before editing a previewed file.
 Navigation cancels stale reads and prevents older responses from changing a later
@@ -365,12 +360,11 @@ subsequent accounting or protocol validation fails; retention does not authorize
 execution or establish that an unreported provider charge is zero.
 
 The authenticated topic API mirrors these operations under `research-files`:
-`POST /drafts` begins a session; `POST /drafts/{id}/append` and `/finish` save and
-publish it; `GET /drafts`, `/drafts/{id}` and `/drafts/{id}/content` expose progress,
-bounded source and an unfinished download. `GET /recovery` lists retained file
-metadata; `POST /recovery` supplies its `event_sequence`, `tool_index` and `sha256`,
-with an optional safe new `path`. These routes retain current project/topic
-authorization and the download content-safety headers.
+`POST /assemble` takes the same `path`, `parts` and `expected_sha256` as the tool.
+`GET /recovery` lists retained file metadata; `POST /recovery` supplies its
+`event_sequence`, `tool_index` and `sha256`, with an optional safe new `path`.
+These routes retain current project/topic authorization and the download
+content-safety headers.
 
 ## Computation, approvals, and the private blog
 

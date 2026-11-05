@@ -89,15 +89,14 @@ def test_file_source_is_recoverable_after_stream_and_post_stream_failures(state,
 
 
 @pytest.mark.parametrize("resumed", [False, True])
-def test_retrying_old_finish_does_not_replace_a_newer_reply_attachment(state, resumed):
+def test_retrying_an_old_assembly_does_not_replace_a_newer_reply_attachment(state, resumed):
     ledger, owner, topic = state
     enqueue(state, "first-file-turn")
     row = ledger.claim()
     tools = ResearchTools(ledger, row)
-    draft = tools.invoke("artifact_begin", {"path": "updated.tex", "client_id": "updated-source"})["result"]
-    progress = tools.invoke("artifact_append", {"draft_id": draft["draft_id"], "offset": 0, "text": "Initial source."})["result"]
-    finish_arguments = {"draft_id": draft["draft_id"], "sha256": progress["sha256"]}
-    first = tools.invoke("artifact_finish", finish_arguments)["result"]
+    section = tools.invoke("artifact_write", {"path": "updated-section.tex", "text": "Initial source."})["result"]
+    assembly = {"path": "updated.tex", "parts": [{"path": "updated-section.tex", "revision": section["revision"]}]}
+    first = tools.invoke("artifact_assemble", assembly)["result"]
     if resumed:
         ledger.finish(row, "succeeded", no_charge=True)
         enqueue(state, "resumed-file-turn")
@@ -105,8 +104,9 @@ def test_retrying_old_finish_does_not_replace_a_newer_reply_attachment(state, re
         tools = ResearchTools(ledger, row)
     updated = tools.invoke("artifact_write", {"path": "updated.tex", "text": "A newer saved source.",
                                               "expected_sha256": first["sha256"]})["result"]
-    retry = tools.invoke("artifact_finish", finish_arguments)["result"]
-    assert retry["revision"] == first["revision"] < updated["revision"], "finishing retries keep their pinned receipt"
+    with pytest.raises(ValueError, match="artifact changed"):
+        tools.invoke("artifact_assemble", assembly)
+    assert first["revision"] < updated["revision"]
     ledger.finish(row, "succeeded", no_charge=True)
     messages = ledger.store.messages(owner["user_id"], owner["organization_id"], topic)
     reply = next(message for message in messages if message.get("inference_run_id") == row["id"])

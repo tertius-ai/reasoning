@@ -8,7 +8,6 @@ type File = { id: string; path: string; revision?: number; head_revision: number
 type Kind = "all" | "text" | "pdfs" | "pictures";
 export type RetainedFile = { event_sequence: number; tool_index: number; path: string; recovery_path: string;
   sha256: string; size_bytes: number };
-export type FileDraft = { draft_id: string; path: string; size_bytes: number };
 const MAX_FILE_BYTES = 256 * 1024;
 const isPicture = (file: MediaFile) => file.mime.startsWith("image/");
 const extension = (path: string) => (path.match(/\.([a-z0-9]+)$/i)?.[1] ?? "txt").slice(0, 3).toUpperCase();
@@ -19,25 +18,17 @@ const sourceText = async (url: string, signal: AbortSignal) => {
   return response.text();
 };
 
-/** Unfinished source is distinct from a published revision and never silently replayed. */
-export function FileRecovery({ retained, drafts, root, canWrite, busy, recover }: {
-  retained: RetainedFile[]; drafts: FileDraft[]; root: string; canWrite: boolean; busy: boolean;
-  recover: (file: RetainedFile) => void;
+/** Source retained from a failed run is distinct from a published revision and never silently replayed. */
+export function FileRecovery({ retained, canWrite, busy, recover }: {
+  retained: RetainedFile[]; canWrite: boolean; busy: boolean; recover: (file: RetainedFile) => void;
 }) {
-  return <>
-    {!!retained.length && <section aria-label="Recoverable files"><h4>Recoverable files</h4>
-      <p className="org-help">These failed runs retained file source. Recover a copy without another model call. The source may need review.</p>
-      <ul className="org-project-files-list">{retained.map(file => <li key={`${file.event_sequence}-${file.tool_index}`}>
-        <span className="org-project-files-text"><strong>{file.path}</strong><small>Retained source · {kibibytes(file.size_bytes)}</small></span>
-        {canWrite && <button type="button" disabled={busy} onClick={() => recover(file)}>Recover a copy</button>}
-      </li>)}</ul></section>}
-    {!!drafts.length && <section aria-label="Unfinished file drafts"><h4>Unfinished drafts</h4>
-      <p className="org-help">Saved sections survive interruption. An agent can resume the draft; this download contains only the sections saved so far.</p>
-      <ul className="org-project-files-list">{drafts.map(file => <li key={file.draft_id}>
-        <span className="org-project-files-text"><strong>{file.path}</strong><small>Unfinished · {kibibytes(file.size_bytes)}</small></span>
-        <a href={`/api${root}/drafts/${encodeURIComponent(file.draft_id)}/content`} download>Download unfinished source</a>
-      </li>)}</ul></section>}
-  </>;
+  if (!retained.length) return null;
+  return <section aria-label="Recoverable files"><h4>Recoverable files</h4>
+    <p className="org-help">These failed runs retained file source. Recover a copy without another model call. The source may need review.</p>
+    <ul className="org-project-files-list">{retained.map(file => <li key={`${file.event_sequence}-${file.tool_index}`}>
+      <span className="org-project-files-text"><strong>{file.path}</strong><small>Retained source · {kibibytes(file.size_bytes)}</small></span>
+      {canWrite && <button type="button" disabled={busy} onClick={() => recover(file)}>Recover a copy</button>}
+    </li>)}</ul></section>;
 }
 
 /** A topic's saved text files, PDFs and pictures: filtered by kind and name, and each opened in place. */
@@ -56,7 +47,7 @@ function ResearchFilesView({ organizationId, topicId, canWrite, onAuthLost, init
   const [name, setName] = useState(""), [text, setText] = useState(""), [editing, setEditing] = useState(false);
   const [error, setError] = useState(""), [busy, setBusy] = useState(false), [refresh, setRefresh] = useState(0);
   const [kind, setKind] = useState<Kind>("all"), [query, setQuery] = useState("");
-  const [retained, setRetained] = useState<RetainedFile[]>([]), [drafts, setDrafts] = useState<FileDraft[]>([]);
+  const [retained, setRetained] = useState<RetainedFile[]>([]);
   const active = useRef(true), action = useRef({ generation: 0, controller: null as AbortController | null });
   const root = topicPath(organizationId, topicId) + "/research-files";
   const invalidate = () => { action.current.generation += 1; action.current.controller?.abort(); action.current.controller = null; };
@@ -72,11 +63,8 @@ function ResearchFilesView({ organizationId, topicId, canWrite, onAuthLost, init
   const fail = (cause: unknown) => { if (cause instanceof ApiError && cause.status === 401) onAuthLost(); else setError(errorMessage(cause)); };
   useEffect(() => { const controller = new AbortController(); void request<File[]>(root, { signal: controller.signal }).then(setFiles)
     .catch((cause) => { if (!aborted(cause)) fail(cause); }); return () => controller.abort(); }, [root, refresh]);
-  useEffect(() => { const controller = new AbortController(); void Promise.all([
-    request<RetainedFile[]>(root + "/recovery", { signal: controller.signal }),
-    request<FileDraft[]>(root + "/drafts", { signal: controller.signal }),
-  ]).then(([files, progress]) => { setRetained(files); setDrafts(progress); })
-    .catch(cause => { if (!aborted(cause)) fail(cause); }); return () => controller.abort(); }, [root, refresh]);
+  useEffect(() => { const controller = new AbortController(); void request<RetainedFile[]>(root + "/recovery", { signal: controller.signal })
+    .then(setRetained).catch(cause => { if (!aborted(cause)) fail(cause); }); return () => controller.abort(); }, [root, refresh]);
   useEffect(() => { const controller = new AbortController(); void request<MediaFile[]>(topicPath(organizationId, topicId) + "/media", { signal: controller.signal }).then(setMedia)
     .catch((cause) => { if (!aborted(cause)) fail(cause); }); return () => controller.abort(); }, [organizationId, topicId, refresh]);
   const open = (file: { path: string; revision?: number }) => {
@@ -109,7 +97,7 @@ function ResearchFilesView({ organizationId, topicId, canWrite, onAuthLost, init
       </nav>
       <input type="search" aria-label="Search file names" placeholder="Search file names…" value={query} onChange={event => setQuery(event.target.value)} />
       {(kind === "all" || kind === "text") && <FileRecovery retained={retained.filter(file => file.path.toLocaleLowerCase().includes(needle))}
-        drafts={drafts.filter(file => file.path.toLocaleLowerCase().includes(needle))} root={root} canWrite={canWrite} busy={busy} recover={file => {
+        canWrite={canWrite} busy={busy} recover={file => {
           const operation = beginAction(); setError("");
           void request<File>(root + "/recovery", { method: "POST", body: { event_sequence: file.event_sequence, tool_index: file.tool_index,
             sha256: file.sha256, path: file.recovery_path } }).then(saved => {

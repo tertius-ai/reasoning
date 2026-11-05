@@ -10,6 +10,8 @@ from .research_file_limits import MAX_ARTIFACT_TEXT_BYTES
 from .store import StoreError, _id, _row
 
 PATH = re.compile(r"[A-Za-z0-9_.-][A-Za-z0-9._/-]{0,199}\Z")
+# 256 sections of the direct-save maximum fill the 64 MiB file allowance.
+MAX_ASSEMBLY_PARTS = 256
 
 
 def safe_path(path):
@@ -28,14 +30,16 @@ BOT_REPLY = re.compile(r"bot-run-([0-9a-f]{32})-([0-9]+)")
 
 def reply_files(db, message):
     """Project files a reply's own run saved: the last saved revision of each, in save order.
-    Atomic publication receipts survive a failed outer tool receipt. A bot reply split into
+    Atomic publication receipts survive a failed outer tool receipt. Section revisions that the
+    run joined into an assembled file are listed only through that file. A bot reply split into
     several messages lists files under its last part.
     """
     org, topic = message["organization_id"], message["topic_id"]
+    consumed = set()
     if message.get("inference_run_id"):
         rows = db.execute(
             "SELECT name,arguments_json,result_json FROM research_tool_receipts WHERE organization_id=? AND run_id=? "
-            "AND status='completed' AND name IN ('artifact_write','artifact_finish','tool_call') ORDER BY sequence",
+            "AND status='completed' AND name IN ('artifact_write','artifact_assemble','tool_call') ORDER BY sequence",
             (org, message["inference_run_id"]),
         ).fetchall()
         results = []
@@ -43,16 +47,18 @@ def reply_files(db, message):
             result = json.loads(row["result_json"] or "null")
             if row["name"] == "tool_call":
                 actual = json.loads(row["arguments_json"]).get("name")
-                if actual not in {"artifact_write", "artifact_finish"} or not isinstance(result, dict):
+                if actual not in {"artifact_write", "artifact_assemble"} or not isinstance(result, dict):
                     continue
                 result = result.get("result")
             results.append(result)
-        results.extend(dict(row) for row in db.execute(
-            "SELECT a.path,p.revision FROM research_artifact_publications p "
+        for row in db.execute(
+            "SELECT a.path,p.revision,p.assembled_from_json FROM research_artifact_publications p "
             "JOIN research_artifacts a ON a.id=p.artifact_id AND a.organization_id=p.organization_id "
             "WHERE p.organization_id=? AND p.run_id=? ORDER BY p.sequence",
             (org, message["inference_run_id"]),
-        ))
+        ):
+            results.append({"path": row["path"], "revision": row["revision"]})
+            consumed.update((part["path"], part["revision"]) for part in json.loads(row["assembled_from_json"] or "[]"))
         results.extend(json.loads(row[0]) for row in db.execute(
             "SELECT result_json FROM research_artifact_recoveries WHERE organization_id=? AND run_id=? ORDER BY event_sequence,tool_index",
             (org, message["inference_run_id"]),
@@ -76,6 +82,8 @@ def reply_files(db, message):
             saved[result["path"]] = result["revision"]
     files = []
     for path, revision in saved.items():
+        if (path, revision) in consumed:
+            continue
         # Each receipt is confirmed against the retained revision of this topic's project.
         row = db.execute(
             "SELECT v.sha256,COALESCE(o.total_characters,LENGTH(v.text)) AS total_characters FROM research_artifacts a "
@@ -166,8 +174,38 @@ class ResearchArtifacts:
             self._record_publication(db, user, org, topic, run_id, saved)
             return {**saved, **file_links(org, topic, path, saved["revision"])}
 
+    def assemble(self, user, org, topic, path, parts, expected_sha256=None, run_id=None):
+        """Join pinned revisions of this project's text files, in order and byte for byte, into one file.
+        The sections stay saved, so a failed or conflicting assembly is simply repeated; nothing is resent."""
+        if not isinstance(parts, list) or not 1 <= len(parts) <= MAX_ASSEMBLY_PARTS or not all(
+            isinstance(part, dict) and part.keys() == {"path", "revision"} and safe_path(part["path"])
+            and type(part["revision"]) is int and 1 <= part["revision"] <= 2**63 - 1 for part in parts
+        ):
+            raise StoreError(400, f"assembly requires 1 to {MAX_ASSEMBLY_PARTS} parts, each a saved file path and revision")
+        if not safe_path(path):
+            raise StoreError(400, "artifact requires a safe relative path")
+        from .artifact_chunks import MAX_BYTES, full
+
+        with self.store.transaction(write=True) as db:
+            project = self._topic(db, user, org, topic, write=True)
+            texts, size = [], 0
+            for part in parts:
+                row = db.execute(
+                    "SELECT a.id FROM research_artifacts a JOIN research_artifact_versions v ON v.artifact_id=a.id AND v.revision=? "
+                    "WHERE a.organization_id=? AND a.project_id=? AND a.path=?", (part["revision"], org, project, part["path"]),
+                ).fetchone()
+                if row is None:
+                    raise StoreError(404, f"assembly part {part['path']} revision {part['revision']} is not saved in this project")
+                texts.append(full(db, row["id"], part["revision"]))
+                size += len(texts[-1].encode("utf8"))
+                if size > MAX_BYTES:
+                    raise StoreError(413, "assembled file exceeds its 64 MiB storage allowance")
+            saved = self._write(db, user, org, project, path, "".join(texts), expected_sha256, topic=topic, run_id=run_id)
+            self._record_publication(db, user, org, topic, run_id, saved, parts)
+            return {**saved, "parts": len(parts), "size_bytes": size, **file_links(org, topic, path, saved["revision"])}
+
     @staticmethod
-    def _record_publication(db, user, org, topic, run_id, saved):
+    def _record_publication(db, user, org, topic, run_id, saved, parts=None):
         if run_id is None:
             return
         if not db.execute(
@@ -179,8 +217,9 @@ class ResearchArtifacts:
         # Commit the saved revision's run binding with the file itself, before
         # the generic tool runner can be cancelled or lose its completion receipt.
         db.execute(
-            "INSERT OR IGNORE INTO research_artifact_publications(organization_id,run_id,artifact_id,revision) VALUES(?,?,?,?)",
-            (org, run_id, saved["id"], saved["revision"]),
+            "INSERT OR IGNORE INTO research_artifact_publications(organization_id,run_id,artifact_id,revision,assembled_from_json) "
+            "VALUES(?,?,?,?,?)",
+            (org, run_id, saved["id"], saved["revision"], json.dumps(parts) if parts else None),
         )
 
     def _write(self, db, user, org, project, path, text, expected_sha256=None, *, topic=None, run_id=None, strict=False):
@@ -240,8 +279,8 @@ def register_artifacts(research):
     research.registry.tool(
         name="artifact_write",
         description="Save a persistent project text file of at most 256 KiB UTF-8. Return its clickable revision link to the user. "
-                    "Overwrites require the current SHA-256; all revisions are retained. For longer documents or incremental "
-                    "drafting, discover artifact_begin, artifact_append and artifact_finish; saved chunks survive interruptions.",
+                    "Overwrites require the current SHA-256; all revisions are retained. For a longer document, save it as "
+                    "section files and join them with artifact_assemble; saved sections survive interruptions.",
         risk="write",
         input_schema=schema(
             {"path": string(200), "text": {"type": "string", "maxLength": MAX_ARTIFACT_TEXT_BYTES},
@@ -252,9 +291,25 @@ def register_artifacts(research):
             research.user, research.org, research.topic, path, text, expected_sha256, research.row["id"]
         )
     )
-    from .research_artifact_drafts import register_drafts
-
-    register_drafts(research)
+    research.registry.tool(
+        name="artifact_assemble",
+        description="Publish one project text file of up to 64 MiB by joining saved file revisions in order, byte for byte, "
+                    "without resending their text. Save each section with artifact_write first (end sections with a newline "
+                    "where the format needs one), then pass their paths and returned revisions. Overwrites require the "
+                    "destination's current SHA-256; after a conflict, assemble again with the new hash. Repeating an "
+                    "assembly returns the same revision. Return the assembled file's revision link to the user.",
+        risk="write",
+        input_schema=schema(
+            {"path": string(200), "expected_sha256": string(64),
+             "parts": {"type": "array", "minItems": 1, "maxItems": MAX_ASSEMBLY_PARTS, "items": schema(
+                 {"path": string(200), "revision": {"type": "integer", "minimum": 1}}, ["path", "revision"])}},
+            ["path", "parts"],
+        ),
+    )(
+        lambda path, parts, expected_sha256=None: artifacts.assemble(
+            research.user, research.org, research.topic, path, parts, expected_sha256, research.row["id"]
+        )
+    )
     research.registry.tool(
         name="research_file_read",
         description="Read an exact bounded revision of a shared research file; returns its checksum and recovery offsets.",
