@@ -94,7 +94,7 @@ jobs:
           df -h "$RUNNER_TEMP"
       - name: Refuse a bundle with unresolved sources
         run: |
-          python3 - "$RUNNER_TEMP/sources/payload/collection.json" <<'EOF' >> "$GITHUB_STEP_SUMMARY"
+          python3 - "$RUNNER_TEMP/sources/payload/collection.json" <<'EOF' | tee -a "$GITHUB_STEP_SUMMARY"
           import json, sys
           collection = json.load(open(sys.argv[1]))
           concrete = [item for item in collection["unresolved"] if set(item) != {"reason"}]
@@ -114,6 +114,26 @@ jobs:
             ${{ runner.temp }}/sources/source-review.draft.json
           if-no-files-found: error
           compression-level: 0
+          retention-days: 7
+      - name: Gather failure diagnostics
+        if: failure()
+        run: |
+          mkdir -p "$RUNNER_TEMP/diagnostics"
+          if test -f "$RUNNER_TEMP/sources/payload/collection.json"; then
+            cp "$RUNNER_TEMP/sources/payload/collection.json" "$RUNNER_TEMP/diagnostics/"
+          fi
+          if test -d "$RUNNER_TEMP/sources/download-failures"; then
+            cd "$RUNNER_TEMP/sources/download-failures"
+            find . -type f -printf '%s %P\n' | sort -k2 > "$RUNNER_TEMP/diagnostics/download-failures.txt"
+            find . -type f -name apt-error.txt -exec cp --parents {} "$RUNNER_TEMP/diagnostics/" \;
+          fi
+      - name: Retain failure diagnostics, not partial sources
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: sources-diagnostics-${{ steps.candidate.outputs.revision }}-${{ inputs.profile }}
+          path: ${{ runner.temp }}/diagnostics/
+          if-no-files-found: ignore
           retention-days: 7
       - name: Release boundary
         run: |

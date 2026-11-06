@@ -154,6 +154,8 @@ def apt_sources(components: list[dict], payload: Path, *, snapshot: str, keyring
             "APT::Get::AllowUnauthenticated=false",
             "-o",
             "APT::Update::Error-Mode=any",
+            "-o",
+            "Acquire::Retries=3",
         ]
         environment = {"PATH": os.defpath, "LANG": "C.UTF-8"}
         update = subprocess.run([*options, "update"], cwd=state, env=environment, capture_output=True, timeout=600)
@@ -189,6 +191,8 @@ def apt_sources(components: list[dict], payload: Path, *, snapshot: str, keyring
                 # Rename only this operation's exact owned directory. Partial source
                 # bytes remain recoverable, but cannot enter the bundle or notice scan.
                 directory.rename(retained)
+                # apt's own message, for diagnosis; it carries no credentials.
+                (retained / "apt-error.txt").write_bytes((result.stdout + result.stderr)[-8192:])
                 unresolved.append(
                     {
                         "source": name,

@@ -263,6 +263,7 @@ def test_failed_source_partials_stay_private_outside_bundle_and_snapshot_can_con
     assert not first and len(unresolved) == 1
     retained = tmp_path / unresolved[0]["retained_in"]
     assert retained.is_dir() and (retained / "source.orig.tar.xz").read_bytes() == partial
+    assert (retained / "apt-error.txt").read_bytes() == b"interrupted archive download"
     assert (tmp_path / "download-failures").stat().st_mode & 0o777 == 0o700
     assert not list((payload / "apt").rglob("*.tar.xz"))
     second, missing = sources.apt_sources(components, payload, snapshot="20250215T000000Z", keyring=keyring)
@@ -541,4 +542,8 @@ def test_hosted_source_collection_checks_the_candidate_and_keeps_only_the_bundle
     uploaded = workflow.split("upload-artifact", 1)[1].split("if-no-files-found", 1)[0]
     assert "sources/sources.tar" in uploaded and "sources/source-review.draft.json" in uploaded
     assert "payload" not in uploaded and "download-failures" not in uploaded
+    diagnostics = workflow.split("Retain failure diagnostics", 1)[1].split("retention-days", 1)[0]
+    assert "if: failure()" in diagnostics and "path: ${{ runner.temp }}/diagnostics/" in diagnostics
+    gathered = workflow.split("Gather failure diagnostics", 1)[1].split("Retain failure diagnostics", 1)[0]
+    assert "-name apt-error.txt" in gathered and "sources.tar" not in gathered
     assert "retention-days: 7" in workflow and "persist-credentials: false" in workflow
