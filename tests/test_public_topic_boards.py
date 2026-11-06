@@ -96,6 +96,7 @@ def test_an_arrangement_is_applied_once_and_never_posted_as_a_reply(board):
     tools = ResearchTools(state, row)
     names = {tool.name for tool in tools.registry.list()}
     assert "board_arrange" in names and names <= BOARD_TOOLS | {"tool_search", "tool_call"}
+    assert "board_arrange" in {tool.name for tool in tools.available()}, "the model sees the arrange tool without searching"
     assert not names & {"ledger_claim", "artifact_write", "agent_delegate", "compute_propose"}
     arrangement = {
         "cards": [{"card_id": borel, "rank": 1, "maturity": "settled", "theme": "Via Borel", "promise": 0.9, "effort": 0.2,

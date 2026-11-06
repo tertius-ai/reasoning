@@ -6,6 +6,7 @@
 .org-board-path h2 { margin: 0; overflow: hidden; color: var(--foreground); font-size: 14px; font-weight: 600; text-overflow: ellipsis; }
 .org-board-path button { padding: 0; border: none; background: none; color: var(--blue); font: inherit; cursor: pointer; }
 .org-board-path select { max-width: 220px; font: 12px var(--font-sans); }
+.org-board-path .org-board-new { margin-left: 4px; }
 .org-board-tools { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
 .org-board-overlays, .org-board-zoom { display: inline-flex; align-items: center; gap: 4px; }
 .org-board-tools button, .org-board-footer button, .org-board-details button, .org-board-start button { padding: 3px 10px; border: 1px solid var(--border-strong); border-radius: var(--radius-pill); background: transparent; color: var(--foreground); font: 12px var(--font-sans); cursor: pointer; }
@@ -70,5 +71,5 @@
 .org-board-start h2 { margin: 0; font-size: 16px; }
 .org-board-start p { margin: 0; color: var(--muted); font-size: 13px; }
 .org-board-start textarea { padding: 8px 10px; border: 1px solid var(--border-strong); border-radius: var(--radius-control); background: var(--surface-2); color: var(--foreground); font: 14px/1.5 var(--font-sans); resize: vertical; }
-.org-board-start button { align-self: flex-start; }
+.org-board-start-actions { display: flex; gap: 8px; }
 @media (prefers-reduced-motion: no-preference) { .org-board-card { transition: border-color var(--motion, .15s), box-shadow var(--motion, .15s); } }

@@ -176,6 +176,12 @@ test("a board maps ideas around its question: routes place the cards, overlays m
     assert.deepEqual(replies.map(item => item.models), [[model.id]]);
     await page.getByRole("complementary", { name: "Side chat", exact: true }).getByText("About the card").waitFor();
 
+    // Another board can start beside the first; cancelling returns to the map.
+    await board.getByRole("button", { name: "+ New board", exact: true }).click();
+    await board.getByRole("heading", { name: "Make another board", exact: true }).waitFor();
+    await board.getByRole("button", { name: "Cancel", exact: true }).click();
+    await board.getByRole("heading", { name: "How do we show the motivic regulator is injective?" }).waitFor();
+
     await toggle.click();
     await page.getByLabel("Topic conversation", { exact: true }).waitFor();
     assert.deepEqual(errors, []);

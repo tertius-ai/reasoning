@@ -117,6 +117,8 @@ export function TopicBoard({ organizationId, topic, canWrite, model, effort, onA
   const [overlays, setOverlays] = useState<Set<Overlay>>(() => new Set(["rank", "rings"]));
   const [selected, setSelected] = useState<Selection | null>(null);
   const [question, setQuestion] = useState("");
+  // Starting another board while this topic already has one.
+  const [creating, setCreating] = useState(false);
   const [idea, setIdea] = useState<string | null>(null);
   const [ask, setAsk] = useState("");
   const [linkTarget, setLinkTarget] = useState("question");
@@ -226,7 +228,7 @@ export function TopicBoard({ organizationId, topic, canWrite, model, effort, onA
       const made = await request<Board>(topicPath(organizationId, topic.id) + "/boards", { method: "POST", body: { question } });
       setBoards(current => [{ id: made.id, question: made.question, created_by: made.created_by, created_at: made.created_at,
         updated_at: made.updated_at, arranged_at: null, cards: 0 }, ...current ?? []]);
-      setBoard(made); setBoardId(made.id); setQuestion("");
+      setBoard(made); setBoardId(made.id); setQuestion(""); setCreating(false);
     } catch (cause) { failed(cause); } finally { setBusy(false); }
   };
   const addIdea = async (event: React.FormEvent) => {
@@ -271,13 +273,14 @@ export function TopicBoard({ organizationId, topic, canWrite, model, effort, onA
     : model.startsWith("bot/") ? "Boards are arranged by OpenRouter models; choose one in the conversation." : "";
 
   if (boards === null) return <section className="org-board" aria-label="Board"><p role="status" className="org-board-empty">Loading board…</p></section>;
-  if (!boardId) return <section className="org-board" aria-label="Board"><form className="org-board-start" onSubmit={event => void create(event)}>
-    <h2>Make a board from a question</h2>
+  if (!boardId || creating) return <section className="org-board" aria-label="Board"><form className="org-board-start" onSubmit={event => void create(event)}>
+    <h2>{boardId ? "Make another board" : "Make a board from a question"}</h2>
     <p>Put a question in the middle and gather ideas around it. Ask the model to arrange them into routes that lead to the question.</p>
     <label className="org-visually-hidden" htmlFor="org-board-question">Board question</label>
     <textarea id="org-board-question" rows={3} value={question} maxLength={1000} disabled={!canWrite || busy}
       placeholder="How do we show the motivic regulator is injective for number fields?" onChange={event => setQuestion(event.target.value)} />
-    <button type="submit" disabled={!canWrite || busy || !question.trim()}>Make board</button>
+    <span className="org-board-start-actions"><button type="submit" disabled={!canWrite || busy || !question.trim()}>Make board</button>
+      {boardId && <button type="button" onClick={() => setCreating(false)}>Cancel</button>}</span>
     {error && <p role="alert" className="org-error">{error}</p>}
   </form></section>;
 
@@ -289,6 +292,7 @@ export function TopicBoard({ organizationId, topic, canWrite, model, effort, onA
         <h2>{board?.question ?? "Loading…"}</h2>
         {!board?.path.length && boards.length > 1 && <select aria-label="Choose a board" value={boardId} onChange={event => { setBoard(null); setBoardId(event.target.value); }}>
           {boards.map(item => <option key={item.id} value={item.id}>{item.question}</option>)}</select>}
+        {!board?.path.length && canWrite && <button type="button" className="org-board-new" onClick={() => setCreating(true)}>+ New board</button>}
       </nav>
       <div className="org-board-tools">
         <span className="org-board-overlays" role="group" aria-label="Overlays">{OVERLAYS.map(overlay => <button type="button" key={overlay.id}

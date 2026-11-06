@@ -234,6 +234,7 @@ class ResearchTools:
             "agent_tasks",
             "agent_read",
             "review_submit",
+            "board_arrange",
             "answer_checkpoint",
             "account_read",
             "account_update",
