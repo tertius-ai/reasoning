@@ -5,15 +5,34 @@ Organization operators consume the resulting public catalog; they do not sign
 inventories or publish images. The guided command requires Python and GitHub CLI,
 not local Docker access. GitHub-hosted publication and catalog verification use
 Docker and Skopeo, without rebuilding the retained images.
-Candidates must contain the approved public Noether revision documented in
-[images](images.md). A different Noether source revision is refused before source
-upload or signing; build a matching image and corresponding source bundle.
+`research-cpu` and `lean-mathlib` candidates must contain the approved public
+Noether revision documented in [images](images.md); a `tex` candidate must contain
+no Noether. A different Noether source revision is refused before source upload or
+signing; build a matching image and corresponding source bundle.
 
 ```sh
 make compute-publish
 ```
 
-Select the retained candidate handoff when prompted. The wizard discovers
+Select the retained candidate handoff when prompted. The wizard lists each
+`~/.local/share/reasoning/compute-publication/NAME/handoff.json`, or accepts a
+path. A handoff names the candidate and its local inputs, with paths relative to
+the handoff's directory:
+
+```json
+{
+  "source_revision": "FULL_COMMIT",
+  "candidate_workflow_run": 123,
+  "profiles": {
+    "tex": {"archive": "tex.oci.tar", "source_bundle": "sources.tar", "source_draft": "source-review.draft.json"}
+  }
+}
+```
+
+`archive` is the retained `candidate-FULL_COMMIT-PROFILE` artifact from that run.
+`source_bundle` and `source_draft` come from the source collector (see
+[images](images.md#collect-source-delivery-inputs)); for `tex`, the
+`compute-sources.yml` workflow produces both. The wizard discovers
 hash-bound Spaces upload receipts, verifies the candidate against authenticated
 successful CI evidence, and produces signed **observed-source provenance** from
 the actual image SBOM and retained source collection. Every observed component
