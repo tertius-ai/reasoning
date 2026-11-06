@@ -454,13 +454,13 @@ def test_sandbox_tools_are_offered_only_while_a_worker_or_scaler_can_run_jobs(in
     state, _, owner, _, parent, _ = root(installation)
     user, org = owner["user_id"], owner["organization_id"]
     compute, image = sandbox(state, owner, tmp_path)
-    jobs = {"compute_catalog", "compute_submit", "compute_propose", "lean_check", "noether_compute"}
+    jobs = {"compute_submit", "compute_propose", "lean_check", "noether_compute"}
 
     def offered():
         return {tool.name for tool in ResearchTools(state, parent, compute=compute).registry.list()}
 
-    # Local arithmetic needs no sandbox and stays available.
-    assert not jobs & offered() and "scientific_calculate" in offered()
+    # Reading the catalog and results needs no worker, and local arithmetic needs no sandbox.
+    assert not jobs & offered() and {"compute_catalog", "compute_result", "scientific_calculate"} <= offered()
     worker = compute.register_worker(user, org, "Fixture", [image["id"]], image["maximum_resources"])
     assert jobs <= offered()
     with state.store.transaction(write=True) as db:
@@ -497,6 +497,7 @@ def test_waiting_reply_names_its_proposed_computation_and_continues_once_it_is_r
         "kind": "proposal", "id": proposal, "status": "pending", "action": "compute",
         "compute": {"image_id": image["id"], "language": "python", "resources": DEFAULT_RESOURCES,
                     "program": "print(2+2)", "program_truncated": False},
+        "runnable": True,
     }]
 
     # Without a worker the proposal can't be approved, and it stays pending so it can still be rejected.
@@ -504,7 +505,7 @@ def test_waiting_reply_names_its_proposed_computation_and_continues_once_it_is_r
         db.execute("UPDATE compute_workers SET revoked_at=? WHERE id=?", (int(time.time()), worker["id"]))
     assert state.run(user, org, parent["id"])["answer_state"]["compute_available"] is False
     proposals = ResearchProposals(state, compute, None)
-    with pytest.raises(StoreError, match="can't run computations"):
+    with pytest.raises(StoreError, match="no compute worker or scaler"):
         proposals.review(user, org, topics[1]["id"], proposal, True)
     assert proposals.review(user, org, topics[1]["id"], proposal, False)["status"] == "rejected"
     assert state.run(user, org, parent["id"])["answer_state"]["waits"] == []
@@ -531,6 +532,102 @@ def test_waiting_reply_names_its_queued_computation(installation, tmp_path):
     [wait] = state.run(user, org, parent["id"])["answer_state"]["waits"]
     assert wait["kind"] == "compute" and wait["id"] == job["id"] and wait["status"] == "queued"
     assert isinstance(wait["created_at"], int)
+
+
+@pytest.mark.parametrize("decision", ["reject", "cancel"])
+def test_a_declined_computation_withdraws_submission_for_the_rest_of_the_reply(installation, tmp_path, decision):
+    from reasoning_ledger.server.compute_catalog import DEFAULT_RESOURCES
+    from reasoning_ledger.server.research_tools import DEFAULT_TOOLS, ResearchProposals
+    from reasoning_ledger.server.topic_agents import DECLINED_INSTRUCTION
+
+    state, _, owner, topics, parent, quote = root(installation)
+    user, org = owner["user_id"], owner["organization_id"]
+    compute, image = sandbox(state, owner, tmp_path)
+    compute.register_worker(user, org, "Fixture", [image["id"]], image["maximum_resources"])
+    with state.store.transaction(write=True) as db:
+        db.execute("INSERT INTO research_topic_settings(organization_id,topic_id,tools_json,compute_allowance_cpu_seconds) "
+                   "VALUES(?,?,?,?)", (org, topics[1]["id"], json.dumps(DEFAULT_TOOLS), 0 if decision == "reject" else 1000))
+    submitted = ResearchTools(state, parent, compute=compute).invoke("compute_submit", {
+        "image_id": image["id"], "language": "python", "program": "print(2+2)", "resources": DEFAULT_RESOURCES,
+    })["result"]
+    waiting(state, parent, "Waiting for the computation.")
+    if decision == "reject":
+        ResearchProposals(state, compute, None).review(user, org, topics[1]["id"], submitted["proposal_id"], False)
+    else:
+        compute.cancel(user, org, submitted["id"])
+    TopicAgents(state, compute).dispatch()
+    resumed = state.claim()
+    with state.store.transaction() as db:
+        context = json.loads(db.execute("SELECT context_json FROM llm_requests WHERE id=?", (resumed["request_id"],)).fetchone()[0])
+        snapshot = json.loads(db.execute("SELECT snapshot_json FROM research_contexts WHERE request_id=?",
+                                         (resumed["request_id"],)).fetchone()[0])
+    handoff = json.loads(context[-1]["content"])
+    assert handoff["instruction"].endswith(DECLINED_INSTRUCTION)
+    assert [item["status"] for item in handoff["declined"]] == ["rejected" if decision == "reject" else "cancelled"]
+    assert snapshot["compute_declined"] is True
+    offered = {tool.name for tool in ResearchTools(state, resumed, compute=compute).registry.list()}
+    assert not {"compute_submit", "compute_propose", "lean_check", "noether_compute"} & offered
+    assert {"compute_catalog", "compute_result"} <= offered
+    # A new message from the person starts a reply that may compute again.
+    state.enqueue(user, org, topics[1]["id"], "next-message", state.parameters([quote.model], None, 50, None), [quote])
+    fresh = state.claim()
+    assert "compute_submit" in {tool.name for tool in ResearchTools(state, fresh, compute=compute).registry.list()}
+
+
+def test_submissions_must_fit_a_live_worker_or_scaler(installation, tmp_path):
+    from reasoning_ledger.server.compute_catalog import DEFAULT_RESOURCES
+    from reasoning_ledger.server.research_tools import ResearchProposals
+
+    state, _, owner, topics, parent, _ = root(installation)
+    user, org = owner["user_id"], owner["organization_id"]
+    compute, image = sandbox(state, owner, tmp_path)
+    worker = compute.register_worker(user, org, "Small fixture", [image["id"]], DEFAULT_RESOURCES)
+    tools = ResearchTools(state, parent, compute=compute)
+    catalog = tools.invoke("compute_catalog", {})["result"]
+    assert catalog["images"][0]["runs_here"] == [DEFAULT_RESOURCES] and "no network" in catalog["note"]
+    larger = {**DEFAULT_RESOURCES, "cpu": 2}
+    with pytest.raises(ValueError, match="largest it can run here: artifact_bytes 1048576, cpu 1"):
+        tools.invoke("compute_submit", {"image_id": image["id"], "language": "python", "program": "print(1)", "resources": larger})
+    proposal = tools.invoke("compute_submit", {
+        "image_id": image["id"], "language": "python", "program": "print(1)", "resources": DEFAULT_RESOURCES,
+    })["result"]["proposal_id"]
+    waiting(state, parent, "Waiting for the computation.")
+    # The only worker that fit is replaced by a smaller one: the proposal would never be claimed.
+    with state.store.transaction(write=True) as db:
+        db.execute("UPDATE compute_workers SET revoked_at=? WHERE id=?", (int(time.time()), worker["id"]))
+    compute.register_worker(user, org, "Smaller fixture", [image["id"]], {**DEFAULT_RESOURCES, "wall_time_seconds": 60})
+    answer = state.run(user, org, parent["id"])["answer_state"]
+    assert answer["compute_available"] is True and answer["waits"][0]["runnable"] is False
+    with pytest.raises(StoreError, match="no compute worker or scaler accepts a job this large"):
+        ResearchProposals(state, compute, None).review(user, org, topics[1]["id"], proposal, True)
+
+
+def test_live_runs_change_when_what_a_reply_waits_on_changes(installation, tmp_path):
+    from reasoning_ledger.server.compute_catalog import DEFAULT_RESOURCES
+    from reasoning_ledger.server.research_tools import ResearchProposals
+    from reasoning_ledger.server.topic_events import signature
+
+    state, _, owner, topics, parent, _ = root(installation)
+    user, org, topic = owner["user_id"], owner["organization_id"], topics[1]["id"]
+    compute, image = sandbox(state, owner, tmp_path)
+    worker = compute.register_worker(user, org, "Fixture", [image["id"]], image["maximum_resources"])
+    proposal = ResearchTools(state, parent, compute=compute).invoke("compute_submit", {
+        "image_id": image["id"], "language": "python", "program": "print(2+2)", "resources": DEFAULT_RESOURCES,
+    })["result"]["proposal_id"]
+    waiting(state, parent, "Waiting for the computation.")
+
+    def runs():
+        with state.store.transaction() as db:
+            return signature(db, org, topic, True)["runs"]
+
+    # Neither change touches the run itself, but each changes what its card shows.
+    before = runs()
+    with state.store.transaction(write=True) as db:
+        db.execute("UPDATE compute_workers SET revoked_at=? WHERE id=?", (int(time.time()), worker["id"]))
+    revoked = runs()
+    assert revoked != before
+    ResearchProposals(state, compute, None).review(user, org, topic, proposal, False)
+    assert runs() != revoked
 
 
 def test_ordinary_agent_review_returns_to_the_conversation_without_a_goal(installation):

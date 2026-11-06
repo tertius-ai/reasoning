@@ -24,6 +24,15 @@ ROLES = {
 }
 
 
+# A person rejected the proposal, or cancelled the computation.
+DECLINED = {("proposal", "rejected"), ("compute", "cancelled")}
+DECLINED_INSTRUCTION = (
+    " A person rejected or cancelled the computations listed in declined. Don't submit, propose or retry another "
+    "computation in this reply; computation tools are withdrawn until the person sends a new message. Answer with the "
+    "evidence you have and say plainly what couldn't be computed and why."
+)
+
+
 class TopicAgents:
     def __init__(self, inference, compute=None):
         self.inference, self.store = inference, inference.store
@@ -627,6 +636,8 @@ class TopicAgents:
             if self.inference._stop_reason(db, row):
                 return
             snapshot = self.metadata(db, row)
+            # A rejected proposal or a cancelled computation is a person's decision, not a failure to work around.
+            declined = [result for result in external if (result["kind"], result["status"]) in DECLINED]
             from .research_goals import ResearchGoals
 
             goal = ResearchGoals.execution_goal(db, row["id"])
@@ -663,10 +674,12 @@ class TopicAgents:
                         {
                             "instruction": "Delegated work has returned. Integrate agent and asynchronous tool results; "
                             "read exact agent outputs with agent_read and computation evidence with compute_result. "
-                            "Continue the original request, not an unrelated objective. Failures are evidence, not completed work.",
+                            "Continue the original request, not an unrelated objective. Failures are evidence, not completed work."
+                            + (DECLINED_INSTRUCTION if declined else ""),
                             "results": [self._view(db, task, offset=0, length=1200) for task in tasks[:20]],
                             "total_results": len(tasks),
                             "external_results": external,
+                            **({"declined": declined} if declined else {}),
                             "recovery_tool": "agent_tasks",
                         }
                     ),
@@ -678,6 +691,7 @@ class TopicAgents:
                 "through_sequence": 0,
                 "memory_through_sequence": 0,
                 "compact_through_sequence": 0,
+                **({"compute_declined": True} if declined else {}),
             }
             parameters = self.inference.parameters([row["model"]], None, 50, None,
                                                    effort=json.loads(row["parameters_json"]).get("effort"))

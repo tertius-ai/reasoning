@@ -124,9 +124,12 @@ test("a paused reply shows its proposed computation, refuses approval without a 
     console.error(logs);
     throw error;
   } finally {
-    await browser?.close();
-    server?.kill();
-    provider.close();
+    await browser?.close(); provider.closeAllConnections(); await new Promise(resolve => provider.close(resolve));
+    // The server may still be writing its state as it stops; removing that directory waits for it to exit.
+    if (server && server.exitCode === null && server.signalCode === null) {
+      server.kill("SIGTERM"); await Promise.race([once(server, "exit"), new Promise(resolve => setTimeout(resolve, 5000))]);
+      if (server.exitCode === null && server.signalCode === null) { server.kill("SIGKILL"); await once(server, "exit"); }
+    }
     await rm(temporary, { recursive: true, force: true });
   }
 });

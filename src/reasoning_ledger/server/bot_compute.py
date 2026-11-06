@@ -23,6 +23,7 @@ class BotCompute:
         with self.store.transaction(write=True) as db:
             bot, run = self.runtime.leased(db, credential, run_id, lease)
             image = self.compute._admission(db, run["requested_by"], run["organization_id"], run["topic_id"], parameters)
+            self.compute.require_runnable(db, run["organization_id"], image_id, parameters["resources"])
             prior = db.execute("SELECT * FROM bot_compute_approvals WHERE run_id=? AND request_sha256=?",
                                (run_id, digest(body))).fetchone()
             if prior:
@@ -84,6 +85,7 @@ class BotCompute:
                 image = self.compute._admission(db, run["requested_by"], org, run["topic_id"], parameters)
                 if image.reference.split("@", 1)[1] != row["image_digest"]:
                     raise StoreError(409, "approved compute image identity changed")
+                self.compute.require_runnable(db, org, parameters["image_id"], parameters["resources"])
                 job = self.compute._enqueue(db, run["requested_by"], org, run["topic_id"], "bot-compute-" + identity, parameters)
                 db.execute("UPDATE bot_compute_approvals SET status='submitted',job_id=? WHERE id=?", (job["id"], identity))
             else:

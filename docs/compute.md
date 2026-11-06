@@ -5,8 +5,8 @@
 SDK. The selection is retained for retries. Skipping leaves chat usable and
 allows compute onboarding later with `make compute-setup`. Until an organization
 has a compute worker that is not revoked or draining, or an enabled compute
-scaler, models are not offered sandbox tools, so no reply waits on a job that
-nothing would run.
+scaler, models are not offered sandbox submission tools, so no reply waits on a
+job that nothing would run.
 
 ## Enable compute on an existing deployment
 
@@ -320,7 +320,7 @@ JSON array of at most 32 image records, in a file no larger than 64 KiB. The
 catalog is read at server startup. Organization administrators cannot change
 these records over HTTP; they can allow a subset for their organization.
 
-Each record has exactly these fields:
+Each record has exactly these fields, and optionally `capabilities`:
 
 | Field | Value |
 | --- | --- |
@@ -332,6 +332,7 @@ Each record has exactly these fields:
 | `capabilities_digest`, `sbom_digest` | SHA-256 digests of the image's capability and SBOM evidence files |
 | `capabilities_path`, `sbom_path` | Bounded absolute `/etc/` or `/usr/share/` file paths without parent traversal |
 | `maximum_resources` | All six bounded resource fields below |
+| `capabilities` | Optional: the image's capabilities document. It must reproduce `capabilities_digest` exactly when serialized as the image writes it (sorted keys, compact separators, a final newline), or the catalog is refused. It is not part of the image's identity: jobs and workers compare the other fields only |
 
 These are approval metadata, not proof that an image exists, was signed, or
 enforces the limits. The catalog loader validates structure and pins; it does

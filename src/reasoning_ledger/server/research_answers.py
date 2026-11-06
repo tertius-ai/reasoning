@@ -52,8 +52,13 @@ def waits(db, row):
                     "program": parameters["program"][:PROGRAM_PREVIEW],
                     "program_truncated": len(parameters["program"]) > PROGRAM_PREVIEW,
                 }
+                item["runnable"] = ComputeStore.runnable(db, row["organization_id"], parameters["image_id"], parameters["resources"])
         elif view["kind"] == "compute":
-            item["created_at"] = db.execute("SELECT created_at FROM compute_jobs WHERE id=?", (view["id"],)).fetchone()[0]
+            job = db.execute("SELECT created_at,parameters_json FROM compute_jobs WHERE id=?", (view["id"],)).fetchone()
+            parameters = json.loads(job["parameters_json"])
+            # Whether any worker or scaler would claim it: one that fits nothing waits forever.
+            item["created_at"] = job["created_at"]
+            item["runnable"] = ComputeStore.runnable(db, row["organization_id"], parameters["image_id"], parameters["resources"])
         found.append(item)
     delegated = db.execute(
         "SELECT COUNT(*) FROM topic_agent_tasks t LEFT JOIN llm_runs r ON r.id=t.child_run LEFT JOIN bot_runs b ON b.id=t.child_bot_run "

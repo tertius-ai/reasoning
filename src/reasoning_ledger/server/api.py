@@ -21,7 +21,7 @@ from .bot_api import install_routes as install_bot_routes
 from .bot_cloud_api import install_routes as install_cloud_bot_routes
 from .bot_store import BotStore
 from .compute_api import install_routes as install_compute_routes
-from .compute_catalog import load_catalog
+from .compute_catalog import load_capabilities, load_catalog
 from .compute_store import ComputeStore
 from .direct_media import install_routes as install_direct_media_routes
 from .direct_messages import DirectMessages
@@ -454,7 +454,7 @@ def create_app(config: Config, *, provider: OpenRouter | None = None, mail_provi
     knowledge = KnowledgeStore(store)
     from .research_blog import install_routes as install_blog_routes
 
-    compute = ComputeStore(store, load_catalog(config.compute_images))
+    compute = ComputeStore(store, load_catalog(config.compute_images), load_capabilities(config.compute_images))
     provider = provider or OpenRouter(config.openrouter_url)
     from .provider_budget import ProviderBudget
 

@@ -272,6 +272,11 @@ def test_bot_compute_uses_owner_approval_and_exact_existing_image_queue(compute)
     run = runtime.claim(bot["token"])
     bridge = BotCompute(runtime, state)
     parameters = {key: value for key, value in submission().items() if key != "client_id"}
+    # A job nothing could claim is refused before the owner is asked; this worker only makes the image runnable.
+    with pytest.raises(StoreError, match="no compute worker or scaler"):
+        bridge.request(bot["token"], run["id"], run["lease"], **parameters)
+    image = state.images[parameters["image_id"]]
+    state.register_worker(owner["user_id"], owner["organization_id"], "Standby fixture", [image.id], image.maximum_resources)
     approval = bridge.request(bot["token"], run["id"], run["lease"], **parameters)
     assert approval == bridge.request(bot["token"], run["id"], run["lease"], **parameters)
     assert state.jobs(owner["user_id"], owner["organization_id"], topics[1]["id"]) == []

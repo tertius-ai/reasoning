@@ -55,6 +55,28 @@ def text_page(text, offset, length):
             "total_characters": len(text), "truncated": offset + low < len(text)}
 
 
+CATALOG_NOTE = (
+    "Each image has only its listed languages and, where installed is given, exactly those runtimes and tools; assume "
+    "nothing else (for example no TeX). Jobs have no network. Write output files to the image's output path "
+    "(REASONING_OUTPUT_DIR). A job runs only if it fits one of runs_here for its image; empty runs_here means nothing here "
+    "runs that image."
+)
+
+
+def catalog_view(compute, configuration, store, org):
+    """The catalog as a model needs it: what runs here, and what each image verifiably contains."""
+    with store.transaction() as db:
+        offers = compute.capacity(db, org)
+    images = []
+    for image in configuration["images"]:
+        entry = {**image, "runs_here": [offer["resources"] for offer in offers if image["id"] in offer["image_ids"]]}
+        document = compute.capabilities.get(image["id"])
+        if document:
+            entry["installed"] = {key: document.get(key) for key in ("runtimes", "tools", "paths", "network", "restrictions")}
+        images.append(entry)
+    return {**configuration, "images": images, "note": CATALOG_NOTE}
+
+
 class ResearchTools:
     def __init__(self, inference, row, *, compute=None, workflows=None):
         self.inference, self.store, self.row = inference, inference.store, row
@@ -69,9 +91,11 @@ class ResearchTools:
                 "SELECT tools_json FROM research_topic_settings WHERE organization_id=? AND topic_id=?", (self.org, self.topic)
             ).fetchone()
             self.enabled = set(json.loads(settings[0])) if settings else set(DEFAULT_TOOLS)
-            # Sandbox tools are offered only when something can run their jobs; a queued job would wait forever.
-            self.compute_ready = bool(compute) and compute.available(db, self.org)
             captured = db.execute("SELECT snapshot_json FROM research_contexts WHERE request_id=?", (row["request_id"],)).fetchone()
+            # Sandbox submission is offered only when something can run its jobs, and not again in a reply after a person
+            # rejected or cancelled one of its computations: a queued job would wait forever, a new one would ask again.
+            declined = bool(captured and json.loads(captured[0]).get("compute_declined"))
+            self.compute_ready = bool(compute) and not declined and compute.available(db, self.org)
             if captured:
                 snapshot = json.loads(captured[0])
                 self.reviewer = bool(snapshot.get("review_id"))
@@ -538,7 +562,7 @@ class ResearchTools:
                 self._target(saved["topic_id"])
                 return self._proposal({"action": "workflow", "workflow_id": workflow_id, "version": version})
 
-        if "compute" in self.enabled and self.compute and self.compute_ready:
+        if "compute" in self.enabled and self.compute:
 
             @register(name="noether_operations", description="Discover executable Noether wrappers without a compute job. "
                       "Omit operation for names; provide it for exact payload/result schemas and an example. "
@@ -551,33 +575,38 @@ class ResearchTools:
 
             @register(
                 name="compute_catalog",
-                description="List digest-pinned computation images and resource ceilings. No code runs on the chat host.",
+                description="List digest-pinned computation images, what each has installed, and the largest job that can "
+                "run here. No code runs on the chat host.",
                 input_schema=schema({}),
             )
             def compute_catalog():
-                return self.compute.configuration(self.user, self.org)
+                return catalog_view(self.compute, self.compute.configuration(self.user, self.org), self.store, self.org)
 
-            @register(
-                name="compute_propose",
-                description=(
-                    "Propose sandboxed code for a gamma topic. A human must approve exact source/image/resources before scheduling."
-                ),
-                input_schema=schema(
-                    {
-                        "topic_id": string(32),
-                        "image_id": string(64),
-                        "language": string(32),
-                        "program": string(16000),
-                        "resources": {"type": "object"},
-                    },
-                    ["topic_id", "image_id", "language", "program", "resources"],
-                ),
-            )
-            def compute_propose(topic_id, image_id, language, program, resources):
-                if self._target(topic_id)["kind"] != "gamma":
-                    raise StoreError(400, "computation jobs belong to gamma topics")
-                parameters = self.compute.parameters(image_id, language, program, resources)
-                return self._proposal({"action": "compute", "topic_id": topic_id, "parameters": parameters})
+            if self.compute_ready:
+
+                @register(
+                    name="compute_propose",
+                    description=(
+                        "Propose sandboxed code for a gamma topic. A human must approve exact source/image/resources before scheduling."
+                    ),
+                    input_schema=schema(
+                        {
+                            "topic_id": string(32),
+                            "image_id": string(64),
+                            "language": string(32),
+                            "program": string(16000),
+                            "resources": {"type": "object"},
+                        },
+                        ["topic_id", "image_id", "language", "program", "resources"],
+                    ),
+                )
+                def compute_propose(topic_id, image_id, language, program, resources):
+                    if self._target(topic_id)["kind"] != "gamma":
+                        raise StoreError(400, "computation jobs belong to gamma topics")
+                    parameters = self.compute.parameters(image_id, language, program, resources)
+                    with self.store.transaction() as db:
+                        self.compute.require_runnable(db, self.org, image_id, parameters["resources"])
+                    return self._proposal({"action": "compute", "topic_id": topic_id, "parameters": parameters})
 
             @register(
                 name="compute_result",
@@ -839,9 +868,11 @@ class ResearchProposals:
             if item["status"] == "reviewing" and item["reviewed_by"] != user:
                 raise StoreError(409, "the approving person must resume this operation with its original request identity")
             # Refused before approval is recorded, so the proposal stays pending and can still be rejected.
-            if json.loads(item["body_json"])["action"] == "compute" and not (self.compute and self.compute.available(db, org)):
-                raise StoreError(409, "this server can't run computations: the organization has no compute worker or "
-                                 "scaler. Reject the proposal so the reply can continue")
+            body = json.loads(item["body_json"])
+            if body["action"] == "compute" and approve:
+                if not self.compute:
+                    raise StoreError(409, "this server can't run computations; reject the proposal so the reply can continue")
+                self.compute.require_runnable(db, org, body["parameters"]["image_id"], body["parameters"]["resources"])
             if item["status"] == "pending":
                 db.execute(
                     "UPDATE research_proposals SET status='reviewing',reviewed_by=?,reviewed_at=? WHERE id=?",

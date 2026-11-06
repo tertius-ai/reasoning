@@ -685,7 +685,9 @@ cursors and fetches exactly the missing range with `messages?after=` and
 connection. Within one change, `messages` precedes the `runs` event that links a
 finished run to its message. One watcher per topic and server process reads a
 content-free change signature (latest message and revision sequences, recent run,
-event and call-receipt markers, agent threads, goal and bot invocations) every 250
+event and call-receipt markers, agent threads, the status of what open threads wait
+on and, while any wait, the organization's compute capacity, goal and bot
+invocations) every 250
 ms while work is active and every second otherwise, and at once after any
 successful write through the server. When a signature changes, each stream
 re-reads that channel through the same access-checked reads as the REST routes.

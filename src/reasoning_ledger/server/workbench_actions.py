@@ -242,13 +242,27 @@ def register_actions(research):
                 "creates_paid_jobs": False,
             }
 
+    if "compute" in research.enabled and research.compute:
+
+        @register(
+            name="compute_cancel",
+            description="Cancel a sandbox job in this project. Cancellation does not prove the job was free or cleanup completed.",
+            input_schema=schema({"job_id": string(32)}, ["job_id"]),
+        )
+        def compute_cancel(job_id):
+            job = research.compute.job(research.user, research.org, job_id)
+            research._target(job["topic_id"])
+            return research.compute.cancel(research.user, research.org, job_id)
+
+    # Submission needs something that can run the job, and stops for the rest of a reply once a person declines one.
     if "compute" in research.enabled and research.compute and research.compute_ready:
 
         @register(
             name="compute_submit",
             description=(
                 "Submit bounded code to an approved sandbox. Uses the topic CPU allowance or proposes exact-action approval. "
-                "Sage/Python/GAP/PARI/Julia/Lean require advertised image support."
+                "Sage/Python/GAP/PARI/Julia/Lean require advertised image support. Read compute_catalog first: an image has "
+                "only what it lists, jobs have no network, and resources must fit one of the image's runs_here limits."
             ),
             risk="external",
             input_schema=schema(
@@ -260,6 +274,7 @@ def register_actions(research):
             parameters = research.compute.parameters(image_id, language, program, resources)
             with research.store.transaction(write=True) as db:
                 research.store._topic_access(db, research.user, research.org, research.topic, write=True)
+                research.compute.require_runnable(db, research.org, image_id, parameters["resources"])
                 settings = db.execute(
                     "SELECT compute_allowance_cpu_seconds FROM research_topic_settings WHERE organization_id=? AND topic_id=?",
                     (research.org, research.topic),
@@ -283,16 +298,6 @@ def register_actions(research):
                         parameters,
                     )
             return research._proposal({"action": "compute", "topic_id": research.topic, "parameters": parameters})
-
-        @register(
-            name="compute_cancel",
-            description="Cancel a sandbox job in this project. Cancellation does not prove the job was free or cleanup completed.",
-            input_schema=schema({"job_id": string(32)}, ["job_id"]),
-        )
-        def compute_cancel(job_id):
-            job = research.compute.job(research.user, research.org, job_id)
-            research._target(job["topic_id"])
-            return research.compute.cancel(research.user, research.org, job_id)
 
         from .noether_compute import register_jobs
 

@@ -10,7 +10,8 @@ store methods as the REST routes and sends the result:
 * ``messages``: watermarks ``{"sequence", "updates"}`` (latest message sequence and message
   revision sequence). The browser fetches new messages and edits with its own cursors.
 * ``runs`` (beta topics): ``{"order": [run IDs], "runs": [changed runs]}``. A changed run whose
-  output only grew carries ``output_append`` instead of the full ``output_text``.
+  output only grew carries ``output_append`` instead of the full ``output_text``. A waiting run also
+  changes when what it waits on does: a proposal, computation or review, or the organization's compute capacity.
 * ``agents``, ``goal`` (beta topics) and ``bot-runs``: complete snapshots, sent when they change.
 
 A direct conversation has the same stream with only the ``messages`` channel, read through the
@@ -37,6 +38,7 @@ import anyio
 from fastapi import Request
 from fastapi.responses import StreamingResponse
 
+from .compute_store import ComputeStore
 from .store import StoreError
 
 TOPIC_PATH = re.compile(r"/(?:topics|direct-conversations)/([a-f0-9]{32})(?:/|$)")
@@ -120,8 +122,22 @@ def signature(db, organization_id: str, topic_id: str, beta: bool) -> dict[str, 
             "FROM agent_goals g WHERE g.organization_id=? AND g.topic_id=? ORDER BY g.created_at DESC,g.id DESC LIMIT 1",
             (organization_id, topic_id),
         ).fetchone()
+        # A waiting run shows what it waits on and whether compute can run it, which change outside the run itself.
+        waits = [
+            _values(row)
+            for row in db.execute(
+                "SELECT w.id,p.status,COALESCE(j.status,(SELECT status FROM compute_jobs WHERE id=json_extract(p.result_json,'$.id'))),"
+                "v.status FROM topic_agent_waits w JOIN topic_agent_threads a ON a.root_run=w.root_run "
+                "LEFT JOIN research_proposals p ON p.id=w.proposal_id LEFT JOIN compute_jobs j ON j.id=w.compute_id "
+                "LEFT JOIN mathematical_reviews v ON v.id=w.review_id "
+                "WHERE a.organization_id=? AND a.topic_id=? AND a.status IN ('active','paused') ORDER BY w.id",
+                (organization_id, topic_id),
+            )
+        ]
+        capacity = ComputeStore.capacity(db, organization_id) if waits else None
         # Thread status is part of each run's view, so a thread change also refreshes runs.
-        result.update(runs=_digest([runs, threads]), agents=_digest(threads), goal=_digest(dict(goal) if goal else None))
+        result.update(runs=_digest([runs, threads, waits, capacity]), agents=_digest(threads),
+                      goal=_digest(dict(goal) if goal else None))
         active = active or any(row[1] in {"queued", "running"} for row in runs) or any(row[1] == "active" for row in threads)
         active = active or bool(goal and goal["status"] == "active")
     result["active"] = active
