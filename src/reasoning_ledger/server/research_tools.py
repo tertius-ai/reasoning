@@ -69,6 +69,8 @@ class ResearchTools:
                 "SELECT tools_json FROM research_topic_settings WHERE organization_id=? AND topic_id=?", (self.org, self.topic)
             ).fetchone()
             self.enabled = set(json.loads(settings[0])) if settings else set(DEFAULT_TOOLS)
+            # Sandbox tools are offered only when something can run their jobs; a queued job would wait forever.
+            self.compute_ready = bool(compute) and compute.available(db, self.org)
             captured = db.execute("SELECT snapshot_json FROM research_contexts WHERE request_id=?", (row["request_id"],)).fetchone()
             if captured:
                 snapshot = json.loads(captured[0])
@@ -536,7 +538,7 @@ class ResearchTools:
                 self._target(saved["topic_id"])
                 return self._proposal({"action": "workflow", "workflow_id": workflow_id, "version": version})
 
-        if "compute" in self.enabled and self.compute:
+        if "compute" in self.enabled and self.compute and self.compute_ready:
 
             @register(name="noether_operations", description="Discover executable Noether wrappers without a compute job. "
                       "Omit operation for names; provide it for exact payload/result schemas and an example. "
@@ -836,6 +838,10 @@ class ResearchProposals:
                 return {"proposal_id": proposal, "status": "rejected", "result": None}
             if item["status"] == "reviewing" and item["reviewed_by"] != user:
                 raise StoreError(409, "the approving person must resume this operation with its original request identity")
+            # Refused before approval is recorded, so the proposal stays pending and can still be rejected.
+            if json.loads(item["body_json"])["action"] == "compute" and not (self.compute and self.compute.available(db, org)):
+                raise StoreError(409, "this server can't run computations: the organization has no compute worker or "
+                                 "scaler. Reject the proposal so the reply can continue")
             if item["status"] == "pending":
                 db.execute(
                     "UPDATE research_proposals SET status='reviewing',reviewed_by=?,reviewed_at=? WHERE id=?",

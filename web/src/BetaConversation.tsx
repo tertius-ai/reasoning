@@ -10,6 +10,7 @@ import { TransportControls, dispatchTopicCommand, useComputeActivity, useTopicCo
 import { useBotActivity } from "./BotPlayback";
 import { replyThreads, replyTimeline, threadRoot } from "./ReplyAdditions";
 import { ReplyTimeline, workingFor } from "./ReplyTimeline";
+import { ReplyWaits, replyWaits, waitingLabel, waitingReply } from "./ReplyWaits";
 import {
   ApiError, ModelAttempt, ModelRun, PendingModelAttempt, ReplyAddition, UNDESCRIBED_ERROR,
   aborted, decimalBudget, errorMessage, organizationPath, request, sharedRequest, topicPath, usd,
@@ -297,10 +298,19 @@ export function BetaConversation({ organizationId, topicId, userId, canWrite, ca
     finally { if (alive.current) setBusy(false); }
   };
   if (stopRef) stopRef.current = stopReply;
+  // Stop on a paused reply ends it: its pending proposals are rejected and its computations cancelled, and it does not continue.
+  const stopWaiting = async (rootRun: string) => {
+    setBusy(true); setError("");
+    try {
+      await request(topicPath(organizationId, topicId) + "/agents/" + rootRun + "/control", { method: "POST", body: { status: "cancelled" } });
+      if (alive.current) setRefresh(value => value + 1);
+    } catch (cause) { if (alive.current) failed(cause); }
+    finally { if (alive.current) setBusy(false); }
+  };
   // A finished run gives way to its reply message only once the transcript shows it, so the output never disappears.
   // A reply cancelled because its message moved into another reply leaves no card: the message shows where it went.
   const visibleRuns = runs.filter((run) => (run.context_through_sequence !== 0 || run.agent) && run.error_code !== "moved_into_reply"
-    && (run.status !== "succeeded" || !run.message_id || awaitingReply(run, transcript))
+    && (run.status !== "succeeded" || !run.message_id || awaitingReply(run, transcript) || waitingReply(run))
     // A cost reconciled in this page stays on its card: the already loaded reply shows it only after a reload.
     && (!replacedByReply(run, transcript) || reconciled.has(run.id)));
   useEffect(() => { onRuns?.(runs); }, [runs, onRuns]);
@@ -331,7 +341,9 @@ export function BetaConversation({ organizationId, topicId, userId, canWrite, ca
         selected: addingTo === hosts.get(run.id)!.root.id, onAdd: () => onAddTo(hosts.get(run.id)!.root.id),
       } : undefined}
       timeline={{ additions: hosts.get(run.id)?.additions ?? [], userId, names, onUndo: canWrite ? onUndoAddition : undefined }}
-      onStop={stoppable.has(run.id) && online ? () => void stopReply(stoppable.get(run.id)!) : undefined} stopping={busy}
+      onStop={stoppable.has(run.id) && online ? () => void stopReply(stoppable.get(run.id)!)
+        : waitingReply(run) && online && canWrite && (canManage || run.requested_by === userId) ? () => void stopWaiting(threadRoot(run))
+        : undefined} stopping={busy} online={online}
       refusal={refusal && canWrite && run.id === latestRun?.id && privacyRefusal(run) ? {
         replacement: refusal.replacement(run.model), disabled: busy || !online || !!attempt,
         onSendWith: model => refusal.onSendWith(run, model), onChoose: refusal.onChoose } : undefined}
@@ -369,10 +381,10 @@ export const privacyRefusal = (run: ModelRun) => run.status === "failed" && run.
 /** Ways forward from a reply its model's privacy settings refused, offered on the topic's latest reply only. */
 export type RefusalActions = { replacement: string | null; disabled: boolean; onSendWith: (model: string) => void; onChoose: () => void };
 
-function BetaRunCard({ root, organizationId, topicId, run, canManage, canControl, canReact, awaiting, thread, timeline, onStop, stopping, onReconciled, onUpdated, onAuthLost, refusal }: {
-  root: string; organizationId: string; topicId: string; run: ModelRun; canManage: boolean; canReact: boolean;
+function BetaRunCard({ root, organizationId, topicId, run, canManage, canControl, canReact, awaiting, thread, timeline, onStop, stopping, online, onReconciled, onUpdated, onAuthLost, refusal }: {
+  root: string; organizationId: string; topicId: string; run: ModelRun; canManage: boolean; canReact: boolean; online?: boolean;
   refusal?: RefusalActions;
-  /** Stops this reply, shown in the header while it runs. */
+  /** Stops this reply, shown in the header while it runs or waits. */
   onStop?: () => void; stopping?: boolean;
   /** The thread line of a running reply: a button that adds the next message to it. */
   thread?: { summary: string; selected: boolean; onAdd: () => void };
@@ -385,7 +397,9 @@ function BetaRunCard({ root, organizationId, topicId, run, canManage, canControl
   onUpdated: () => void; onAuthLost: () => void;
 }) {
   // A refusal that offers a way forward opens, so its explanation and choices are seen without a click.
-  const active = ["queued", "running"].includes(run.status), expanded = active || !!awaiting || !!refusal, [open, setOpen] = useState(expanded);
+  // A paused reply stays a live card while it waits; its text is already the reply message once the transcript shows it.
+  const waiting = waitingReply(run), shownElsewhere = waiting && !awaiting && !!run.message_id;
+  const active = ["queued", "running"].includes(run.status), expanded = active || waiting || !!awaiting || !!refusal, [open, setOpen] = useState(expanded);
   const paused = pausedRun(run), [busy, setBusy] = useState(false), [error, setError] = useState(""), refused = privacyRefusal(run);
   useEffect(() => { setOpen(expanded); }, [expanded]);
   const control = (path: string, body: object) => {
@@ -394,16 +408,16 @@ function BetaRunCard({ root, organizationId, topicId, run, canManage, canControl
       if (cause instanceof ApiError && cause.status === 401) onAuthLost(); else setError(errorMessage(cause));
     }).finally(() => setBusy(false));
   };
-  return <details data-run-id={run.id} data-status={run.status} className="org-model-run org-run-compact" open={open}
+  return <details data-run-id={run.id} data-status={run.status} data-waiting={waiting || undefined} className="org-model-run org-run-compact" open={open}
     onToggle={event => { if (event.target === event.currentTarget) setOpen(event.currentTarget.open); }}>
-    <summary><strong>{run.agent ? `${run.agent.role.replaceAll("_", " ")} · ` : ""}{run.model}</strong><span role="status">{run.cancel_requested && active ? "Cancelling…" : paused ? "paused" : run.answer_state?.status === "waiting" ? "Waiting · answer incomplete"
+    <summary><strong>{run.agent ? `${run.agent.role.replaceAll("_", " ")} · ` : ""}{run.model}</strong><span role="status">{run.cancel_requested && active ? "Cancelling…" : paused ? "paused" : waiting ? waitingLabel(replyWaits(run)) : run.answer_state?.status === "waiting" ? "Waiting · answer incomplete"
       : run.answer_state?.status === "continued" ? "Continued in a later reply" : refused ? "not sent" : run.status}</span>
       {!active && run.error_code && !refused && <span title={run.diagnostics?.message}>{run.diagnostics?.http_status
         ? `${run.diagnostics.phase === "stream" ? "Stream error" : "HTTP"} ${run.diagnostics.http_status}`
         : run.error_code.replaceAll("_", " ")}</span>}
       {run.actual_microusd != null && <small>{usd(run.actual_microusd)}</small>}
       {active && !paused && run.status === "running" && workingFor(run) && <small className="org-run-elapsed">working · {workingFor(run)}</small>}
-      {active && onStop && !run.cancel_requested && <CardStop label="Stop this reply" disabled={stopping} onStop={onStop} />}
+      {(active || waiting) && onStop && !run.cancel_requested && <CardStop label="Stop this reply" disabled={stopping} onStop={onStop} />}
     </summary>
     {active && !paused && timeline && replyTimeline(run.activity ?? [], timeline.additions, true).length
       ? <ReplyTimeline activity={run.activity ?? []} active {...timeline} /> : <RunProgress run={run} />}
@@ -421,10 +435,12 @@ function BetaRunCard({ root, organizationId, topicId, run, canManage, canControl
       <summary>Latest answer checkpoint</summary><p>{run.answer_state.checkpoint.summary}</p>
       {run.answer_state.checkpoint.remaining && <p>Remaining: {run.answer_state.checkpoint.remaining}</p>}
       {run.answer_state.checkpoint.sources?.map(source => <p key={source}>{source}</p>)}</details>}
-    {run.answer_state?.status === "waiting" && <p role="status">Waiting: {run.answer_state.reason}. Continue from the retained checkpoint when the result arrives.</p>}
+    {waiting ? <ReplyWaits organizationId={organizationId} topicId={topicId} run={run} canWrite={canReact} online={online ?? true}
+      onUpdated={onUpdated} onAuthLost={onAuthLost} />
+      : run.answer_state?.status === "waiting" && <p role="status">Waiting: {run.answer_state.reason}. Continue from the retained checkpoint when the result arrives.</p>}
     {run.answer_state?.status === "continued" && <p className="org-help">Waited for {run.answer_state.reason}. A later reply continued this work and carries the answer.</p>}
-    {run.output_text && <pre aria-label={"Streaming response from " + run.model}>{run.output_text}</pre>}
-    {!active && run.output_text && <OutputActions {...{ organizationId, topicId, onAuthLost }} targetKind="run" targetId={run.id} canWrite={canReact} text={run.output_text} />}
+    {run.output_text && !shownElsewhere && <pre aria-label={"Streaming response from " + run.model}>{run.output_text}</pre>}
+    {!active && !shownElsewhere && run.output_text && <OutputActions {...{ organizationId, topicId, onAuthLost }} targetKind="run" targetId={run.id} canWrite={canReact} text={run.output_text} />}
     <div className="org-usage-row"><MessageUsageDetails usage={run.usage} />
       {active && !paused && run.cost_progress && <small>Confirmed {usd(run.cost_progress.confirmed_microusd)} · next-call estimate {usd(run.cost_progress.next_call_estimate_microusd)}</small>}</div>
     {run.error_code && <p className="org-error">{run.diagnostics?.message ?? runFailureMessage(run.error_code)}</p>}

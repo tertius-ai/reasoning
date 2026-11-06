@@ -3,7 +3,10 @@
 `make deploy` offers Modal computation by default, with an explicit skip choice.
 `make deploy COMPUTE_BACKEND=none` skips that step without installing the optional
 SDK. The selection is retained for retries. Skipping leaves chat usable and
-allows compute onboarding later with `make compute-setup`.
+allows compute onboarding later with `make compute-setup`. Until an organization
+has a compute worker that is not revoked or draining, or an enabled compute
+scaler, models are not offered sandbox tools, so no reply waits on a job that
+nothing would run.
 
 ## Enable compute on an existing deployment
 
