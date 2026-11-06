@@ -216,8 +216,11 @@ class ResearchCompletion:
         review = self._reviewer
         if self._side is None:
             with self.inference.store.transaction() as db:
-                self._side = bool(db.execute("SELECT 1 FROM side_chat_runs WHERE request_id=?", (self.row["request_id"],)).fetchone())
-        # A side-chat reply answers its owner even though its context names no topic message.
+                self._side = bool(
+                    db.execute("SELECT 1 FROM side_chat_runs WHERE request_id=?", (self.row["request_id"],)).fetchone()
+                    or db.execute("SELECT 1 FROM board_runs WHERE request_id=?", (self.row["request_id"],)).fetchone()
+                )
+        # A side-chat reply or a board arrangement answers its requester though its context names no topic message.
         purpose = purpose or (
             "review" if review else "continuation" if self.calls
             else "workflow" if self.row["context_through_sequence"] == 0 and not self._side else "answer"

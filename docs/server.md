@@ -589,6 +589,14 @@ Use the prefix `/api/organizations/{organization_id}` for organization resources
 | `{prefix}/topics/{topic_id}/side-chat/messages` | POST | Add a question to your side chat; idempotent by `client_id` |
 | `{prefix}/topics/{topic_id}/side-chat/replies` | POST | Ask one model to answer a side question privately |
 | `{prefix}/topics/{topic_id}/side-chat/bring` | POST | Post chosen side messages to the topic as one message from you, shown as a folded group |
+| `{prefix}/topics/{topic_id}/boards` | GET, POST | A beta topic's boards (not those inside cards); create one around a `question` |
+| `{prefix}/boards/{board_id}` | GET | A board's cards, links, the boards inside its cards, its path from the topic's board, and its latest arrangement run |
+| `{prefix}/boards/{board_id}/cards` | POST | Add an idea card |
+| `{prefix}/boards/{board_id}/cards/{card_id}` | PATCH, DELETE | Edit a card's text (and the question of the board inside it), or remove it with its links |
+| `{prefix}/boards/{board_id}/cards/{card_id}/board` | POST | The board inside a card, created on first use with the card as its question |
+| `{prefix}/boards/{board_id}/links` | POST | Link a card to another card or, with no `target_card_id`, to the question, as a `route` or `evidence` |
+| `{prefix}/boards/{board_id}/links/{link_id}` | DELETE | Remove a link |
+| `{prefix}/boards/{board_id}/arrange` | POST | Ask one model to arrange the board |
 | `{prefix}/compute-configuration` | GET | Approved compute images, organization policy, and quota balance |
 | `{prefix}/compute-policy` | PUT | Administrator compute admission/concurrency limits |
 | `{prefix}/topics/{topic_id}/compute-jobs` | GET, POST | Gamma compute job history and idempotent submission |
@@ -776,6 +784,26 @@ messages in order, which members and later replies read, and its `side_chat` fie
 `messages`, `omitted`, `omitted_statements`) lets the conversation show it as a folded group.
 With `note`, the earlier side messages stay private and the message says how many there were and
 which statements they recorded. Bringing starts no model reply.
+
+### Topic boards
+
+A board puts a question in the middle of a beta topic and idea cards around it. Everyone who can read
+the topic can read its boards; writers add, edit and remove cards and links, and viewers cannot. A link
+runs from a card to the next card on its route, or to the board's question; an `evidence` link to the
+question supports it without being a step. Any card can open into a board of its own whose question is
+the card, so boards nest; renaming the card renames that question. A board holds at most 200 cards.
+
+`POST …/arrange` with one `models` entry, `client_id` and optional `effort` and `max_completion_tokens`
+queues an ordinary topic run (the same admission checks, limits and accounting as a reply) whose context
+is the topic's compiled context and the board. Its only write tool, `board_arrange`, applies one
+arrangement: each card's `rank`, `maturity` (`idea`, `exploring` or `settled`), `theme`, `promise` and
+`effort` (0–1), a one-line `reason` and cited ledger statements, gap cards for missing steps, and the
+routes and evidence into the question. It replaces the model's earlier gaps and links; people's cards and
+links stay. A board has at most one arrangement queued or running. The run's text is not posted to the
+topic, and the topic's run listings and runs channel leave it out; the board reports it as `arranging`.
+
+A side question can name a card of one of the topic's boards with `card_id`; its reply then reads that
+card, its board's question and the steps around it, and the side message carries `card`.
 
 Search uses `q` (1–200 characters), with a limit of 1–100 (default 50). It searches
 message content literally, including percent and underscore characters, and

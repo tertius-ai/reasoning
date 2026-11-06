@@ -61,6 +61,8 @@ finishes, its answer replaces the card, with its steps and usage row. The Thread
 plus as the main box: chosen pictures and PDFs wait as chips above the text
 while they upload, and are sent with the reply.
 
+A board's **Arrange** request is a topic run too: it reads the topic's compiled context and the board, and its only write is one call to `board_arrange`; its text is not posted to the topic (see *Topic boards* in [server.md](server.md#topic-boards)).
+
 A side chat asks the same kind of reply privately: the run reads the topic's compiled
 context followed by the asker's side chat, may record ledger statements in the topic as usual,
 and stores its answer in the side chat. Other members never see the run or its answer unless

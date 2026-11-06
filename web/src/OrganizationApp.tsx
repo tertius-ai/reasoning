@@ -74,6 +74,7 @@ const projectTopic = (hierarchy: Hierarchy, projectId: string) => hierarchy.topi
   hierarchy.channels.some(channel => channel.id === topic.channel_id && channel.project_id === projectId))?.id;
 const DirectConversationView = lazy(() => import("./DirectConversation").then(module => ({ default: module.DirectConversationView })));
 const SideChat = lazy(() => import("./SideChat").then(module => ({ default: module.SideChat })));
+const TopicBoard = lazy(() => import("./TopicBoard").then(module => ({ default: module.TopicBoard })));
 
 /** ``addTo`` is the root run of a running model reply that the next message joins instead of starting its own. */
 type Draft = { text: string; clientId: string; attempted: boolean; mentions?: MentionBinding[]; replyTo?: string; addTo?: string };
@@ -738,7 +739,7 @@ function PresenceSidebar({ organizationId, open, onClose, onAuthLost, userId, on
   </aside>;
 }
 
-function Conversation({ organizationId, topic, members, user, canWrite, canManage, draft, updateDraft, files, changeFiles, anchor, focus, referenceTargets = [], menuTarget = null, onPreference, onForked, onAuthLost, modelAttempt, onModelAttempt, computeAttempt, onComputeAttempt, workflowAttempt, onWorkflowAttempt, workflowExecutionAttempt, onWorkflowExecutionAttempt, sideChat = false, onCloseSideChat }: {
+function Conversation({ organizationId, topic, members, user, canWrite, canManage, draft, updateDraft, files, changeFiles, anchor, focus, referenceTargets = [], menuTarget = null, onPreference, onForked, onAuthLost, modelAttempt, onModelAttempt, computeAttempt, onComputeAttempt, workflowAttempt, onWorkflowAttempt, workflowExecutionAttempt, onWorkflowExecutionAttempt, sideChat = false, onCloseSideChat, board = false, onOpenSideChat }: {
   organizationId: string; topic: Topic; members: Member[]; user: Account; canWrite: boolean; canManage: boolean;
   draft: Draft; updateDraft: (draft: Draft) => void; anchor: number | null;
   /** Files waiting to be sent with this topic's draft; `changeFiles` always changes this topic's, even after a switch. */
@@ -757,6 +758,8 @@ function Conversation({ organizationId, topic, members, user, canWrite, canManag
   workflowExecutionAttempt?: WorkflowExecutionAttempt; onWorkflowExecutionAttempt: (attempt?: WorkflowExecutionAttempt) => void;
   /** Whether your private side chat is open beside this AI chat. */
   sideChat?: boolean; onCloseSideChat?: () => void;
+  /** Whether this AI chat shows its board instead of the conversation; the board asks the side chat, opening it. */
+  board?: boolean; onOpenSideChat?: () => void;
 }) {
   // A recent visit's messages and cursors render at once; the poll then fetches only what changed.
   const snapshotKey = anchor === null && !focus ? `${user.id}/${organizationId}/${topic.id}` : "";
@@ -1218,6 +1221,17 @@ function Conversation({ organizationId, topic, members, user, canWrite, canManag
     setMessages(existing => mergeMessages(existing, [message]));
     bottom.current = true; setAtBottom(true);
   }, []);
+  // A question about a board card goes to your side chat, which opens to show the reply at work.
+  const [sideRevision, setSideRevision] = useState(0);
+  const askSide = useCallback(async (text: string, cardId: string) => {
+    if (!selectedModel || selectedModel.startsWith("bot/")) throw new Error("Choose an OpenRouter reply model in the conversation to ask privately.");
+    const question = await request<{ id: string }>(root + "/side-chat/messages", { method: "POST",
+      body: { content: text, client_id: crypto.randomUUID(), card_id: cardId } });
+    const maximum = modelCatalog?.models.find(model => model.id === selectedModel)?.max_completion_tokens;
+    await request(root + "/side-chat/replies", { method: "POST", body: { question_id: question.id, models: [selectedModel],
+      client_id: crypto.randomUUID(), ...(selectedEffort ? { effort: selectedEffort } : {}), ...(maximum ? { max_completion_tokens: maximum } : {}) } });
+    onOpenSideChat?.(); setSideRevision(value => value + 1);
+  }, [root, selectedModel, selectedEffort, modelCatalog, onOpenSideChat]);
   const loadOlder = async () => {
     if (!messages.length || loadingOlder) return;
     setLoadingOlder(true);
@@ -1409,7 +1423,9 @@ function Conversation({ organizationId, topic, members, user, canWrite, canManag
   // The plus sits under the box beside the model picker in AI chats, and inside the box on its left everywhere else.
   const attach = <span ref={attachmentControl} className="org-composer-attach"><AttachFilesButton
     disabled={!canWrite || sending || (topic.kind === "beta" && !!modelAttempt)} onFiles={attachFiles} /></span>;
-  return <MediaScope.Provider value={{ organizationId, topicId: topic.id, canWrite }}><div className="org-conversation-row"><section className="org-conversation" aria-label="Topic conversation">
+  return <MediaScope.Provider value={{ organizationId, topicId: topic.id, canWrite }}><div className="org-conversation-row">{board && topic.kind === "beta" && <LazyView label="Board"><TopicBoard organizationId={organizationId}
+    topic={topic} canWrite={canWrite} model={selectedModel} effort={selectedEffort} onAsk={askSide} onAuthLost={onAuthLost} /></LazyView>}
+  <section className="org-conversation" aria-label="Topic conversation" hidden={board && topic.kind === "beta"}>
     {texOpen && <TexRequestDialog bots={botModels} names={botNames} onClose={() => setTexOpen(false)} onPrepare={(source, bot) => {
       const label = `@${botNames[bot.bot_id] ?? bot.name}`;
       updateDraft({ text: label + " " + texRequest(source), clientId: crypto.randomUUID(), attempted: false,
@@ -1579,7 +1595,7 @@ function Conversation({ organizationId, topic, members, user, canWrite, canManag
   {sideChat && topic.kind === "beta" && onCloseSideChat && <LazyView label="Side chat"><SideChat organizationId={organizationId} topic={topic}
     owner={user.name} canWrite={canWrite} model={selectedModel} effort={selectedEffort} onClose={onCloseSideChat} onAuthLost={onAuthLost}
     maxTokens={modelCatalog?.models.find(model => model.id === selectedModel)?.max_completion_tokens ?? null}
-    onBrought={brought} renderMarkdown={renderSideMarkdown} /></LazyView>}
+    onBrought={brought} renderMarkdown={renderSideMarkdown} revision={sideRevision} /></LazyView>}
   </div></MediaScope.Provider>;
 }
 
@@ -1781,8 +1797,9 @@ export function OrganizationApp({ user, onAccount, onAuthenticated, onSignedOut,
     return () => window.removeEventListener("resize", resize);
   }, []);
   const [presenceOpen, setPresenceOpen] = useState(() => typeof window !== "undefined" && window.innerWidth > 1100);
-  // Your private side chat beside an AI chat; it stays open as you move between AI chats.
+  // Your private side chat beside an AI chat, and whether AI chats show their board; both stay as you move between AI chats.
   const [sideChatOpen, setSideChatOpen] = useState(false);
+  const [boardOpen, setBoardOpen] = useState(false);
   useEffect(() => {
     const narrow = window.matchMedia("(max-width: 1100px)");
     const closeOnNarrowScreen = () => { if (narrow.matches) setPresenceOpen(false); };
@@ -2040,6 +2057,11 @@ export function OrganizationApp({ user, onAccount, onAuthenticated, onSignedOut,
         title={directTotal ? `People · ${directTotal} unread direct messages` : "People"} aria-expanded={presenceOpen}
         onClick={() => setPresenceOpen((value) => !value)}><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" aria-hidden="true"><circle cx="9" cy="7" r="3"/><path d="M3 21v-3a6 6 0 0 1 12 0v3M17 4a3 3 0 0 1 0 6M21 21v-3a6 6 0 0 0-3-5"/></svg>
         {directTotal > 0 && <span className="org-unread org-presence-unread" aria-hidden="true">{directTotal}</span>}</button>}
+      {organization && topic?.kind === "beta" && <button type="button" className="org-icon-button org-board-toggle" aria-label="Board"
+        title={boardOpen ? "Board · back to the conversation" : "Board · ideas around a question"} aria-pressed={boardOpen} onClick={() => setBoardOpen(value => !value)}>
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" aria-hidden="true">
+          <rect x="9" y="9.5" width="6" height="5" rx="1.2" /><rect x="2.5" y="3.5" width="5" height="4" rx="1" /><rect x="16.5" y="3.5" width="5" height="4" rx="1" />
+          <rect x="2.5" y="16.5" width="5" height="4" rx="1" /><path d="M7.5 6.5 9.5 9.5M16.5 6.5l-2 3M7.5 17.5l2-3" /></svg></button>}
       {organization && topic?.kind === "beta" && <button type="button" className="org-icon-button org-side-chat-toggle" aria-label="Side chat"
         title="Side chat · ask the model privately" aria-expanded={sideChatOpen} onClick={() => setSideChatOpen(value => !value)}>
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" aria-hidden="true">
@@ -2109,7 +2131,8 @@ export function OrganizationApp({ user, onAccount, onAuthenticated, onSignedOut,
           onForked={(id) => { void request<Hierarchy>(organizationPath(organization.id) + "/hierarchy").then((tree) => {
             setHierarchy(tree); select(id); preferenceRefresh();
           }).catch((cause) => setError(errorMessage(cause))); }} onAuthLost={authLost}
-          sideChat={sideChatOpen} onCloseSideChat={() => setSideChatOpen(false)} />
+          sideChat={sideChatOpen} onCloseSideChat={() => setSideChatOpen(false)}
+          board={boardOpen} onOpenSideChat={() => setSideChatOpen(true)} />
           : <section className="org-empty"><h1>{organization ? "A place to reason together" : "Choose or create an organization"}</h1>
             <p>{organization ? "Projects hold channels, and channels hold focused conversations." : "Organizations keep their own conversations, members, and provider keys."}</p>
             {canCreate && <button onClick={() => hierarchy.channels.length ? beginCreation("topic", hierarchy.channels[0].id)

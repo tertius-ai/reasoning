@@ -108,6 +108,11 @@ class SideChats:
     def _message(db, row) -> dict:
         result = _row(row)
         result["author_kind"] = result.pop("sender_kind")
+        card = result.pop("card_id", None)
+        if card:
+            # A question asked about a board card names the card, as it reads now.
+            found = db.execute("SELECT id,board_id,text FROM board_cards WHERE id=?", (card,)).fetchone()
+            result["card"] = dict(found) if found else {"id": card, "board_id": None, "text": None}
         if result["author_kind"] == "assistant":
             result["statements"] = run_statements(db, result["organization_id"], result["owner_id"], result["inference_run_id"])
         return result
@@ -144,7 +149,10 @@ class SideChats:
                 ).fetchall()[::-1]
             return {"messages": [self._message(db, row) for row in rows], "runs": self._runs(db, user, org, topic)}
 
-    def post(self, user: str, org: str, topic: str, content: str, client_id: str) -> dict:
+    def post(self, user: str, org: str, topic: str, content: str, client_id: str, card: str | None = None) -> dict:
+        """Add a question to the caller's side chat, optionally about a card on one of the topic's boards."""
+        from .topic_boards import card_context
+
         if not isinstance(content, str) or not content.strip() or len(content) > 16000 or not client_id or len(client_id) > 128:
             raise StoreError(400, "a side message needs text of at most 16000 characters and a client_id")
         with self.store.transaction(write=True) as db:
@@ -153,14 +161,17 @@ class SideChats:
                 "SELECT * FROM side_chat_messages WHERE organization_id=? AND owner_id=? AND client_id=?", (org, user, client_id)
             ).fetchone()
             if existing:
-                if existing["topic_id"] != topic or existing["content"] != content or existing["sender_kind"] != "human":
+                if (existing["topic_id"] != topic or existing["content"] != content or existing["sender_kind"] != "human"
+                        or existing["card_id"] != card):
                     raise StoreError(409, "client_id was already used for a different side message")
                 return self._message(db, existing)
+            if card is not None and card_context(db, org, topic, card) is None:
+                raise StoreError(404, "card not found on this topic's boards")
             message_id = _id()
             db.execute(
-                "INSERT INTO side_chat_messages(id,organization_id,topic_id,owner_id,sender_kind,content,client_id,created_at) "
-                "VALUES(?,?,?,?,'human',?,?,?)",
-                (message_id, org, topic, user, content, client_id, int(time.time())),
+                "INSERT INTO side_chat_messages(id,organization_id,topic_id,owner_id,sender_kind,content,client_id,created_at,card_id) "
+                "VALUES(?,?,?,?,'human',?,?,?,?)",
+                (message_id, org, topic, user, content, client_id, int(time.time()), card),
             )
             return self._message(db, db.execute("SELECT * FROM side_chat_messages WHERE id=?", (message_id,)).fetchone())
 
@@ -233,11 +244,20 @@ class SideChats:
             side.extend(reversed(turns))
             used += size
         side.reverse()
+        about = []
+        if question["card_id"]:
+            from .topic_boards import card_context
+
+            card = card_context(db, org, topic, question["card_id"])
+            if card is not None:
+                about = [{"role": "system", "content": "The latest side question is about this card on the topic's board "
+                          "(reference data): " + encoded(card)}]
         compiled = [
             *shared,
             {"role": "system", "content": "The topic's shared conversation ends here. What follows is the private side chat of "
              + encoded(owner) + " about this topic; only they see it."},
             *side,
+            *about,
             {"role": "user", "content": INSTRUCTION},
         ]
         snapshot = {
@@ -365,6 +385,7 @@ def brought_group(db, message: dict) -> dict | None:
 class SideMessage(RequestInput):
     content: Annotated[str, Field(min_length=1, max_length=16000, pattern=r"\S")]
     client_id: Annotated[str, Field(min_length=1, max_length=128)]
+    card_id: Annotated[str | None, Field(pattern=r"^[a-f0-9]{32}$")] = None
 
 
 class SideReply(RequestInput):
@@ -392,7 +413,7 @@ def install_routes(app, inference, provider, config, authenticated) -> None:
 
     @app.post(prefix + "/messages", status_code=201)
     def side_message(organization_id: str, topic_id: str, body: SideMessage, user: User):
-        return side.post(user, organization_id, topic_id, body.content, body.client_id)
+        return side.post(user, organization_id, topic_id, body.content, body.client_id, body.card_id)
 
     @app.post(prefix + "/replies", status_code=202)
     async def side_reply(organization_id: str, topic_id: str, body: SideReply, user: User):

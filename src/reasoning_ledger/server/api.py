@@ -987,6 +987,9 @@ def create_app(config: Config, *, provider: OpenRouter | None = None, mail_provi
     from .side_chat import install_routes as install_side_chat_routes
 
     install_side_chat_routes(app, inference, provider, config, authenticated)
+    from .topic_boards import install_routes as install_board_routes
+
+    install_board_routes(app, inference, provider, config, authenticated)
 
     @app.get("/api/organizations/{organization_id}/topics/{topic_id}/inference-runs")
     def model_runs(organization_id: str, topic_id: str, user: User, limit: Annotated[int, Query(ge=1, le=50)] = 20):

@@ -1,0 +1,74 @@
+/* Copyright Benjamin Antieau and Deven Manam. SPDX-License-Identifier: Apache-2.0 */
+/* A topic's board: the map of cards around its question, the overlays on it, and the bar and box around the map. */
+.org-board { flex: 1; min-width: 0; min-height: 0; display: flex; flex-direction: column; background: var(--background); }
+.org-board-bar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 16px; padding: 10px 16px; border-bottom: 1px solid var(--border); }
+.org-board-path { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 6px; min-width: 0; font-size: 12px; color: var(--muted); }
+.org-board-path h2 { margin: 0; overflow: hidden; color: var(--foreground); font-size: 14px; font-weight: 600; text-overflow: ellipsis; }
+.org-board-path button { padding: 0; border: none; background: none; color: var(--blue); font: inherit; cursor: pointer; }
+.org-board-path select { max-width: 220px; font: 12px var(--font-sans); }
+.org-board-tools { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.org-board-overlays, .org-board-zoom { display: inline-flex; align-items: center; gap: 4px; }
+.org-board-tools button, .org-board-footer button, .org-board-details button, .org-board-start button { padding: 3px 10px; border: 1px solid var(--border-strong); border-radius: var(--radius-pill); background: transparent; color: var(--foreground); font: 12px var(--font-sans); cursor: pointer; }
+.org-board-tools button[aria-pressed="true"], .org-board-arrange { border-color: color-mix(in srgb, var(--blue) 55%, transparent) !important; background: color-mix(in srgb, var(--blue) 16%, transparent) !important; color: var(--blue) !important; }
+.org-board-tools button:disabled, .org-board-footer button:disabled, .org-board-details button:disabled { cursor: default; opacity: .55; }
+.org-board-zoom output { min-width: 42px; color: var(--muted); font: 12px var(--font-mono); text-align: center; }
+.org-board-hint { margin: 6px 16px 0; color: var(--muted); font-size: 12px; }
+.org-board-viewport { position: relative; flex: 1; min-height: 0; overflow: hidden; cursor: grab; touch-action: none; outline: none; }
+.org-board-viewport:active { cursor: grabbing; }
+.org-board-viewport:focus-visible { box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--blue) 55%, transparent); }
+.org-board-world { position: absolute; left: 0; top: 0; transform-origin: 0 0; }
+.org-board-links { position: absolute; overflow: visible; pointer-events: none; }
+.org-board-link { fill: none; stroke: var(--muted); stroke-width: 1.5; }
+.org-board-link-evidence { stroke-dasharray: 5 5; }
+.org-board-question { position: absolute; display: flex; flex-direction: column; justify-content: center; gap: 4px; padding: 12px 14px; box-sizing: border-box; border: 1px solid color-mix(in srgb, var(--blue) 50%, transparent); border-radius: 14px; background: color-mix(in srgb, var(--blue) 14%, var(--surface)); color: var(--blue); text-align: center; }
+.org-board-question span { font-size: 11px; opacity: .8; }
+.org-board-question p { margin: 0; color: var(--foreground); font-size: 15px; font-weight: 600; line-height: 1.35; overflow-wrap: anywhere; }
+.org-board-card { position: absolute; display: flex; flex-direction: column; gap: 4px; padding: 9px 11px; box-sizing: border-box; border: 1px solid var(--border-strong); border-radius: 10px; background: var(--surface); color: var(--foreground); font: 13px/1.4 var(--font-sans); text-align: left; cursor: pointer; }
+.org-board-card:focus-visible, .org-board-card.is-selected { outline: 2px solid var(--blue); outline-offset: 2px; }
+.org-board-card.is-aimed { box-shadow: 0 0 0 2px color-mix(in srgb, var(--blue) 30%, transparent); }
+.org-board-card-gap { border-style: dashed; background: var(--surface-2); color: var(--muted); }
+.org-board-card-text { margin: 0; display: -webkit-box; overflow: hidden; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow-wrap: anywhere; }
+.org-board-card.is-open .org-board-card-text { -webkit-line-clamp: 1; font-size: 12px; font-weight: 600; }
+.org-board-card footer { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; margin-top: auto; color: var(--muted); font-size: 11px; }
+.org-board-inside { color: var(--blue); }
+/* Rings: a card's maturity tints its left edge and names it. */
+.org-board-ring-settled { border-left: 4px solid var(--teal); }
+.org-board-ring-exploring { border-left: 4px solid var(--amber); }
+.org-board-ring-idea { border-left: 4px solid var(--border-strong); }
+.org-board-maturity { padding: 0 6px; border-radius: var(--radius-pill); background: var(--surface-2); }
+.org-board-maturity-settled { color: var(--teal); }
+.org-board-maturity-exploring { color: var(--amber); }
+.org-board-rank { position: absolute; top: -10px; left: -10px; width: 22px; height: 22px; border: 1px solid var(--border-strong); border-radius: 50%; background: var(--surface-raised); color: var(--foreground); font: 600 12px/20px var(--font-sans); text-align: center; }
+.org-board-quadrant { display: inline-grid; grid-template-columns: 6px 6px; gap: 1px; }
+.org-board-quadrant i { width: 6px; height: 6px; border-radius: 1px; background: var(--border-strong); }
+.org-board-quadrant i.is-on { background: var(--blue); }
+.org-board-statements { color: var(--teal); }
+/* Themes: one shaded region behind the cards that share a theme. */
+.org-board-theme { position: absolute; box-sizing: border-box; border: 1px dashed color-mix(in srgb, var(--foreground) 18%, transparent); border-radius: 18px; background: color-mix(in srgb, var(--foreground) 4%, transparent); }
+.org-board-theme span { position: absolute; top: 6px; left: 14px; color: var(--muted); font-size: 12px; }
+/* The board inside a card, drawn at the card's scale until you zoom in. */
+.org-board-inner { position: absolute; left: 0; top: 0; transform-origin: 0 0; pointer-events: none; }
+.org-board-inner .org-board-card, .org-board-inner .org-board-question { pointer-events: auto; }
+.org-board-card-inner { justify-content: center; }
+.org-board-question-inner { font-size: 14px; }
+.org-board-details { position: absolute; right: 12px; bottom: 12px; z-index: 2; width: min(340px, calc(100% - 24px)); max-height: calc(100% - 24px); overflow: auto; padding: 10px 12px; box-sizing: border-box; border: 1px solid var(--border-strong); border-radius: var(--radius-card); background: var(--surface-raised); box-shadow: var(--shadow-overlay); font-size: 13px; line-height: 1.45; cursor: auto; }
+.org-board-details header { display: flex; align-items: center; justify-content: space-between; gap: 8px; font-size: 12px; color: var(--muted); }
+.org-board-details header button { padding: 0 8px; }
+.org-board-details p { margin: 6px 0; overflow-wrap: anywhere; }
+.org-board-facts, .org-board-reason { color: var(--muted); font-size: 12px; }
+.org-board-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 8px; }
+.org-board-link-form { display: inline-flex; align-items: center; gap: 4px; }
+.org-board-link-form select { max-width: 170px; font: 12px var(--font-sans); }
+.org-board-error, .org-board-notice { margin: 6px 16px 0; font-size: 12px; }
+.org-board-notice { color: var(--teal); }
+.org-board-footer { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 8px 16px 12px; border-top: 1px solid var(--border); }
+.org-board-idea, .org-board-ask { display: flex; flex: 1; align-items: center; gap: 6px; min-width: 220px; }
+.org-board-idea input, .org-board-ask input { flex: 1; min-width: 0; padding: 7px 10px; border: 1px solid var(--border-strong); border-radius: var(--radius-control); background: var(--surface-2); color: var(--foreground); font: 13px var(--font-sans); }
+.org-board-empty { margin: auto; padding: 24px; color: var(--muted); text-align: center; }
+.org-board-empty-cards { position: absolute; left: 0; right: 0; bottom: 16px; margin: 0; pointer-events: none; }
+.org-board-start { display: flex; flex-direction: column; gap: 10px; width: min(560px, calc(100% - 32px)); margin: 10vh auto 0; }
+.org-board-start h2 { margin: 0; font-size: 16px; }
+.org-board-start p { margin: 0; color: var(--muted); font-size: 13px; }
+.org-board-start textarea { padding: 8px 10px; border: 1px solid var(--border-strong); border-radius: var(--radius-control); background: var(--surface-2); color: var(--foreground); font: 14px/1.5 var(--font-sans); resize: vertical; }
+.org-board-start button { align-self: flex-start; }
+@media (prefers-reduced-motion: no-preference) { .org-board-card { transition: border-color var(--motion, .15s), box-shadow var(--motion, .15s); } }

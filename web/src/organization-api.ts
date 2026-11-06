@@ -67,7 +67,29 @@ export type SideStatement = { claim_id: string; statement_text?: string };
 export type SideMessage = { id: string; sequence: number; topic_id: string; owner_id: string; author_kind: "human" | "assistant";
   content: string; client_id: string; created_at: number; assistant_model: string | null; inference_run_id: string | null;
   /** On an answer: the side question it answers. */
-  reply_to: string | null; statements?: SideStatement[] };
+  reply_to: string | null; statements?: SideStatement[];
+  /** On a question asked about a board card: that card. */
+  card?: { id: string; board_id: string | null; text: string | null } };
+/** A card on a topic board. The model sets rank to reason when someone arranges the board. */
+export type BoardCard = { id: string; kind: "idea" | "gap"; text: string; author_kind: "human" | "assistant"; created_by: string;
+  created_at: number; updated_at: number; rank: number | null; maturity: "idea" | "exploring" | "settled" | null; theme: string | null;
+  promise: number | null; effort: number | null; reason: string | null; statements: string[];
+  /** The board inside this card, once someone opened it. */
+  board: { id: string; cards: number; gaps: number } | null };
+/** From a card to the next card on its route, or with no target to the board's question. */
+export type BoardLink = { id: string; source_card_id: string; target_card_id: string | null; kind: "route" | "evidence";
+  author_kind: "human" | "assistant" };
+export type BoardContent = { id: string; question: string; parent_card_id: string | null; arranged_at: number | null;
+  cards: BoardCard[]; links: BoardLink[] };
+export type Board = BoardContent & { topic_id: string; created_by: string; created_at: number; updated_at: number;
+  /** The boards inside this board's cards, by card. */
+  children: Record<string, BoardContent>;
+  /** The boards above, outermost first, each with the card that holds the next. */
+  path: { board_id: string; question: string; card_id: string; card: string }[];
+  /** The latest arrangement run; `applied_at` is when it applied its arrangement, if it did. */
+  arranging: { id: string; status: ModelRun["status"]; model: string; error_code: string | null; applied_at: number | null } | null };
+export type BoardSummary = { id: string; question: string; created_by: string; created_at: number; updated_at: number;
+  arranged_at: number | null; cards: number };
 /** A model run answering a side question; only its requester can see it. */
 export type SideRun = ModelRun & { side_chat: { question_id: string } };
 export type SideChat = { messages: SideMessage[]; runs: SideRun[] };
