@@ -17,6 +17,8 @@
 .org-side-message-assistant > header strong { color: var(--amber); }
 .org-side-message > header time { color: var(--muted); font-size: 11px; }
 .org-side-message p { margin: 4px 0; }
+.org-side-about { color: var(--blue); font-size: 12px; }
+.org-side-about q { color: var(--foreground); }
 .org-side-bring-button, .org-side-bring-actions button, .org-side-working button { padding: 2px 10px; border: 1px solid var(--border-strong); border-radius: var(--radius-pill); background: transparent; color: var(--foreground); font: 12px var(--font-sans); cursor: pointer; }
 .org-side-bring-button { margin-top: 4px; }
 .org-side-bring-button[aria-expanded="true"], .org-side-primary { border-color: color-mix(in srgb, var(--blue) 55%, transparent) !important; background: color-mix(in srgb, var(--blue) 16%, transparent) !important; color: var(--blue) !important; }

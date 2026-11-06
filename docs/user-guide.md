@@ -108,6 +108,15 @@ together with the earlier side messages it builds on; untick any you want to kee
 **Bring 2 with a context note** posts only that question and answer, with a line saying how many
 earlier side messages it built on.
 
+The **Board** button beside **Side chat** shows the AI chat's board instead of its conversation: a
+question in the middle and idea cards around it. Add ideas, and link a card to the next step or to the
+question from its details; cards on no route wait above. **Arrange with** the selected model has it rank
+the cards, mark how settled each is, group them into themes, estimate promise and effort, add missing
+steps and lay out the routes. The overlay buttons show these as numbers, coloured edges, shaded regions
+and a small promise × effort mark without moving any card. Pinch or Ctrl/⌘-scroll to zoom and scroll to
+pan; a card with a board inside shows it in place as you zoom in, and **Open its board** makes it the map.
+The box at the bottom asks your side chat about the card you selected, or the one most in view.
+
 If a beta reply request is sent but the server's answer is lost, the
 conversation shows **Reply request not confirmed**: the message is saved, and
 the request may or may not have started. **Retry same request** resends it

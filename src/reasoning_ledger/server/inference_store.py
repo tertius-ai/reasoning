@@ -301,7 +301,8 @@ class InferenceStore:
                 (org, quote.model, run_id),
             )
             self._event(db, org, run_id, {"type": "state", "status": "queued"})
-            if workflow_context is None and not internal_agent and not snapshot.get("review_id") and not snapshot.get("side_chat"):
+            if workflow_context is None and not internal_agent and not snapshot.get("review_id") and not snapshot.get("side_chat") \
+                    and not snapshot.get("board_arrange"):
                 db.execute("INSERT INTO topic_agent_threads(root_run,organization_id,topic_id) VALUES(?,?,?)", (run_id, org, topic))
         self.store._audit(db, org, user, "inference.request", request_id)
         spans.mark("ledger_write")
@@ -482,8 +483,9 @@ class InferenceStore:
         return [self._view(row, db) for row in db.execute(self._joined() + "WHERE request_id=? ORDER BY model", (request,))]
 
     def runs(self, user: str, org: str, topic: str, *, limit: int = 20) -> list[dict]:
-        """The topic's shared runs, newest first; private side-chat replies are listed only in their side chat."""
+        """The topic's chat runs, newest first; side-chat replies and board arrangements are listed in their own views."""
         from .side_chat import public_request
+        from .topic_boards import listed_request
 
         with self.store.transaction() as db:
             self.store._topic_access(db, user, org, topic)
@@ -491,7 +493,7 @@ class InferenceStore:
                 self._view(row, db)
                 for row in db.execute(
                     self._joined() + "WHERE r.organization_id=? AND q.topic_id=? AND " + public_request("q.id")
-                    + " ORDER BY q.created_at DESC,r.id DESC LIMIT ?",
+                    + " AND " + listed_request("q.id") + " ORDER BY q.created_at DESC,r.id DESC LIMIT ?",
                     (org, topic, limit),
                 )
             ]
@@ -742,7 +744,9 @@ class InferenceStore:
             if current["cancel_requested"]:
                 status = "cancelled"
             now, message_id = int(time.time()), None
-            is_review = db.execute("SELECT 1 FROM mathematical_reviews WHERE reviewer_run_id=?", (row["id"],)).fetchone()
+            # A reviewer's verdict and a board arrangement are applied elsewhere; neither is posted as a reply.
+            is_review = db.execute("SELECT 1 FROM mathematical_reviews WHERE reviewer_run_id=?", (row["id"],)).fetchone() \
+                or db.execute("SELECT 1 FROM board_runs WHERE request_id=?", (current["request_id"],)).fetchone()
             from .message_replies import answered
             from .research_answers import retained_answer
 

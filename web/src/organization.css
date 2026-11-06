@@ -1015,3 +1015,5 @@ a.org-reference:hover, a.org-reference:focus-visible { text-decoration: underlin
   background: color-mix(in srgb, var(--amber) 14%, var(--surface)); color: color-mix(in srgb, var(--amber) 75%, var(--foreground)); }
 .org-app .org-composer-notice-action, .org-app .org-composer-notice-action:hover { min-height: 0; padding: 0; border: 0; background: none;
   color: inherit; font: inherit; text-decoration: underline; cursor: pointer; }
+/* An AI chat's board replaces its conversation, which keeps polling while hidden. */
+.org-conversation[hidden] { display: none; }

@@ -134,6 +134,53 @@ def simulated_bot(state: Path) -> None:
             time.sleep(2)
 
 
+def _reference(messages: list[dict], prefix: str):
+    """The JSON a context message carries after ``prefix``, newest first, or None."""
+    for message in reversed(messages):
+        content = message.get("content")
+        if isinstance(content, str) and content.startswith(prefix):
+            with contextlib.suppress(ValueError):
+                return json.loads(content[len(prefix):])
+    return None
+
+
+def simulated_arrangement(messages: list[dict]) -> dict:
+    """A fixed stand-in for a model's board arrangement, so Arrange can be tried without a model.
+
+    Cards are ranked in board order; unlinked ideas about checks or examples become evidence; the first two other
+    unlinked ideas form a route with a missing step, and the rest lead straight to the question."""
+    board = _reference(messages, "The board to arrange (reference data): ") or {}
+    ideas = [card for card in board.get("cards", []) if card.get("kind") == "idea"]
+    linked = {link.get("from") for link in board.get("links", []) if link.get("by") == "human"}
+    evidence = [card["id"] for card in ideas if card["id"] not in linked
+                and any(word in card["text"].lower() for word in ("check", "numeric", "example", "compute"))]
+    free = [card["id"] for card in ideas if card["id"] not in linked and card["id"] not in evidence]
+    first = free[:2] if len(free) >= 2 else []
+    theme = {**{identity: "Main route" for identity in first}, **{identity: "Evidence" for identity in evidence}}
+    cards = [{"card_id": card["id"], "rank": index + 1, "maturity": ("settled", "exploring", "idea")[min(index, 2)],
+              "theme": theme.get(card["id"], "Other routes"), "promise": round(max(0.2, 0.9 - 0.15 * index), 2),
+              "effort": round(0.25 + 0.2 * (index % 3), 2),
+              "reason": f"Simulated arrangement: rank {index + 1} follows board order; no model judged this card."}
+             for index, card in enumerate(ideas)]
+    gaps = [{"key": "gap-1", "text": "Missing step (simulated): what connects these two ideas?", "theme": "Main route",
+             "maturity": "idea", "reason": "Simulated gap between the first two unlinked ideas."}] if first else []
+    routes = ([[*first, "gap-1"]] if first else []) + [[identity] for identity in free if identity not in first]
+    return {"cards": cards, "gaps": gaps, "routes": routes, "evidence": evidence}
+
+
+def _side_question(messages: list[dict]) -> str | None:
+    """The latest side-chat question in a side-chat reply's context, or None outside a side chat."""
+    if not messages or "Respond to the latest side-chat message" not in str(messages[-1].get("content")):
+        return None
+    for message in reversed(messages):
+        if message.get("role") == "user":
+            with contextlib.suppress(ValueError, TypeError, AttributeError):
+                record = json.loads(message["content"])
+                if record.get("kind") == "human" and "side_sequence" in record:
+                    return record["text"]
+    return None
+
+
 class SimulatedStream(httpx.AsyncByteStream):
     def __init__(self, payload):
         self.payload = payload
@@ -145,7 +192,21 @@ class SimulatedStream(httpx.AsyncByteStream):
             return ("data: " + json.dumps({"id": generation, **value}) + "\n\n").encode()
 
         tools = {tool["function"]["name"] for tool in self.payload.get("tools", [])}
-        if "goal_checkpoint" in tools and not any(m.get("role") == "tool" for m in self.payload["messages"][-2:]):
+        messages, answered = self.payload["messages"], any(m.get("role") == "tool" for m in self.payload["messages"][-2:])
+        question = _side_question(messages)
+        call = None
+        if "board_arrange" in tools and not answered:
+            # Arrange works without a model: a fixed arrangement from the board in the context.
+            call = ("board_arrange", simulated_arrangement(messages))
+        elif "ledger_claim" in tools and question and not answered:
+            # A side reply records one statement, so its ledger chips and a brought group's statements can be tried.
+            call = ("ledger_claim", {"statement": "Simulated statement about: " + " ".join(question.split())[:200],
+                                     "notes": "Recorded by the development model; nothing was checked."})
+        if call is not None:
+            yield event({"choices": [{"index": 0, "delta": {"tool_calls": [{
+                "index": 0, "id": "dev-" + call[0], "type": "function", "function": {"name": call[0], "arguments": json.dumps(call[1])},
+            }]}, "finish_reason": "tool_calls"}]})
+        elif "goal_checkpoint" in tools and not answered:
             # A fixture cannot achieve a real research goal; record that blocker
             # instead of spinning an autonomous fake-research loop forever.
             yield event({"choices": [{"index": 0, "delta": {"tool_calls": [{

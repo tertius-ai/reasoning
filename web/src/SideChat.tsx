@@ -78,12 +78,15 @@ function BringPanel({ messages, reply, busy, onBring, onCancel }: {
   </div>;
 }
 
-export function SideChat({ organizationId, topic, owner, canWrite, model, effort, maxTokens, onClose, onBrought, onAuthLost, renderMarkdown }: {
+export function SideChat({ organizationId, topic, owner, canWrite, model, effort, maxTokens, onClose, onBrought, onAuthLost, renderMarkdown,
+  revision = 0 }: {
   organizationId: string; topic: Topic; owner: string; canWrite: boolean;
   /** The conversation's reply model and effort; side chats answer with OpenRouter models. */
   model: string; effort: string | null; maxTokens: number | null;
   onClose: () => void; onBrought: (message: Message) => void; onAuthLost: () => void;
   renderMarkdown: (markdown: string) => React.ReactNode;
+  /** Changes when a question was asked from elsewhere, such as a board card, so the side chat reads it at once. */
+  revision?: number;
 }) {
   const root = topicPath(organizationId, topic.id) + "/side-chat";
   const [messages, setMessages] = useState<SideMessage[]>([]);
@@ -120,6 +123,7 @@ export function SideChat({ organizationId, topic, owner, canWrite, model, effort
     }, controller.signal);
     return () => controller.abort();
   }, [root]);
+  useEffect(() => { if (revision) poller.current?.wake(); }, [revision]);
   const working = runs.some(run => ACTIVE.has(run.status));
   useEffect(() => {
     if (!working) return;
@@ -179,6 +183,7 @@ export function SideChat({ organizationId, topic, owner, canWrite, model, effort
             <header><strong>{message.author_kind === "assistant" ? modelName(message.assistant_model ?? "model") : "You"}</strong>
               <time dateTime={new Date(message.created_at * 1000).toISOString()}>
                 {new Date(message.created_at * 1000).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" })}</time></header>
+            {message.card && <p className="org-side-about">About the card <q>{message.card.text ?? "removed card"}</q></p>}
             {renderMarkdown(message.content)}
             {message.author_kind === "assistant" && <StatementChips statements={message.statements ?? []} />}
             {message.author_kind === "assistant" && canWrite && <button type="button" className="org-side-bring-button"

@@ -137,6 +137,17 @@ class ResearchTools:
             for tool in granted.list():
                 if tool.name in SIDE_CHAT_TOOLS:
                     self.registry.register(tool)
+        board = json.loads(captured[0]).get("board_arrange") if captured else None
+        if board:
+            # An arrange run reads the topic and the ledger, and writes only the board's arrangement.
+            from .topic_boards import BOARD_TOOLS, register_arrange
+
+            granted = self.registry
+            self.registry = ToolRegistry()
+            for tool in granted.list():
+                if tool.name in BOARD_TOOLS:
+                    self.registry.register(tool)
+            register_arrange(self, board)
         if self.reviewer:
             from .research_reviews import REVIEW_TOOLS
 
@@ -223,6 +234,7 @@ class ResearchTools:
             "agent_tasks",
             "agent_read",
             "review_submit",
+            "board_arrange",
             "answer_checkpoint",
             "account_read",
             "account_update",

@@ -686,3 +686,7 @@ MIGRATIONS += (ARTIFACT_RECOVERY_SCHEMA,)
 from .side_chat_schema import SCHEMA as SIDE_CHAT_SCHEMA  # noqa: E402
 
 MIGRATIONS += (SIDE_CHAT_SCHEMA,)
+
+from .topic_board_schema import SCHEMA as TOPIC_BOARD_SCHEMA  # noqa: E402
+
+MIGRATIONS += (TOPIC_BOARD_SCHEMA,)
