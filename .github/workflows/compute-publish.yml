@@ -5,7 +5,7 @@ on:
     inputs:
       profile:
         type: choice
-        options: [research-cpu, lean-mathlib]
+        options: [research-cpu, lean-mathlib, tex]
         required: true
       source_revision:
         description: Exact original recipe revision encoded in the signed retained candidate

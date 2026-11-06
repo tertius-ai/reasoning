@@ -10,7 +10,18 @@ import time
 
 import pytest
 
-from reasoning_ledger.image_acceptance import DISK, ISOLATION, MEMORY, NOETHER_PROGRAMS, PIDS, PROGRAMS, acceptance_limits, main, verify
+from reasoning_ledger.image_acceptance import (
+    DISK,
+    ISOLATION,
+    MEMORY,
+    NOETHER_PROGRAMS,
+    PIDS,
+    PROGRAMS,
+    TEX_PROGRAMS,
+    acceptance_limits,
+    main,
+    verify,
+)
 from reasoning_ledger.image_release import digest
 from reasoning_ledger.server.compute_archive import CollectedArtifact
 from reasoning_ledger.server.compute_catalog import DEFAULT_RESOURCES
@@ -74,6 +85,8 @@ class NonexecutingRunner:
         name = next((language for language, text in PROGRAMS.items() if source == text), None)
         if name is None:
             name = next((case for case, text in NOETHER_PROGRAMS.items() if source == text), None)
+        if name is None:
+            name = next((case for case, text in TEX_PROGRAMS.items() if source == text), None)
         if source == ISOLATION:
             name = "isolation"
         elif source == DISK:
@@ -100,6 +113,11 @@ class NonexecutingRunner:
             path = spool / "0"
             private_file(path, body)
             artifacts = (CollectedArtifact("result.json", path, len(body), digest(body)),)
+        if name == "tex_pdf":
+            body = b"corrupt" if self.corrupt_artifact else b"%PDF-1.5\nNONEXECUTING fixture\n"
+            path = spool / "0"
+            private_file(path, body)
+            artifacts = (CollectedArtifact("main.pdf", path, len(body), digest(body)),)
         return Outcome("succeeded", 1000, 0, None, artifacts)
 
 
@@ -162,3 +180,40 @@ def test_existing_output_and_unknown_image_are_refused_before_starting_server(ca
 def test_python_pressure_and_isolation_programs_have_valid_minimum_python_syntax():
     for program in (PROGRAMS["python"], *NOETHER_PROGRAMS.values(), ISOLATION, DISK, PIDS, MEMORY):
         ast.parse(program, feature_version=(3, 11))
+    # The TeX image runs Ubuntu 22.04's Python 3.10.
+    for program in (*TEX_PROGRAMS.values(), ISOLATION, DISK, PIDS, MEMORY):
+        ast.parse(program, feature_version=(3, 10))
+
+
+TEX_IMAGE = {**IMAGE, "id": "tex", "reference": "registry.example.invalid/tex@sha256:" + "e" * 64, "languages": ["python"]}
+
+
+def test_tex_acceptance_compiles_documents_and_keeps_the_python_isolation_cases(monkeypatch, tmp_path):
+    NonexecutingRunner.instances = []
+    monkeypatch.setattr("reasoning_ledger.image_acceptance.DockerRunner", NonexecutingRunner)
+    path = tmp_path / "images.json"
+    path.write_text(json.dumps([TEX_IMAGE]))
+    report = verify(path, tmp_path / "acceptance", "tex")
+    assert [case["case"] for case in report["cases"]] == [
+        "tex_pdf", "tex_bibliography", "tex_missing_package", "isolation", "disk", "pids", "memory", "wall", "cancel"]
+    runner = NonexecutingRunner.instances[-1]
+    assert {job["parameters"]["language"] for job in runner.jobs} == {"python"}
+    assert runner.preflights == [("tex", DEFAULT_RESOURCES)]
+    assert "latexmk" in TEX_PROGRAMS["tex_pdf"] and "/work/out/main.pdf" in TEX_PROGRAMS["tex_pdf"]
+    assert "biber" in TEX_PROGRAMS["tex_bibliography"] and "main.bbl" in TEX_PROGRAMS["tex_bibliography"]
+    assert "returncode != 0" in TEX_PROGRAMS["tex_missing_package"]
+
+
+def test_tex_acceptance_refuses_a_corrupt_pdf_and_mismatched_languages(monkeypatch, tmp_path):
+    monkeypatch.setattr("reasoning_ledger.image_acceptance.DockerRunner", NonexecutingRunner)
+    monkeypatch.setattr(NonexecutingRunner, "corrupt_artifact", True)
+    path = tmp_path / "images.json"
+    path.write_text(json.dumps([TEX_IMAGE]))
+    with pytest.raises(ValueError, match="PDF artifact bytes"):
+        verify(path, tmp_path / "corrupt", "tex")
+    assert not (tmp_path / "corrupt/acceptance.json").exists()
+    path.write_text(json.dumps([{**TEX_IMAGE, "languages": list(PROGRAMS)}, {**IMAGE, "languages": ["python"]}]))
+    for image_id in ("tex", "research-cpu"):
+        with pytest.raises(ValueError, match="profile's public languages"):
+            verify(path, tmp_path / ("languages-" + image_id), image_id)
+        assert not (tmp_path / ("languages-" + image_id)).exists()

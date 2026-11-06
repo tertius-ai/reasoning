@@ -46,6 +46,18 @@ provides operation names, schemas and examples without launching a job;
 artifact. Native beta models use the topic's Compute grant and explicit allowance
 or exact-action approval. Bot submissions require the bot owner's approval.
 
+## Compiling LaTeX to PDF
+
+The `tex` image compiles LaTeX offline with TeX Live 2021 (see
+[TeX profile](images.md#tex-profile)). Its only language is `python`: a job writes
+the `.tex` sources and any `.bib` files, runs
+`latexmk -pdf -interaction=nonstopmode -halt-on-error main.tex` with `subprocess`,
+and copies the PDF to `/work/out`, where it becomes an artifact. Models see the
+installed tools and restrictions in `compute_catalog`. Allow the image in the
+organization's compute policy and add it to the workers or Modal relays that
+should run it; until a worker or scaler offers it, `compute_submit` refuses TeX
+jobs.
+
 ## Lean projects and formalization groundwork
 
 Select an allowed `lean-mathlib` image and Lean in a gamma-topic's Compute editor.

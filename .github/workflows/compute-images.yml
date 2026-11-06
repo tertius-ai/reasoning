@@ -11,6 +11,7 @@ on:
     paths:
       - 'images/research-cpu/**'
       - 'images/lean-mathlib/**'
+      - 'images/tex/**'
       - 'src/reasoning_ledger/agents/noether_worker.py'
       - 'src/reasoning_ledger/image_release.py'
       - 'src/reasoning_ledger/image_context.py'
@@ -37,9 +38,9 @@ jobs:
     timeout-minutes: 90
     strategy:
       fail-fast: false
-      max-parallel: 2
+      max-parallel: 3
       matrix:
-        profile: [research-cpu, lean-mathlib]
+        profile: [research-cpu, lean-mathlib, tex]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Prepare ephemeral runner disk and OCI transport

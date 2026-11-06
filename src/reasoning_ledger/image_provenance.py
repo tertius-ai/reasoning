@@ -18,7 +18,7 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
 from . import image_publication as publication
 from .deployment.private import locked_directory, read_private, write_private
-from .image_release import SOURCE_PATHS, BoundedTarInfo, inspect_image, json_body, member_name
+from .image_release import BoundedTarInfo, inspect_image, json_body, member_name, profile_paths
 from .image_sources import inventory as components_from_sbom
 from .server.compute_catalog import canonical
 
@@ -146,7 +146,7 @@ def _prepare_audit(root, archive, profile, repository, bundle, source_url, draft
     revision, recipe_sha = publication.recipe_identity(root, profile)
     report, evidence = inspect_image(archive, json_body(
         (root / "contracts/executor/v1alpha1/image-capabilities.schema.json").read_bytes()), repository)
-    publication.require_public_noether(json_body(evidence["usr/share/reasoning/sbom.spdx.json"]))
+    publication.require_public_noether(json_body(evidence["usr/share/reasoning/sbom.spdx.json"]), profile)
     image = report["image"]
     draft = read_json(draft_path)
     sha, size = publication.hash_file(bundle)
@@ -257,7 +257,7 @@ def _recipe_members(body, profile, revision):
             name = member_name(entry.name)
             if entry.isdir():
                 continue
-            paths = (*SOURCE_PATHS, "images/lean-mathlib") if profile == "lean-mathlib" else SOURCE_PATHS
+            paths = profile_paths(profile)
             if (name != entry.name or not entry.isreg() or name in result or len(result) >= 512
                     or entry.size > 16 * 1024**2 or not any(name == path or name.startswith(path + "/") for path in paths)):
                 raise ValueError("recipe archive contains linked, duplicated or unapproved paths")

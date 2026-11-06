@@ -28,7 +28,7 @@ from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 
 from .image_acceptance import verify as verify_execution
-from .image_release import PROFILES, SOURCE_PATHS, BoundedTarInfo, command, digest, inspect_image, json_body, member_name, write_new
+from .image_release import PROFILES, BoundedTarInfo, command, digest, inspect_image, json_body, member_name, profile_paths, write_new
 from .server.compute_catalog import canonical
 from .server.compute_docker import RuntimeFault
 
@@ -146,21 +146,20 @@ def recipe_identity(root, profile):
     if command(["git", "status", "--porcelain", "--untracked-files=all"], cwd=root):
         raise ValueError("source review requires a clean committed recipe checkout")
     revision = command(["git", "rev-parse", "HEAD"], cwd=root).decode().strip()
-    paths = (*SOURCE_PATHS, "images/lean-mathlib") if profile == "lean-mathlib" else SOURCE_PATHS
-    return revision, hashlib.sha256(command(["git", "archive", revision, *paths], cwd=root)).hexdigest()
+    return revision, hashlib.sha256(command(["git", "archive", revision, *profile_paths(profile)], cwd=root)).hexdigest()
 
 
-def require_public_noether(sbom):
-    """Publication accepts the approved public Noether source revision only."""
+def require_public_noether(sbom, profile):
+    """Publication accepts the approved public Noether source revision only; the TeX image has none."""
     from .image_context import NOETHER_PUBLIC_COMMIT
 
     sources = [package.get("versionInfo") for package in sbom.get("packages", []) if package.get("name") == "noether-source"]
-    if sources != [NOETHER_PUBLIC_COMMIT]:
+    if sources != ([] if profile == "tex" else [NOETHER_PUBLIC_COMMIT]):
         raise ValueError("compute publication requires the approved public Noether release; rebuild the image and source bundle")
 
 
 def verify_source_bundle(path, audit, sbom):
-    require_public_noether(sbom)
+    require_public_noether(sbom, audit["profile"])
     if hash_file(path) != (audit["source_bundle_sha256"], audit["source_bundle_bytes"]):
         raise ValueError("source bundle differs from the signed review")
     files = audit["files"]

@@ -1,0 +1,35 @@
+{
+  "schema_version": 1,
+  "platform": "linux/amd64",
+  "frontend": "docker.io/docker/dockerfile:1.7.0@sha256:dbbd5e059e8a07ff7ea6233b213b36aa516b4c53c645f1817a4dd18b83cbea56",
+  "buildx_version": "github.com/docker/buildx v0.32.1 d3bfb3f4e48a67dda56e957a6636f4fab6c5fcb2",
+  "buildkit_version": "v0.26.2",
+  "buildkit_image": "docker.io/moby/buildkit@sha256:de10faf919fc71ba4eb1dd7bd6449566d012b0c9436b1c61bfee21d621b009aa",
+  "base": "docker.io/library/ubuntu:jammy-20260930@sha256:0a9887931b0e38af2e3487ed39e29436b0535c4f3f52e57745baaf79d1898956",
+  "ubuntu_snapshot": "20261006T000000Z",
+  "ca_bootstrap_url": "https://snapshot.ubuntu.com/ubuntu/20261006T000000Z/pool/main/c/ca-certificates/ca-certificates_20260601~22.04.1_all.deb",
+  "ca_bootstrap_sha256": "6e8cdcc8c86103acd4fc14649eac62ff2037108389074a7b167567af33c32245",
+  "packages": {
+    "biber": "2.17-2",
+    "cm-super-minimal": "0.3.4-17",
+    "latexmk": "1:4.76-1",
+    "lmodern": "2.004.5-6.1",
+    "python3": "3.10.6-1~22.04.1",
+    "texlive-bibtex-extra": "2021.20220204-1",
+    "texlive-binaries": "2021.20210626.59705-1ubuntu0.3",
+    "texlive-fonts-recommended": "2021.20220204-1",
+    "texlive-latex-base": "2021.20220204-1",
+    "texlive-latex-extra": "2021.20220204-1",
+    "texlive-latex-recommended": "2021.20220204-1",
+    "texlive-pictures": "2021.20220204-1",
+    "texlive-science": "2021.20220204-1"
+  },
+  "maximum_resources": {
+    "cpu": 64,
+    "memory_bytes": 274877906944,
+    "disk_bytes": 68719476736,
+    "pids": 4096,
+    "wall_time_seconds": 86400,
+    "artifact_bytes": 1073741824
+  }
+}

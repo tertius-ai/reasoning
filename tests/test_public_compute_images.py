@@ -20,14 +20,16 @@ from reasoning_ledger.image_release import (
     CONFIG,
     INDEX,
     MANIFEST,
-    SOURCE_PATHS,
+    PROFILES,
     OCIArchive,
     build_image,
     digest,
     inspect_image,
     json_body,
     main,
+    profile_paths,
     validate_recipe,
+    validate_tex,
     verify_builder,
 )
 from reasoning_ledger.server.compute_catalog import DEFAULT_RESOURCES, load_catalog
@@ -40,6 +42,10 @@ SPEC = importlib.util.spec_from_file_location("research_image_metadata", ROOT / 
 METADATA = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(METADATA)
 LOCK = validate_recipe(ROOT)
+TEX_SPEC = importlib.util.spec_from_file_location("tex_image_metadata", ROOT / "images/tex/metadata.py")
+TEX_METADATA = importlib.util.module_from_spec(TEX_SPEC)
+TEX_SPEC.loader.exec_module(TEX_METADATA)
+TEX_LOCK = validate_tex(ROOT)
 REVISION = "b" * 40
 TIMESTAMP = "2026-10-01T00:00:00Z"
 
@@ -52,9 +58,10 @@ def image_ci_trigger_patterns():
 
 def test_image_ci_covers_every_embedded_recipe_input_and_execution_tool():
     patterns = image_ci_trigger_patterns()
-    inputs = [path + "/example-input" if (ROOT / path).is_dir() else path for path in SOURCE_PATHS]
+    paths = {path for profile in PROFILES for path in profile_paths(profile)}
+    inputs = [path + "/example-input" if (ROOT / path).is_dir() else path for path in sorted(paths)]
     inputs += [
-        "images/lean-mathlib/install.py", "src/reasoning_ledger/image_release.py",
+        "images/lean-mathlib/install.py", "images/tex/metadata.py", "src/reasoning_ledger/image_release.py",
         "src/reasoning_ledger/image_context.py", "src/reasoning_ledger/image_ci.py",
         "src/reasoning_ledger/image_acceptance.py", "src/reasoning_ledger/server/compute_docker.py",
         "src/reasoning_ledger/server/compute_worker.py", ".github/ci/apt-network.conf",
@@ -710,7 +717,7 @@ def test_disposable_image_ci_frees_builder_before_pull_and_archive_only_after_co
 
             return SimpleNamespace(status_code=200)
 
-    monkeypatch.setattr(image_ci, "validate_recipe", lambda root: {"buildkit_image": "nonexecuting fixture"})
+    monkeypatch.setattr(image_ci, "build_lock", lambda root, profile: {"buildkit_image": "nonexecuting fixture"})
     monkeypatch.setattr(image_ci, "build_image", build)
     monkeypatch.setattr(image_ci, "inspect_image", inspect)
     monkeypatch.setattr(image_ci, "run", run)
@@ -728,14 +735,14 @@ def test_disposable_image_ci_frees_builder_before_pull_and_archive_only_after_co
         assert events == ["create", "export", "remove-builder", "registry", "inspect", "copy", "pull", "verify", "remove-registry"]
 
 
-@pytest.mark.parametrize("profile", ["research-cpu", "lean-mathlib"])
+@pytest.mark.parametrize("profile", ["research-cpu", "lean-mathlib", "tex"])
 def test_image_disk_preflight_refuses_before_creating_builder(monkeypatch, tmp_path, profile, capsys):
     from types import SimpleNamespace
 
     from reasoning_ledger import image_ci
 
     minimum = image_ci.MINIMUM_FREE_BYTES[profile]
-    monkeypatch.setattr(image_ci, "validate_recipe", lambda root: {})
+    monkeypatch.setattr(image_ci, "build_lock", lambda root, profile: {})
     monkeypatch.setattr(image_ci.shutil, "disk_usage", lambda path: SimpleNamespace(free=minimum - 1, total=64 * 1024**3))
     monkeypatch.setattr(image_ci, "run", lambda args: pytest.fail("must not create a builder"))
     with pytest.raises(ValueError, match="free before starting"):
@@ -749,7 +756,7 @@ def test_image_disk_report_after_export_failure_keeps_original_exception(monkeyp
     from reasoning_ledger import image_ci
 
     commands = []
-    monkeypatch.setattr(image_ci, "validate_recipe", lambda root: {"buildkit_image": "fixture"})
+    monkeypatch.setattr(image_ci, "build_lock", lambda root, profile: {"buildkit_image": "fixture"})
     monkeypatch.setattr(image_ci.shutil, "disk_usage", lambda path: SimpleNamespace(free=64 * 1024**3, total=128 * 1024**3))
     monkeypatch.setattr(image_ci, "run", commands.append)
 
@@ -763,3 +770,177 @@ def test_image_disk_report_after_export_failure_keeps_original_exception(monkeyp
         "before-build", "after-acceptance-cleanup",
     ]
     assert commands[-1][-2:] == ["rm", "reasoning-image-acceptance"]
+
+
+def tex_documents(**changes):
+    packages = {
+        name: {"version": version, "source": name, "source_version": version} for name, version in TEX_LOCK["packages"].items()
+    }
+    packages["texlive-base"] = {"version": "2021.20220204-1", "source": "texlive-base", "source_version": "2021.20220204-1"}
+    packages.update(changes)
+    return TEX_METADATA.documents(TEX_LOCK, packages, "3.10.12", REVISION, TIMESTAMP)
+
+
+def tex_image(tmp_path, change_caps=None):
+    capabilities, inventory = tex_documents()
+    if change_caps:
+        change_caps(capabilities)
+
+    def replace(target, body):
+        target.clear()
+        target.update(copy.deepcopy(body))
+
+    return write_oci(tmp_path, change_caps=lambda caps: replace(caps, capabilities),
+                     change_inventory=lambda sbom: replace(sbom, inventory))
+
+
+def test_tex_recipe_installs_exact_snapshot_packages_without_the_cpu_stack():
+    recipe = (ROOT / "images/tex/Dockerfile").read_text()
+    assert profile_paths("tex") == ("images/tex", "LICENSE", "NOTICE", "contracts/executor/v1alpha1/image-capabilities.schema.json")
+    assert TEX_LOCK["maximum_resources"] == LOCK["maximum_resources"]
+    assert {key: TEX_LOCK[key] for key in ("frontend", "buildx_version", "buildkit_version", "buildkit_image")} == {
+        key: LOCK[key] for key in ("frontend", "buildx_version", "buildkit_version", "buildkit_image")}
+    assert "USER 10002:10002" in recipe and "--uid 10001" in recipe and "--home-dir /tmp" in recipe
+    assert "sagemath" not in recipe and "sage -" not in recipe and "noether" not in recipe.lower()
+    assert "Acquire::https::CaInfo=/tmp/reasoning-ca-roots.crt" in recipe and "Dir::Etc::sourceparts=-" in recipe
+    assert "rm -rf /var/lib/apt/lists/* /tmp/reasoning-ca " in recipe
+    assert {f"{key}={value}" for key, value in ENVIRONMENT.items()} <= set(
+        line.strip().removeprefix("ENV ").removesuffix(" \\") for line in recipe.splitlines())
+
+
+@pytest.mark.parametrize("change", [
+    lambda text: text.replace("latexmk=1:4.76-1", "latexmk=1:4.77-1"),
+    lambda text: text.replace("         lmodern=2.004.5-6.1 \\\n", ""),
+    lambda text: text.replace("         lmodern=2.004.5-6.1 \\\n", "         lmodern=2.004.5-6.1 \\\n         curl=7.81.0-1 \\\n"),
+    lambda text: text.replace("ubuntu/20261006T000000Z %s", "ubuntu/20261007T000000Z %s"),
+    lambda text: text.replace("USER root\n", "USER root\nADD https://example.org/tool /tmp/tool\n"),
+    lambda text: text.replace("ubuntu:jammy-20260930@sha256:", "ubuntu:jammy-20260930@sha256:0"),
+])
+def test_tex_recipe_refuses_drift_from_its_lock(tmp_path, change):
+    (tmp_path / "images/tex").mkdir(parents=True)
+    (tmp_path / "images/tex/inputs.json").write_bytes((ROOT / "images/tex/inputs.json").read_bytes())
+    (tmp_path / "images/tex/Dockerfile").write_text(change((ROOT / "images/tex/Dockerfile").read_text()))
+    with pytest.raises(ValueError):
+        validate_tex(tmp_path)
+
+
+def test_tex_metadata_is_schema_valid_python_only_and_deb_inventory():
+    capabilities, sbom = tex_documents()
+    assert tex_documents() == (capabilities, sbom)
+    Draft202012Validator(SCHEMA, format_checker=FormatChecker()).validate(capabilities)
+    assert capabilities["image_name"] == "reasoning/tex"
+    assert capabilities["network"] == {"supported_modes": ["denied"], "possible_destinations": []}
+    entry_points = {point for tool in capabilities["tools"] for point in tool["entry_points"]}
+    assert {"python3", "pdflatex", "latexmk", "bibtex", "biber"} <= entry_points
+    assert not {"sage", "gap", "gp", "julia", "lean"} & entry_points
+    assert {item["name"]: item["version"] for item in capabilities["runtimes"]} == {"python": "3.10.12", "texlive": "2021.20220204-1"}
+    assert any("a missing package or font fails the compile" in line for line in capabilities["restrictions"])
+    assert {json.loads(package["comment"])["kind"] for package in sbom["packages"]} == {"deb"}
+    assert len(sbom["packages"]) == len(TEX_LOCK["packages"]) + 1
+    assert all(package["licenseConcluded"] == "NOASSERTION" for package in sbom["packages"])
+    assert "not a complete filesystem scan" in sbom["documentComment"] and TEX_LOCK["base"] in sbom["documentComment"]
+
+
+def test_tex_metadata_refuses_unlocked_versions_and_missing_notices(tmp_path):
+    with pytest.raises(ValueError, match="differ from locked"):
+        tex_documents(latexmk={"version": "1:4.77-1", "source": "latexmk", "source_version": "1:4.77-1"})
+    for name in TEX_LOCK["packages"]:
+        (tmp_path / name).mkdir()
+        (tmp_path / name / "copyright").write_text("Copyright fixture\n")
+    TEX_METADATA.notices(TEX_LOCK, tmp_path)
+    (tmp_path / "biber/copyright").unlink()
+    with pytest.raises(ValueError, match="biber"):
+        TEX_METADATA.notices(TEX_LOCK, tmp_path)
+
+
+def test_tex_inspection_offers_only_python_and_binds_its_profile(tmp_path):
+    from reasoning_ledger.server.compute_catalog import ComputeImage
+
+    path, release, _ = tex_image(tmp_path)
+    report, evidence = inspect_image(path, SCHEMA, "registry.example.org/reasoning/tex")
+    image = report["image"]
+    assert image["id"] == "tex" and image["name"] == "Reasoning TeX" and image["languages"] == ["python"]
+    assert image["reference"] == "registry.example.org/reasoning/tex@" + release["digest"]
+    assert image["maximum_resources"] == TEX_LOCK["maximum_resources"]
+    verify_evidence(evidence["etc/reasoning/capabilities.json"], evidence["usr/share/reasoning/sbom.spdx.json"],
+                    ComputeImage.parse(image), DEFAULT_RESOURCES, "python")
+
+
+def test_inspection_refuses_entry_points_that_differ_from_the_profile_languages(tmp_path):
+    sage = {"name": "sage", "version": "10.6", "entry_points": ["sage"], "operations": ["computer-algebra"]}
+    (tmp_path / "tex").mkdir()
+    path, _, _ = tex_image(tmp_path / "tex", lambda caps: caps["tools"].append(sage))
+    with pytest.raises(ValueError, match="worker languages"):
+        inspect_image(path, SCHEMA, "registry.example.org/reasoning/tex")
+    (tmp_path / "cpu").mkdir()
+    path, _, _ = write_oci(tmp_path / "cpu", change_caps=lambda caps: caps["tools"].remove(
+        next(tool for tool in caps["tools"] if tool["name"] == "julia")))
+    with pytest.raises(ValueError, match="worker languages"):
+        inspect_image(path, SCHEMA, "registry.example.org/reasoning/research-cpu")
+
+
+def test_publication_requires_noether_only_for_images_that_install_it():
+    from reasoning_ledger.image_context import NOETHER_PUBLIC_COMMIT
+    from reasoning_ledger.image_publication import require_public_noether
+
+    _, tex = tex_documents()
+    noether = {"name": "noether-source", "versionInfo": NOETHER_PUBLIC_COMMIT}
+    require_public_noether(tex, "tex")
+    require_public_noether({**tex, "packages": [*tex["packages"], noether]}, "research-cpu")
+    with pytest.raises(ValueError):
+        require_public_noether(tex, "research-cpu")
+    with pytest.raises(ValueError):
+        require_public_noether({**tex, "packages": [*tex["packages"], noether]}, "tex")
+
+
+def test_tex_candidate_build_stages_only_its_recipe_without_noether(monkeypatch, tmp_path):
+    node = (
+        "Name: reasoning-images\nDriver: docker-container\nNodes:\nName: reasoning-images0\n"
+        f"Endpoint: unix:///var/run/docker.sock\nStatus: running\nBuildKit version: {TEX_LOCK['buildkit_version']}\n"
+    )
+
+    def command(args, **kwargs):
+        if args[:2] == ["git", "status"]:
+            return b""
+        if args[:2] == ["git", "rev-parse"]:
+            return REVISION.encode()
+        if args[:2] == ["git", "show"]:
+            return b"1790812800"
+        if args[-2:] == ["buildx", "version"]:
+            return TEX_LOCK["buildx_version"].encode()
+        if "buildx" in args and "inspect" in args:
+            return node.encode()
+        return TEX_LOCK["buildkit_image"].encode()
+
+    output = tmp_path / "candidate"
+
+    def run(args, **kwargs):
+        if args[:2] == ["git", "archive"]:
+            assert tuple(args[3:]) == profile_paths("tex")
+            entries = []
+            for name in args[3:]:
+                path = ROOT / name
+                files = [path] if not path.is_dir() else [
+                    file for file in path.rglob("*") if file.is_file() and "__pycache__" not in file.parts]
+                entries.extend((file.relative_to(ROOT).as_posix(), file.read_bytes()) for file in files)
+            kwargs["stdout"].write(tar(entries))
+            return
+        context = Path(args[-1])
+        assert "--build-context" not in args
+        assert args[args.index("--file") + 1] == str(context / "images/tex/Dockerfile")
+        assert not (context / "src").exists() and not (context / "images/research-cpu").exists()
+        archive, release, _ = tex_image(output)
+        archive.rename(output / "tex.oci.tar")
+        report, _ = inspect_image(output / "tex.oci.tar", SCHEMA, "localhost/reasoning/tex")
+        (output / "buildx-metadata.json").write_bytes(encode(
+            {"containerimage.digest": release["digest"], "containerimage.config.digest": report["config_digest"]}))
+
+    monkeypatch.setattr("reasoning_ledger.image_release.command", command)
+    monkeypatch.setattr("reasoning_ledger.image_release.subprocess.run", run)
+    monkeypatch.setattr("reasoning_ledger.image_release.stage_noether", lambda *args, **kwargs: pytest.fail("TeX has no Noether input"))
+    with pytest.raises(ValueError, match="no Noether input"):
+        build_image(ROOT, tmp_path / "refused", "reasoning-images", "tex", noether_source_archive=tmp_path / "noether.tar")
+    assert not (tmp_path / "refused").exists()
+    build_image(ROOT, output, "reasoning-images", "tex")
+    report = json.loads((output / "image-evidence.json").read_bytes())
+    assert report["image"]["id"] == "tex" and report["image"]["languages"] == ["python"]

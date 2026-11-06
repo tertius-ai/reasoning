@@ -1,0 +1,27 @@
+Reasoning TeX component notice
+
+Copyright 2026 Benjamin Antieau and Deven Manam applies to the first-party
+recipe and evidence tooling, under Apache-2.0. It does not replace any upstream
+copyright or license. The aggregate container is NOT licensed solely under
+Apache-2.0.
+
+The image is the Ubuntu 22.04 base image plus Ubuntu packages installed at the
+exact versions recorded in inputs.json, from the signed Ubuntu snapshot recorded
+there. TeX Live 2021 is distributed under the LaTeX Project Public License, the
+GNU GPL and other free licenses that vary by package and file. Python 3.10 is
+under PSF-2.0, Perl (used by biber and latexmk) under the GPL or the Artistic
+License, and latexmk under the GPL-2.0-or-later.
+https://tug.org/texlive/copying.html
+https://ubuntu.com/legal/open-source-licences
+
+Each installed Debian package keeps its copyright file under
+/usr/share/doc/PACKAGE/copyright; the base image's dpkg configuration drops
+other package documentation. The exact source of every installed package is the
+Ubuntu source package of the same name and version in the same snapshot.
+
+The installed SPDX inventory lists observed Debian packages; NOASSERTION is an
+unaudited license, not permission to redistribute. Before publishing a binary
+image, review the complete installed dependency closure and retain and convey
+the corresponding sources, patches, build scripts and license texts alongside
+the binary release. Upstream source links alone are not a completed
+corresponding-source bundle.

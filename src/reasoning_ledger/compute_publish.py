@@ -30,7 +30,7 @@ from .deployment.host import InstallError
 from .deployment.private import locked_directory, protected_parent, read_document, read_private, write_document, write_private
 from .deployment.setup_ui import console
 from .image_candidate import validate_run
-from .image_release import PROFILES, SOURCE_PATHS, digest, inspect_image, json_body
+from .image_release import PROFILES, digest, inspect_image, json_body, profile_paths
 from .image_review import confirm
 from .server.compute_catalog import canonical, load_catalog
 
@@ -217,7 +217,7 @@ class Services:
         tree = self.gh(["api", f"repos/{repository}/git/trees/{tree_sha}?recursive=1"])
         if tree.get("sha") != tree_sha or tree.get("truncated") is not False or not isinstance(tree.get("tree"), list):
             raise ValueError("candidate Git tree is incomplete; exact recipe proof was not accepted")
-        prefixes = (*SOURCE_PATHS, "images/lean-mathlib") if profile == "lean-mathlib" else SOURCE_PATHS
+        prefixes = profile_paths(profile)
         expected = {}
         for item in tree["tree"]:
             name = item.get("path", "")
@@ -310,7 +310,7 @@ class Services:
         validate_repository(run, repository)
         report, blobs = inspect_image(inputs["archive"], json_body(
             (recipe / "contracts/executor/v1alpha1/image-capabilities.schema.json").read_bytes()), inputs["repository"])
-        publication.require_public_noether(json_body(blobs["usr/share/reasoning/sbom.spdx.json"]))
+        publication.require_public_noether(json_body(blobs["usr/share/reasoning/sbom.spdx.json"]), profile)
         if report["image"]["id"] != profile or report["image"]["source_revision"] != handoff["source_revision"]:
             raise ValueError("retained OCI profile/recipe revision differs from the successful candidate workflow")
         allowed = {"candidate/image-evidence.json", "candidate/capabilities.json", "candidate/sbom.spdx.json",
