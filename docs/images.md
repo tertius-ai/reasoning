@@ -8,7 +8,9 @@ packages and mathlib are not installed in the CPU profile. The `lean-mathlib` pr
 mathlib, its pinned Lake dependencies and compiled caches. Only Linux amd64
 workers are supported. Noether requires x86-64-v3 (AVX2, FMA and BMI2) CPUs and
 excludes MPI and optional GPL subprocess bridges. Its fixed declarative worker
-is installed at `/opt/reasoning/noether_worker.py` in both profiles.
+is installed at `/opt/reasoning/noether_worker.py` in both profiles. The separate
+`tex` profile compiles LaTeX to PDF; it does not build on the CPU image (see
+[TeX profile](#tex-profile)).
 
 Noether is built from public release `v0.3.2`, commit `eebc33d4f37ed47af83c88dbc9f8886b254f72c6`, using
 the upstream `make wheel` release path and locked Rust/manylinux/uv inputs.
@@ -48,8 +50,8 @@ redistribution permission.
 ## Build local candidates
 
 For a checkout without Docker access, run `make compute-images` after signing in
-to GitHub CLI. `.github/workflows/compute-images.yml` builds both committed
-profiles on independent ephemeral Linux amd64 GitHub runners, inspects each OCI archive, copies
+to GitHub CLI. `.github/workflows/compute-images.yml` builds every committed
+profile on independent ephemeral Linux amd64 GitHub runners, inspects each OCI archive, copies
 it without digest changes to a loopback-only registry, pulls that exact digest,
 and runs the real public-API/worker acceptance suite. Embedded binary inputs and
 build/runtime/acceptance tooling trigger that job on pull requests. Source
@@ -61,8 +63,8 @@ Python tooling is installed after SDK-cache cleanup. The workflow never requires
 this computer's Docker socket. Noether's builder removes its
 compiler outputs, native build trees, virtual environment and download caches
 in the same layer after checking the retained wheel. The CI command requires
-at least 24 GiB free for `research-cpu` or 32 GiB for `lean-mathlib` before
-creating its builder. These are provisioning floors, not peak-space guarantees.
+at least 24 GiB free for `research-cpu`, 32 GiB for `lean-mathlib` or 12 GiB for
+`tex` before creating its builder. These are provisioning floors, not peak-space guarantees.
 It reports disk space before building, after export/cache release and after
 acceptance cleanup; the workflow also reports host Docker/output usage.
 
@@ -154,7 +156,7 @@ image. Its binary publication has the same source/notice gates as the CPU image.
 Workers execute with network denied and a read-only image. Job execution never
 runs `lake update`, downloads packages, or invokes elan. Sources and reports are
 bounded scratch/output files; installed mathlib and caches stay immutable.
-The GitHub matrix tests both profiles. The mathlib profile adds successful target
+The GitHub matrix tests every profile. The mathlib profile adds successful target
 checking plus rejection cases for `sorry`, an invented axiom, and a mismatched
 target type. Only a passing real receipt establishes image execution.
 
@@ -206,6 +208,37 @@ The image defines no writable volumes and defaults to supervisor UID/GID
 10002:10002. The runner starts submitted programs as 10001:10001 with denied
 network, read-only root, bounded private `/work` and `/tmp`, and kernel guards.
 
+## TeX profile
+
+`images/tex/Dockerfile` installs TeX Live 2021 from Ubuntu 22.04 packages on the
+digest-pinned `ubuntu:jammy` base image. `images/tex/inputs.json` locks the base,
+the signed Ubuntu snapshot, the certificate package used to reach it, and the
+exact version of each requested package: LaTeX base, recommended and extra,
+pictures (TikZ), science, recommended fonts, `lmodern`, `cm-super-minimal`,
+biblatex with `biber`, `latexmk`, `texlive-binaries` and `python3`. Their
+dependency closure is resolved only against that snapshot and appears in the
+installed inventory. HTTPS to the snapshot is checked against the locked
+certificate package's roots, which are extracted for that step and not installed.
+XeLaTeX, LuaLaTeX and TeX Live documentation are not installed. The installed
+packages take about 750 MiB.
+
+The image offers one worker language, `python`. A job writes its `.tex` sources,
+runs `latexmk` or `pdflatex` with `subprocess`, and copies the PDF to `/work/out`.
+TeX's writable caches (`TEXMFVAR`, `TEXMFCONFIG`) point at the job's private `/tmp`.
+Nothing is downloaded or installed while a job runs; a missing package fails the
+compile. The build compiles probe documents (amsmath, TikZ-cd, hyperref, biblatex
+with biber) and checks each requested package's copyright file before writing the
+capabilities and SBOM. `reasoning_ledger.image_release` refuses a recipe whose
+package list, snapshot, certificate download or base differs from the lock, and
+inspection refuses installed entry points that would offer other languages.
+
+Its maximum resources equal the CPU image's, so it fits any Modal relay profile
+that the current catalog accepts. Acceptance compiles a document with TikZ-cd,
+cleveref and siunitx and retains the PDF as an artifact, builds a biblatex
+bibliography with biber, checks that a missing package fails the compile, and
+runs the same isolation, disk, PID, memory, wall-time and cancellation cases as
+the CPU image.
+
 ## Collect source delivery inputs
 
 `images/source-inputs.json` locks the actual full Sage and Julia source
@@ -240,6 +273,11 @@ uv run python -m reasoning_ledger.image_sources \
 ```
 
 For the mathlib profile, choose `--profile lean-mathlib` and its actual inventory.
+For `--profile tex`, omit the Noether options: every installed component is an
+Ubuntu package whose exact source package is collected from the authenticated
+snapshots. Add `--ubuntu-snapshot` for the base image's date (for example
+`20260930T000000Z`) if some base package versions were superseded by the TeX
+snapshot.
 The Noether checkout supplies the immutable approved source commit; collection
 does not edit that checkout or run its scripts. The collector conveys the whole
 checksummed Cargo.lock registry-source superset, including build/development
@@ -314,7 +352,7 @@ publisher. Their review JSON has these fields:
 
 | Fields | Meaning |
 | --- | --- |
-| `format`, `profile` | Integer `1`; `research-cpu` or `lean-mathlib` |
+| `format`, `profile` | Integer `1`; `research-cpu`, `lean-mathlib` or `tex` |
 | `reviewer`, `reviewed_at` | Responsible reviewer and UTC ISO timestamp ending in `Z` |
 | `source_revision`, `recipe_sha256`, `image_digest` | Exact committed source, SHA256 of its selected recipe Git archive, and inspected `sha256:…` image descriptor |
 | `source_bundle_sha256`, `source_bundle_bytes`, `source_bundle_url` | Actual bundle hash, byte length, and stable direct public HTTPS delivery URL without credentials/query tokens |
@@ -334,7 +372,8 @@ not satisfy this signed delivery contract.
 `recipe_sha256` hashes the bytes returned by `git archive SOURCE_REVISION` over
 `images/research-cpu`, `src/reasoning_ledger/agents/noether_worker.py`, `LICENSE`, `NOTICE`, and
 `contracts/executor/v1alpha1/image-capabilities.schema.json`; the mathlib profile
-also includes `images/lean-mathlib`. The exact source checkout must be clean.
+also includes `images/lean-mathlib`. The TeX profile's archive covers `images/tex`,
+`LICENSE`, `NOTICE` and the same schema. The exact source checkout must be clean.
 The source bundle may contain regular upstream archives as members; inspection
 streams and hashes it without extracting paths onto the host.
 
@@ -386,7 +425,7 @@ exact inputs and intent rather than treating failure as proof of no push.
 Only completion evidence, the signed public review and the public acceptance
 receipt are uploaded. The private acceptance directory contains enrollment
 credentials and must not be published. A failed post-push workflow retains its
-non-secret intent only. After reviewing successful receipts for both profiles,
+non-secret intent only. After reviewing successful receipts for the selected profiles,
 the guided CLI dispatches hosted combination to produce the approved
 installation catalog only after fresh anonymous checks for every selected
 publication. The workflows do not change organizations, provision paid compute,
@@ -408,7 +447,7 @@ uv run python -m reasoning_ledger.image_acceptance \
 ```
 
 This command starts a disposable loopback HTTP organization server and enrolls a
-worker through its public API. The production worker/runner executes all six
+worker through its public API. For the CPU profiles, the production worker/runner executes all six
 runtimes, Noether capabilities/discovery/factorization/Smith-form integration,
 exact algebra/result artifacts, UID/capability/seccomp/read-only-root
 and network checks, disk/PID/memory pressure, wall timeout, and running-job

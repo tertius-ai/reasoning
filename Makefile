@@ -60,7 +60,7 @@ help:
 		'make bot-doctor Check CLI isolation and connection without invoking inference' \
 		'make bot-cloud  Create a dedicated DigitalOcean Codex/Claude Code bot with optional CAS/Lean' \
 		'make bot-cloud-enable  Operator opt-in for web installer outbound SSH; no inbound SSH change' \
-		'make compute-images Build and exercise the CPU image on GitHub Actions (no local Docker)' \
+		'make compute-images Build and exercise the compute images on GitHub Actions (no local Docker)' \
 		'make compute-setup Enable Modal compute for this existing deployment, with CLI consent' \
 		'make compute-source-publish Publish a maintainer source archive to Spaces, with private CLI consent' \
 		'make compute-publish Sign exact observed-source provenance and verify public images on hosted runners' \

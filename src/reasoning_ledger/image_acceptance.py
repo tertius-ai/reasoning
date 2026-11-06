@@ -1,4 +1,4 @@
-"""Exercise real CAS images through a disposable loopback public API and worker.
+"""Exercise real CAS and TeX images through a disposable loopback public API and worker.
 
 Uses actual HTTP and the production Docker runner, not mocked container output.
 This is not a public HTTPS, cloud, native-client, or full multi-user release gate.
@@ -21,7 +21,7 @@ import uvicorn
 from .deployment.host import InstallError
 from .deployment.private import protected_parent
 from .image_context import NOETHER_VERSION
-from .image_release import digest, write_new
+from .image_release import PROFILE_LANGUAGES, digest, write_new
 from .server.api import Config, create_app
 from .server.compute_catalog import DEFAULT_RESOURCES, canonical, load_catalog
 from .server.compute_docker import DockerRunner, RuntimeFault
@@ -77,6 +77,58 @@ NOETHER_PROGRAMS = {
         "matrix_invariants", {"ring": "Z", "rows": [[2, 0], [0, 4]]},
         'assert r["rank"] == 2 and r["invariant_factors"] == [2,4] and r["absolute_determinant"] == 8\n'
         'assert r["certificate_verified"] is True\nprint("REASONING_NOETHER_MATRIX_OK")\n',
+    ),
+}
+
+
+def tex_program(name: str, preamble: str, body: str, check: str) -> str:
+    """Compile one document offline with the installed toolchain, as a model's job would."""
+    source = "\\documentclass{article}\n" + preamble + "\\begin{document}\n" + body + "\\end{document}\n"
+    references = (
+        "@article{sylow,\n  author = {Sylow, Ludwig},\n  title = {Th\\'eor\\`emes sur les groupes de substitutions},\n"
+        "  journal = {Mathematische Annalen},\n  volume = {5},\n  year = {1872},\n  pages = {584--594},\n}\n"
+    )
+    return (
+        "import pathlib, shutil, subprocess\n"
+        'work = pathlib.Path("/tmp/document")\nwork.mkdir()\n'
+        f'(work / "main.tex").write_text({source!r})\n'
+        f'(work / "references.bib").write_text({references!r})\n'
+        'p = subprocess.run(["latexmk", "-pdf", "-interaction=nonstopmode", "-halt-on-error", "-no-shell-escape", "main.tex"],\n'
+        "                   cwd=work, capture_output=True, text=True, timeout=100)\n"
+        'log = (work / "main.log").read_text(errors="replace") if (work / "main.log").exists() else ""\n'
+        + check
+        + f'print("REASONING_{name.upper()}_OK")\n'
+    )
+
+
+COMPILED = (
+    'assert p.returncode == 0, (p.stdout + p.stderr + log)[-4000:]\n'
+    'assert (work / "main.pdf").read_bytes().startswith(b"%PDF-")\n'
+)
+TEX_PROGRAMS = {
+    "tex_pdf": tex_program(
+        "tex_pdf",
+        "\\usepackage[T1]{fontenc}\n\\usepackage{lmodern,microtype,geometry,enumitem,booktabs}\n"
+        "\\usepackage{amsmath,amssymb,amsthm,mathtools,tikz-cd,siunitx}\n\\usepackage{hyperref,cleveref}\n"
+        "\\newtheorem{theorem}{Theorem}\n",
+        "\\begin{theorem}\\label{thm:prime}\nEvery group of order $p$ prime is cyclic.\n\\end{theorem}\n"
+        "By \\cref{thm:prime}, every group of order \\num{7} is isomorphic to $\\mathbb{Z}/7\\mathbb{Z}$.\n"
+        "\\[ \\begin{tikzcd} A \\arrow[r, \"f\"] \\arrow[d] & B \\arrow[d] \\\\ C \\arrow[r] & D \\end{tikzcd} \\]\n",
+        COMPILED + 'shutil.copyfile(work / "main.pdf", "/work/out/main.pdf")\n',
+    ),
+    "tex_bibliography": tex_program(
+        "tex_bibliography",
+        "\\usepackage[backend=biber]{biblatex}\n\\addbibresource{references.bib}\n",
+        "Sylow's theorems \\cite{sylow}.\n\\printbibliography\n",
+        COMPILED + 'assert "Mathematische Annalen" in (work / "main.bbl").read_text()\n',
+    ),
+    # Nothing is fetched or installed on demand: a missing package fails the compile.
+    "tex_missing_package": tex_program(
+        "tex_missing_package",
+        "\\usepackage{reasoning-not-installed}\n",
+        "Unreachable.\n",
+        'assert p.returncode != 0 and "reasoning-not-installed.sty" in log, (p.stdout + p.stderr + log)[-4000:]\n'
+        'assert not (work / "main.pdf").exists()\n',
     ),
 }
 ISOLATION = """import errno, os, socket
@@ -162,8 +214,11 @@ def acceptance_limits(image_id: str) -> dict:
 
 
 def exercise(client: httpx.Client, worker: ComputeWorker, root: str, topic: str, image_id: str) -> list[dict]:
-    cases = [(language, language, source, {}) for language, source in PROGRAMS.items()]
-    cases += [(name, "python", source, {}) for name, source in NOETHER_PROGRAMS.items()]
+    if image_id == "tex":
+        cases = [(name, "python", source, {}) for name, source in TEX_PROGRAMS.items()]
+    else:
+        cases = [(language, language, source, {}) for language, source in PROGRAMS.items()]
+        cases += [(name, "python", source, {}) for name, source in NOETHER_PROGRAMS.items()]
     if image_id == "lean-mathlib":
 
         def lean_project(source, expected):
@@ -269,6 +324,17 @@ def exercise(client: httpx.Client, worker: ComputeWorker, root: str, topic: str,
                 or digest(response.content) != artifacts[0]["digest"]
             ):
                 raise ValueError("algebra artifact bytes or digest differ")
+        if name == "tex_pdf":
+            artifacts = request(client, "GET", path + "/artifacts")
+            if len(artifacts) != 1 or artifacts[0]["name"] != "main.pdf":
+                raise ValueError("compiled PDF artifact metadata differs")
+            response = client.get(path + "/artifacts/" + artifacts[0]["id"])
+            if (
+                response.status_code != 200
+                or not response.content.startswith(b"%PDF-")
+                or digest(response.content) != artifacts[0]["digest"]
+            ):
+                raise ValueError("compiled PDF artifact bytes or digest differ")
         if name == "lean_project":
             artifacts = request(client, "GET", path + "/artifacts")
             report = next((file for file in artifacts if file["name"] == "lean-report.json"), None)
@@ -305,8 +371,8 @@ def exercise(client: httpx.Client, worker: ComputeWorker, root: str, topic: str,
 def verify(catalog: Path, output: Path, image_id: str) -> dict:
     images = load_catalog(catalog)
     image = images.get(image_id)
-    if image is None or set(image.languages) != set(PROGRAMS):
-        raise ValueError("acceptance requires an approved image with all six public languages")
+    if image is None or set(image.languages) != set(PROFILE_LANGUAGES.get(image_id, ())):
+        raise ValueError("acceptance requires an approved image with its profile's public languages")
     worker_limits = acceptance_limits(image_id)
     protected_parent(output.absolute())
     output.mkdir(mode=0o700, exist_ok=False)

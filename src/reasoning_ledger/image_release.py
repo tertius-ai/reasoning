@@ -1,4 +1,4 @@
-"""Build and inspect public research CPU images; never push or approve silently."""
+"""Build and inspect public research images; never push or approve silently."""
 
 from __future__ import annotations
 
@@ -24,9 +24,25 @@ MANIFEST = "application/vnd.oci.image.manifest.v1+json"
 CONFIG = "application/vnd.oci.image.config.v1+json"
 LAYERS = {"application/vnd.oci.image.layer.v1.tar", "application/vnd.oci.image.layer.v1.tar+gzip"}
 TARGETS = {"etc/reasoning/capabilities.json": 1024**2, "usr/share/reasoning/sbom.spdx.json": 8 * 1024**2}
-SOURCE_PATHS = ("images/research-cpu", "src/reasoning_ledger/agents/noether_worker.py", "LICENSE", "NOTICE",
-                "contracts/executor/v1alpha1/image-capabilities.schema.json")
-PROFILES = {"research-cpu": "Reasoning research CPU", "lean-mathlib": "Reasoning Lean and mathlib"}
+SCHEMA_PATH = "contracts/executor/v1alpha1/image-capabilities.schema.json"
+SOURCE_PATHS = ("images/research-cpu", "src/reasoning_ledger/agents/noether_worker.py", "LICENSE", "NOTICE", SCHEMA_PATH)
+PROFILES = {"research-cpu": "Reasoning research CPU", "lean-mathlib": "Reasoning Lean and mathlib", "tex": "Reasoning TeX"}
+# Committed files that make up each profile's recipe. The TeX image does not build on the CPU image.
+PROFILE_PATHS = {
+    "research-cpu": SOURCE_PATHS,
+    "lean-mathlib": (*SOURCE_PATHS, "images/lean-mathlib"),
+    "tex": ("images/tex", "LICENSE", "NOTICE", SCHEMA_PATH),
+}
+# Worker languages each profile's installed entry points must provide, in COMMANDS order.
+PROFILE_LANGUAGES = {"research-cpu": tuple(COMMANDS), "lean-mathlib": tuple(COMMANDS), "tex": ("python",)}
+TEX_PACKAGE = re.compile(r"[a-z0-9][a-z0-9+.-]*")
+DEB_VERSION = re.compile(r"[0-9][A-Za-z0-9.+:~_-]*")
+
+
+def profile_paths(profile: str) -> tuple[str, ...]:
+    if profile not in PROFILE_PATHS:
+        raise ValueError("unknown image profile")
+    return PROFILE_PATHS[profile]
 
 
 def digest(body: bytes) -> str:
@@ -322,12 +338,16 @@ def inspect_image(path: Path, schema: dict, repository: str) -> tuple[dict, dict
         profile = capabilities["image_name"].removeprefix("reasoning/")
         if profile not in PROFILES:
             raise ValueError("unknown installed research image profile")
+        entry_points = {entry for tool in capabilities["tools"] for entry in tool.get("entry_points", [])}
+        languages = [language for language, (_, argv) in COMMANDS.items() if argv[0] in entry_points]
+        if tuple(languages) != PROFILE_LANGUAGES[profile]:
+            raise ValueError("installed entry points differ from the profile's worker languages")
         image = ComputeImage.parse(
             {
                 "id": profile,
                 "name": PROFILES[profile],
                 "reference": repository + "@" + release["digest"],
-                "languages": list(COMMANDS),
+                "languages": languages,
                 "source_revision": revision,
                 "capabilities_digest": digest(caps),
                 "sbom_digest": digest(sbom),
@@ -446,14 +466,60 @@ def validate_mathlib(root: Path, cpu_lock: dict) -> dict:
     return lock
 
 
+def validate_tex(root: Path) -> dict:
+    """The TeX recipe installs exact Ubuntu packages from one signed snapshot and nothing else."""
+    lock = json_body((root / "images/tex/inputs.json").read_bytes())
+    recipe = (root / "images/tex/Dockerfile").read_text()
+    resources(lock["maximum_resources"])
+    if not fits(DEFAULT_RESOURCES, lock["maximum_resources"]) or lock["platform"] != "linux/amd64":
+        raise ValueError("recipe must support the public worker defaults/platform")
+    if any(not isinstance(lock.get(key), str) or not lock[key] for key in ("buildx_version", "buildkit_version", "buildkit_image")):
+        raise ValueError("TeX recipe needs locked build tools")
+    if not re.fullmatch(r"docker\.io/library/ubuntu:jammy-[0-9.]+@sha256:[a-f0-9]{64}", lock.get("base", "")):
+        raise ValueError("TeX recipe needs an immutable Ubuntu 22.04 base image")
+    if recipe.splitlines()[0] != "# syntax=" + lock["frontend"] or "FROM " + lock["base"] + "\n" not in recipe:
+        raise ValueError("recipe frontend/base differs from its lock")
+    if recipe.count("FROM ") != 1 or recipe.count("\nADD ") != 1:
+        raise ValueError("TeX recipe must have one stage and one locked download")
+    if not re.fullmatch(r"[0-9]{8}T[0-9]{6}Z", lock.get("ubuntu_snapshot", "")):
+        raise ValueError("TeX packages need an immutable Ubuntu snapshot")
+    mirror = "https://snapshot.ubuntu.com/ubuntu/" + lock["ubuntu_snapshot"]
+    if "printf 'deb " + mirror + " %s main universe\\n' jammy jammy-updates jammy-security" not in recipe:
+        raise ValueError("recipe package sources differ from the locked snapshot")
+    ca_url = lock.get("ca_bootstrap_url", "")
+    if (not re.fullmatch(re.escape(mirror + "/pool/main/c/ca-certificates/ca-certificates_") + r"[0-9][A-Za-z0-9.+~]*_all\.deb", ca_url)
+            or not re.fullmatch(r"[a-f0-9]{64}", lock.get("ca_bootstrap_sha256", ""))
+            or "ADD --checksum=sha256:" + lock["ca_bootstrap_sha256"] + " \\\n    " + ca_url + " " not in recipe):
+        raise ValueError("recipe certificate bootstrap differs from its lock")
+    packages = lock.get("packages")
+    if (not isinstance(packages, dict) or not packages
+            or any(not TEX_PACKAGE.fullmatch(name) or not isinstance(version, str) or not DEB_VERSION.fullmatch(version)
+                   for name, version in packages.items())):
+        raise ValueError("TeX packages need exact Debian names and versions")
+    if not {"python3", "texlive-binaries", "texlive-latex-base", "latexmk"} <= set(packages):
+        raise ValueError("TeX recipe must install Python, pdfTeX, LaTeX and latexmk")
+    block = ("--no-install-recommends \\\n" + "".join(f"         {name}={version} \\\n" for name, version in sorted(packages.items()))
+             + '    && apt-get "$@" clean')
+    if recipe.count('apt-get "$@" install') != 1 or block not in recipe:
+        raise ValueError("recipe package versions differ from the lock")
+    return lock
+
+
+def build_lock(root: Path, profile: str) -> dict:
+    """The lock whose build tools and platform bind this profile's candidate."""
+    if profile not in PROFILES:
+        raise ValueError("unknown image profile")
+    return validate_tex(root) if profile == "tex" else validate_recipe(root)
+
+
 def build_image(root: Path, output: Path, builder: str, profile="research-cpu", *,
                 noether_source_root=None, noether_source_archive=None) -> None:
     root = root.resolve()
     if not re.fullmatch(r"[a-z][a-z0-9_-]{0,63}", builder):
         raise ValueError("select a named local Buildx builder")
-    lock = validate_recipe(root)
-    if profile not in PROFILES:
-        raise ValueError("unknown image profile")
+    lock = build_lock(root, profile)
+    if profile == "tex" and (noether_source_root is not None or noether_source_archive is not None):
+        raise ValueError("the TeX image has no Noether input")
     mathlib = validate_mathlib(root, lock) if profile == "lean-mathlib" else None
     if command(["git", "status", "--porcelain", "--untracked-files=all"], cwd=root):
         raise ValueError("image builds require a clean committed source tree")
@@ -476,8 +542,7 @@ def build_image(root: Path, output: Path, builder: str, profile="research-cpu", 
         # Materialize only explicitly selected committed files, never credentials
         # or a complete checkout. Git archive itself runs without a shell.
         with tempfile.TemporaryFile() as source:
-            paths = (*SOURCE_PATHS, "images/lean-mathlib") if mathlib else SOURCE_PATHS
-            subprocess.run(["git", "archive", revision, *paths], cwd=root, stdout=source, check=True, timeout=60)
+            subprocess.run(["git", "archive", revision, *profile_paths(profile)], cwd=root, stdout=source, check=True, timeout=60)
             source.seek(0)
             with tarfile.open(fileobj=source, mode="r:") as archive:
                 for entry in archive:
@@ -490,11 +555,16 @@ def build_image(root: Path, output: Path, builder: str, profile="research-cpu", 
                         path.write_bytes(archive.extractfile(entry).read())
                     else:
                         raise ValueError("committed image build inputs must be regular files/directories")
-        if validate_recipe(context) != lock:
+        if build_lock(context, profile) != lock:
             raise ValueError("committed image inputs changed during build preparation")
-        noether_context = stage_noether(lock["noether"], context / "noether-source",
-                                       source_root=noether_source_root, source_archive=noether_source_archive)
-        recipe = context / "images/research-cpu/Dockerfile"
+        contexts = []
+        if profile == "tex":
+            recipe = context / "images/tex/Dockerfile"
+        else:
+            noether_context = stage_noether(lock["noether"], context / "noether-source",
+                                           source_root=noether_source_root, source_archive=noether_source_archive)
+            contexts = ["--build-context", "noether-source=" + str(noether_context)]
+            recipe = context / "images/research-cpu/Dockerfile"
         if mathlib:
             if validate_mathlib(context, lock) != mathlib:
                 raise ValueError("committed mathlib lock changed during build preparation")
@@ -504,7 +574,7 @@ def build_image(root: Path, output: Path, builder: str, profile="research-cpu", 
                 + b"\n"
                 + (context / "images/lean-mathlib/Containerfile.fragment").read_bytes()
             )
-        schema = json_body((context / SOURCE_PATHS[-1]).read_bytes())
+        schema = json_body((context / SCHEMA_PATH).read_bytes())
         subprocess.run(
             [
                 *docker,
@@ -514,8 +584,7 @@ def build_image(root: Path, output: Path, builder: str, profile="research-cpu", 
                 builder,
                 "--platform",
                 lock["platform"],
-                "--build-context",
-                "noether-source=" + str(noether_context),
+                *contexts,
                 "--file",
                 str(recipe),
                 "--build-arg",

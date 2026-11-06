@@ -22,7 +22,7 @@ import httpx
 
 from .image_context import NOETHER_PUBLIC_COMMIT
 from .image_publication import hash_file, public_url
-from .image_release import SOURCE_PATHS, BoundedTarInfo, command, member_name, write_new
+from .image_release import PROFILES, BoundedTarInfo, command, member_name, profile_paths, write_new
 from .server.compute_catalog import canonical
 
 MAX_ARTIFACT = 8 * 1024**3
@@ -491,7 +491,7 @@ def assemble(
             or item["id"] in seen
             or not isinstance(item["profiles"], list)
             or not item["profiles"]
-            or any(value not in ("research-cpu", "lean-mathlib") for value in item["profiles"])
+            or any(value not in PROFILES for value in item["profiles"])
             or not isinstance(item["file"], str)
             or member_name(item["file"]) != item["file"]
             or "/" in item["file"]
@@ -505,8 +505,7 @@ def assemble(
     if snapshot is not None and keyring is None or keyring is not None and snapshot is None:
         raise ValueError("OS source collection requires both snapshot and explicitly trusted archive keyring")
     revision = command(["git", "rev-parse", "HEAD"], cwd=root).decode().strip()
-    paths = (*SOURCE_PATHS, *(["images/lean-mathlib"] if profile == "lean-mathlib" else []))
-    recipe = command(["git", "archive", revision, *paths], cwd=root)
+    recipe = command(["git", "archive", revision, *profile_paths(profile)], cwd=root)
     output.mkdir(mode=0o700, parents=False, exist_ok=False)
     payload = output / "payload"
     payload.mkdir()
@@ -594,12 +593,15 @@ def assemble(
         [
             {"reason": "human review must match binary native/Python components to sources, notices, patches and build/relink materials"},
             {"reason": "full installed dependency closure is not proved by this package inventory or upstream source archives"},
+        ]
+    )
+    if profile != "tex":
+        unresolved.append(
             {
                 "reason": "Julia BinaryBuilder native builds and Lean compiler/native dependencies "
                 "need exact corresponding build/source review"
-            },
-        ]
-    )
+            }
+        )
     for item in components:
         item["source_candidates"] = candidates(item, artifacts, payload, apt)
         origins = notice_origins(item, artifacts)
@@ -677,7 +679,7 @@ def main() -> None:
     parser.add_argument("--sbom", type=Path, required=True)
     parser.add_argument("--lock", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
-    parser.add_argument("--profile", choices=("research-cpu", "lean-mathlib"), required=True)
+    parser.add_argument("--profile", choices=tuple(PROFILES), required=True)
     parser.add_argument(
         "--ubuntu-snapshot", action="append", help="repeat to cover exact versions from multiple signed immutable snapshots"
     )

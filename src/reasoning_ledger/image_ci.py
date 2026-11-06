@@ -14,13 +14,13 @@ from pathlib import Path
 import httpx
 
 from .image_acceptance import verify
-from .image_release import build_image, inspect_image, json_body, validate_recipe, write_evidence, write_new
+from .image_release import PROFILES, SCHEMA_PATH, build_image, build_lock, inspect_image, json_body, write_evidence, write_new
 from .server.compute_catalog import canonical
 
 REGISTRY = "docker.io/library/registry@sha256:a3d8aaa63ed8681a604f1dea0aa03f100d5895b6a58ace528858a7b332415373"
 DOCKER = ["docker", "--host", "unix:///var/run/docker.sock"]
 # Provisioning floors, not predictions or guarantees of peak disk consumption.
-MINIMUM_FREE_BYTES = {"research-cpu": 24 * 1024**3, "lean-mathlib": 32 * 1024**3}
+MINIMUM_FREE_BYTES = {"research-cpu": 24 * 1024**3, "lean-mathlib": 32 * 1024**3, "tex": 12 * 1024**3}
 
 
 def disk_status(output: Path, profile: str, phase: str, *, preflight=False):
@@ -42,7 +42,7 @@ def run(arguments):
 
 def verify_candidate(root: Path, output: Path, profile="research-cpu", *, retain_archive=False,
                      noether_source_root=None, noether_source_archive=None):
-    lock = validate_recipe(root)
+    lock = build_lock(root, profile)
     disk_status(output, profile, "before-build", preflight=True)
     builder, registry = "reasoning-image-acceptance", "reasoning-image-registry"
     # A separate ephemeral runner owns these names; do not attach to existing resources.
@@ -89,7 +89,7 @@ def verify_candidate(root: Path, output: Path, profile="research-cpu", *, retain
                 raise ValueError("ephemeral registry did not become ready")
         archive = output / "candidate" / (profile + ".oci.tar")
         repository = "127.0.0.1:5000/reasoning/" + profile
-        schema = json_body((root / "contracts/executor/v1alpha1/image-capabilities.schema.json").read_bytes())
+        schema = json_body((root / SCHEMA_PATH).read_bytes())
         report, evidence = inspect_image(archive, schema, repository)
         run(
             [
@@ -125,7 +125,7 @@ def verify_candidate(root: Path, output: Path, profile="research-cpu", *, retain
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--source-root", type=Path, required=True)
-    parser.add_argument("--profile", choices=("research-cpu", "lean-mathlib"), default="research-cpu")
+    parser.add_argument("--profile", choices=tuple(PROFILES), default="research-cpu")
     parser.add_argument("--output", type=Path, required=True, help="existing private directory outside the clean checkout")
     parser.add_argument("--retain-archive", action="store_true",
                         help="retain the private exact candidate for separately reviewed publication")
