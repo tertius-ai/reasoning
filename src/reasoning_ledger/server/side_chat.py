@@ -40,7 +40,8 @@ SIDE_CHAT_TOOLS = frozenset({
     "workflow_list", "workflow_result", "workflow_read", "compute_catalog", "compute_result", "compute_log_read",
     "model_catalog", "blog_read", "blog_search",
     "crossref_search", "crossref_lookup", "arxiv_search", "arxiv_lookup", "arxiv_read", "arxiv_source_list", "arxiv_source_read",
-    "web_fetch", "web_search", "scientific_calculate", "unit_convert", "constant_lookup",
+    "web_fetch", "web_search", "math_search", "math_read", "lmfdb_catalog", "lmfdb_schema", "lmfdb_query", "media_read",
+    "scientific_calculate", "unit_convert", "constant_lookup",
 })
 # The newest side messages returned at once, and the most messages one group brings to the topic.
 PAGE_LIMIT = 200
