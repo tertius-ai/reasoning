@@ -75,7 +75,7 @@ def test_image_ci_covers_every_embedded_recipe_input_and_execution_tool():
     "src/reasoning_ledger/image_sources.py", "src/reasoning_ledger/image_provenance.py",
     "src/reasoning_ledger/image_publication.py", "src/reasoning_ledger/compute_publish.py",
     "images/publication/review-key.pem", "images/compute-images.json",
-    ".github/workflows/compute-publish.yml", ".github/workflows/compute-combine.yml",
+    ".github/workflows/compute-publish.yml", ".github/workflows/compute-combine.yml", ".github/workflows/compute-sources.yml",
 ])
 def test_publication_only_changes_do_not_rebuild_compute_binaries(path):
     assert not any(fnmatch.fnmatchcase(path, pattern) for pattern in image_ci_trigger_patterns())

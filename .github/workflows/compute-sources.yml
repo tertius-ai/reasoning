@@ -1,0 +1,120 @@
+name: Compute source collection
+
+on:
+  workflow_dispatch:
+    inputs:
+      profile:
+        description: Image profile whose installed packages all come from Ubuntu
+        type: choice
+        options: [tex]
+        required: true
+      candidate_run_id:
+        description: Successful manual Compute image acceptance run that retained this profile's candidate
+        type: string
+        required: true
+      ubuntu_snapshots:
+        description: Signed Ubuntu snapshots to search for exact installed source versions, in order
+        type: string
+        default: '20261006T000000Z 20260930T000000Z'
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: compute-sources-${{ inputs.profile }}-${{ inputs.candidate_run_id }}
+  cancel-in-progress: false
+
+jobs:
+  collect:
+    name: ${{ inputs.profile }} / Ubuntu source collection
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: tooling
+          persist-credentials: false
+      - name: Read the selected candidate run
+        id: candidate
+        env:
+          CANDIDATE_RUN_ID: ${{ inputs.candidate_run_id }}
+          SNAPSHOTS: ${{ inputs.ubuntu_snapshots }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          test "$GITHUB_ACTIONS" = true
+          test "${RUNNER_ENVIRONMENT:-}" = github-hosted
+          [[ "$CANDIDATE_RUN_ID" =~ ^[0-9]+$ ]]
+          test -n "$SNAPSHOTS"
+          for snapshot in $SNAPSHOTS; do [[ "$snapshot" =~ ^[0-9]{8}T[0-9]{6}Z$ ]]; done
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$CANDIDATE_RUN_ID" > "$RUNNER_TEMP/candidate-run.json"
+          revision="$(jq -r .head_sha "$RUNNER_TEMP/candidate-run.json")"
+          [[ "$revision" =~ ^[a-f0-9]{40}$ ]]
+          echo "revision=$revision" >> "$GITHUB_OUTPUT"
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        with:
+          version: '0.11.16'
+      - name: Check that the run is a successful manual image build of that revision
+        working-directory: tooling
+        env:
+          REVISION: ${{ steps.candidate.outputs.revision }}
+        run: |
+          uv sync --locked
+          uv run --no-sync python -m reasoning_ledger.image_candidate \
+            --run "$RUNNER_TEMP/candidate-run.json" --source-revision "$REVISION"
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ steps.candidate.outputs.revision }}
+          path: recipe
+          persist-credentials: false
+      - name: Download the candidate's installed inventory
+        env:
+          CANDIDATE_RUN_ID: ${{ inputs.candidate_run_id }}
+          PROFILE: ${{ inputs.profile }}
+          REVISION: ${{ steps.candidate.outputs.revision }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh run download "$CANDIDATE_RUN_ID" --repo "$GITHUB_REPOSITORY" \
+            --name "$PROFILE-acceptance-$REVISION" --dir "$RUNNER_TEMP/evidence"
+          test -f "$RUNNER_TEMP/evidence/candidate/sbom.spdx.json"
+      - name: Collect exact Ubuntu sources against the signed snapshots
+        working-directory: tooling
+        env:
+          PROFILE: ${{ inputs.profile }}
+          SNAPSHOTS: ${{ inputs.ubuntu_snapshots }}
+        run: |
+          arguments=()
+          for snapshot in $SNAPSHOTS; do arguments+=(--ubuntu-snapshot "$snapshot"); done
+          uv run --no-sync python -m reasoning_ledger.image_sources \
+            --source-root "$GITHUB_WORKSPACE/recipe" --profile "$PROFILE" \
+            --sbom "$RUNNER_TEMP/evidence/candidate/sbom.spdx.json" \
+            --lock "$GITHUB_WORKSPACE/recipe/images/source-inputs.json" \
+            --ubuntu-keyring /usr/share/keyrings/ubuntu-archive-keyring.gpg \
+            "${arguments[@]}" --output "$RUNNER_TEMP/sources"
+          df -h "$RUNNER_TEMP"
+      - name: Refuse a bundle with unresolved sources
+        run: |
+          python3 - "$RUNNER_TEMP/sources/payload/collection.json" <<'EOF' >> "$GITHUB_STEP_SUMMARY"
+          import json, sys
+          collection = json.load(open(sys.argv[1]))
+          concrete = [item for item in collection["unresolved"] if set(item) != {"reason"}]
+          print(f"Components: {len(collection['components'])}. Unresolved sources: {len(concrete)}.")
+          for item in concrete:
+              print("- " + json.dumps(item, sort_keys=True))
+          if concrete:
+              print("Add an Ubuntu snapshot that still lists these exact versions, then run again.")
+              sys.exit(1)
+          EOF
+      - name: Retain the source bundle and its draft review
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: sources-${{ steps.candidate.outputs.revision }}-${{ inputs.profile }}
+          path: |
+            ${{ runner.temp }}/sources/sources.tar
+            ${{ runner.temp }}/sources/source-review.draft.json
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 7
+      - name: Release boundary
+        run: |
+          echo 'Source collection only. Upload the bundle to public storage and sign its provenance with make compute-publish.' >> "$GITHUB_STEP_SUMMARY"
