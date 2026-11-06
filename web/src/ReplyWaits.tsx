@@ -45,6 +45,10 @@ export function ReplyWaits({ organizationId, topicId, run, canWrite, online, onU
   const disabled = busy || !online;
   const unavailable = <p className="org-help">This server can't run computations: no compute worker or scaler is set up
     for this organization.</p>;
+  const tooLarge = <p className="org-help">No compute worker or scaler here accepts a job this large for this image, so it
+    would never run.</p>;
+  // Something can run it: a worker or scaler serves its image at this size. Older servers don't say, so assume it can.
+  const runs = (wait: ReplyWait) => computeAvailable && (!("runnable" in wait) || wait.runnable !== false);
   return <div className="org-reply-waits" aria-label="What this reply is waiting for">
     {replyWaits(run).map(wait => {
       if (wait.kind === "proposal") {
@@ -53,10 +57,10 @@ export function ReplyWaits({ organizationId, topicId, run, canWrite, online, onU
           {wait.compute && <>
             <small>{computeSummary(wait.compute)}</small>
             <details><summary>Program</summary><pre>{wait.compute.program}{wait.compute.program_truncated ? "\n…" : ""}</pre></details>
-            {!computeAvailable && unavailable}
+            {!computeAvailable ? unavailable : !runs(wait) && tooLarge}
           </>}
           {canWrite && wait.status === "pending" && <div className="org-reply-wait-actions">
-            {(!wait.compute || computeAvailable) && <button type="button" disabled={disabled} onClick={() => decide(wait.id, true)}>
+            {(!wait.compute || runs(wait)) && <button type="button" disabled={disabled} onClick={() => decide(wait.id, true)}>
               {wait.compute ? "Approve and run" : "Approve"}</button>}
             <button type="button" disabled={disabled} onClick={() => decide(wait.id, false)}>Reject and continue</button>
           </div>}
@@ -66,10 +70,10 @@ export function ReplyWaits({ organizationId, topicId, run, canWrite, online, onU
       if (wait.kind === "compute") {
         const waited = workingFor({ created_at: wait.created_at, started_at: null });
         return <article key={wait.id} className="org-reply-wait">
-          <strong>{wait.status === "running" ? "Computation running" : computeAvailable ? "Queued · waiting for a compute worker"
-            : "Queued, but nothing can run it"}</strong>
+          <strong>{wait.status === "running" ? "Computation running" : !computeAvailable ? "Queued, but nothing can run it"
+            : !runs(wait) ? "Queued, but too large for any worker" : "Queued · waiting for a compute worker"}</strong>
           {waited && <small>Waiting {waited}</small>}
-          {!computeAvailable && unavailable}
+          {wait.status !== "running" && (!computeAvailable ? unavailable : !runs(wait) && tooLarge)}
           {canWrite && <div className="org-reply-wait-actions">
             <button type="button" disabled={disabled} onClick={() => act(computeJobPath(organizationId, wait.id) + "/cancel", {})}>
               Cancel and continue</button></div>}

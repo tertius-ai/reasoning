@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 from dataclasses import asdict, dataclass
@@ -89,9 +90,9 @@ class ComputeImage:
         return {**asdict(self), "languages": list(self.languages)}
 
 
-def load_catalog(path: Path | None) -> dict[str, ComputeImage]:
+def _catalog(path: Path | None) -> list[tuple[ComputeImage, dict | None]]:
     if path is None:
-        return {}
+        return []
     with path.open("rb") as stream:
         raw = stream.read(65537)
     if len(raw) > 65536:
@@ -99,10 +100,32 @@ def load_catalog(path: Path | None) -> dict[str, ComputeImage]:
     body = json.loads(raw)
     if not isinstance(body, list) or len(body) > 32:
         raise ValueError("compute catalog must contain at most 32 approved images")
-    result = {}
+    entries, seen = [], set()
     for row in body:
-        image = ComputeImage.parse(row)
-        if image.id in result:
+        # An entry may carry the image's capabilities document beside its record. It is not part of the image's
+        # identity: jobs and workers compare the record alone.
+        document = row.get("capabilities") if isinstance(row, dict) else None
+        image = ComputeImage.parse({key: value for key, value in row.items() if key != "capabilities"} if isinstance(row, dict) else row)
+        if image.id in seen:
             raise ValueError("duplicate compute image identifier")
-        result[image.id] = image
-    return result
+        seen.add(image.id)
+        if isinstance(row, dict) and "capabilities" in row and (
+                not isinstance(document, dict) or capabilities_digest(document) != image.capabilities_digest):
+            raise ValueError("catalog capabilities do not match the image's approved capabilities digest")
+        entries.append((image, document))
+    return entries
+
+
+def capabilities_digest(document: dict) -> str:
+    """The digest of the image's own /etc/reasoning/capabilities.json bytes, which capabilities_digest pins."""
+    encoded = json.dumps(document, sort_keys=True, separators=(",", ":"), ensure_ascii=False, allow_nan=False) + "\n"
+    return "sha256:" + hashlib.sha256(encoded.encode()).hexdigest()
+
+
+def load_catalog(path: Path | None) -> dict[str, ComputeImage]:
+    return {image.id: image for image, _ in _catalog(path)}
+
+
+def load_capabilities(path: Path | None) -> dict[str, dict]:
+    """Installed runtimes, tools, paths and restrictions for the entries that carry them, verified against each digest."""
+    return {image.id: document for image, document in _catalog(path) if document is not None}

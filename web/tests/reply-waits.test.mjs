@@ -56,3 +56,16 @@ test("a queued computation says whether anything can run it and can be cancelled
   assert.match(queued, /Cancel and continue/);
   assert.match(render(run({ status: "waiting", waits: [job], compute_available: false })), /Queued, but nothing can run it/);
 });
+
+test("a computation no worker accepts says so instead of offering approval or waiting silently", () => {
+  const large = render(run({ status: "waiting", waits: [{ ...proposal, runnable: false }], compute_available: true }));
+  assert.doesNotMatch(large, /Approve and run/);
+  assert.match(large, /accepts a job this large/);
+  assert.match(large, /Reject and continue/);
+  const job = { kind: "compute", id: "j1", status: "queued", created_at: Math.floor(Date.now() / 1000), runnable: false };
+  const queued = render(run({ status: "waiting", waits: [job], compute_available: true }));
+  assert.match(queued, /Queued, but too large for any worker/);
+  assert.match(queued, /Cancel and continue/);
+  assert.doesNotMatch(render(run({ status: "waiting", waits: [{ ...job, status: "running" }], compute_available: true })),
+    /too large/);
+});

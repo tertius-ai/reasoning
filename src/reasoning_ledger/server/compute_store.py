@@ -40,8 +40,9 @@ def _bounded_int(value: object, low: int, high: int) -> bool:
 
 
 class ComputeStore:
-    def __init__(self, store: Store, images: dict[str, ComputeImage]):
+    def __init__(self, store: Store, images: dict[str, ComputeImage], capabilities: dict[str, dict] | None = None):
         self.store, self.images = store, dict(images)
+        self.capabilities = {key: value for key, value in (capabilities or {}).items() if key in self.images}
         self.artifacts_dir = store.data_dir / "artifacts"
         self._directory(self.artifacts_dir)
 
@@ -65,15 +66,45 @@ class ComputeStore:
                 os.close(parent)
 
     @staticmethod
+    def capacity(db: sqlite3.Connection, org: str) -> list[dict]:
+        """What can run this organization's jobs now: each live worker, and each enabled scaler that can start one,
+        with the images it serves and the largest job it accepts. A worker claims only jobs that fit its own offer."""
+        rows = db.execute(
+            "SELECT image_ids_json,resources_json FROM compute_workers WHERE organization_id=? AND revoked_at IS NULL "
+            "AND draining=0 UNION ALL SELECT s.image_ids_json,s.resources_json FROM compute_scalers s JOIN memberships m "
+            "ON m.organization_id=s.organization_id AND m.user_id=s.authorized_by JOIN users u ON u.id=m.user_id "
+            "WHERE s.organization_id=? AND s.revoked_at IS NULL AND s.expires_at>? AND m.role IN ('owner','admin') "
+            "AND u.account_kind='human'",
+            (org, org, int(time.time())),
+        ).fetchall()
+        offers = []
+        for images, limits in rows:
+            offer = {"image_ids": sorted(json.loads(images)), "resources": json.loads(limits)}
+            if offer not in offers:
+                offers.append(offer)
+        return offers
+
+    @staticmethod
     def available(db: sqlite3.Connection, org: str) -> bool:
         """Whether anything can run this organization's jobs: a live worker, or an enabled scaler that can start one."""
-        return bool(db.execute(
-            "SELECT 1 FROM compute_workers WHERE organization_id=? AND revoked_at IS NULL AND draining=0 UNION ALL "
-            "SELECT 1 FROM compute_scalers s JOIN memberships m ON m.organization_id=s.organization_id AND m.user_id=s.authorized_by "
-            "JOIN users u ON u.id=m.user_id WHERE s.organization_id=? AND s.revoked_at IS NULL AND s.expires_at>? "
-            "AND m.role IN ('owner','admin') AND u.account_kind='human' LIMIT 1",
-            (org, org, int(time.time())),
-        ).fetchone())
+        return bool(ComputeStore.capacity(db, org))
+
+    @staticmethod
+    def runnable(db: sqlite3.Connection, org: str, image_id: str, limits: dict) -> bool:
+        return any(image_id in offer["image_ids"] and fits(limits, offer["resources"]) for offer in ComputeStore.capacity(db, org))
+
+    @staticmethod
+    def require_runnable(db: sqlite3.Connection, org: str, image_id: str, limits: dict) -> None:
+        """Refuse a job nothing would ever claim, naming the largest job that image can run here."""
+        offers = [offer["resources"] for offer in ComputeStore.capacity(db, org) if image_id in offer["image_ids"]]
+        if any(fits(limits, offer) for offer in offers):
+            return
+        if not offers:
+            raise StoreError(409, f"no compute worker or scaler in this organization runs image {image_id}; "
+                                  "it can't be computed here")
+        largest = "; or ".join(", ".join(f"{key} {value}" for key, value in sorted(offer.items())) for offer in offers)
+        raise StoreError(409, f"no compute worker or scaler accepts a job this large for image {image_id}. "
+                              f"The largest it can run here: {largest}. Request resources within one of these limits")
 
     @staticmethod
     def parameters(image_id: str, language: str, program: str, limits: dict) -> dict:

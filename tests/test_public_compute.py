@@ -19,7 +19,15 @@ from test_public_server import installation as installation
 from test_public_server import invited, structure
 
 from reasoning_ledger.server.api import create_app
-from reasoning_ledger.server.compute_catalog import DEFAULT_RESOURCES, ComputeImage, canonical, load_catalog, resources
+from reasoning_ledger.server.compute_catalog import (
+    DEFAULT_RESOURCES,
+    ComputeImage,
+    canonical,
+    capabilities_digest,
+    load_capabilities,
+    load_catalog,
+    resources,
+)
 from reasoning_ledger.server.compute_store import CHUNK_BYTES, ComputeStore
 from reasoning_ledger.server.migrations import MIGRATIONS
 from reasoning_ledger.server.security import private_file
@@ -467,6 +475,24 @@ def test_catalog_bounds_and_missing_resources(tmp_path):
     assert (
         ComputeImage.parse({**IMAGE, "sbom_path": "/usr/share/research/sbom.spdx.json"}).sbom_path == "/usr/share/research/sbom.spdx.json"
     )
+
+
+def test_catalog_capabilities_are_verified_and_kept_out_of_image_identity(tmp_path):
+    document = {"runtimes": [{"name": "python", "version": "3.12"}], "tools": [{"name": "pdflatex", "version": "2023"}],
+                "paths": {"output": "/work/out"}, "network": {"supported_modes": ["denied"]}, "restrictions": ["No GPU."]}
+    image = {**IMAGE, "capabilities_digest": capabilities_digest(document)}
+    path = tmp_path / "images.json"
+    private_file(path, canonical([{**image, "capabilities": document}]).encode())
+    # The record jobs and workers compare is unchanged; the document is available beside it.
+    assert load_catalog(path)[IMAGE["id"]].record() == ComputeImage.parse(image).record()
+    assert load_capabilities(path) == {IMAGE["id"]: document}
+    plain = tmp_path / "plain.json"
+    private_file(plain, canonical([image]).encode())
+    assert load_capabilities(plain) == {}
+    altered = tmp_path / "altered.json"
+    private_file(altered, canonical([{**image, "capabilities": {**document, "tools": []}}]).encode())
+    with pytest.raises(ValueError, match="capabilities digest"):
+        load_catalog(altered)
 
 
 def test_schema_three_upgrade_keeps_beta_and_creates_disabled_compute(installation, tmp_path):

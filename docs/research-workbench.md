@@ -233,12 +233,17 @@ its work to a continuation turn; it is then continued, names that `next_run`,
 and the continuation carries the answer. While waiting, `answer_state.waits`
 lists what is still pending: a proposal to decide (a computation proposal
 includes its image, language, resources and a program preview), a queued or
-running computation, a review, a workflow run, or delegated agents.
-`compute_available` says whether the organization can run computations. The
-reply stays a live card with these waits: a proposal can be approved or rejected
-there, and a computation cancelled, and the reply continues once nothing is
-pending. Stop on that card cancels the reply: pending proposals are rejected,
-its computations are cancelled, and it does not continue. Interruption, timeout and budget refusal
+running computation, a review, a workflow run, or delegated agents. A pending
+computation's `runnable` says whether a live worker or enabled scaler accepts its
+image at its size, and `compute_available` says whether the organization can run
+computations at all. The reply stays a live card with these waits: a proposal can
+be approved or rejected there, and a computation cancelled, and the reply
+continues once nothing is pending. Stop on that card cancels the reply: pending
+proposals are rejected, its computations are cancelled, and it does not continue.
+When a person rejects a proposed computation or cancels a computation, the
+continuation is told which ones were declined and to answer with the evidence it
+has, and the rest of that reply is offered no sandbox submission tools. The
+person's next message starts a reply that can compute again. Interruption, timeout and budget refusal
 retain useful output/checkpoints in the transcript with the stop reason; no
 automatic replay of uncertain paid calls is authorized. Execution success and a
 visible response do not certify the mathematics or satisfy a goal's criteria.
@@ -285,10 +290,18 @@ Discovery never adds permissions. Each invocation has a durable receipt.
 | Fixed arithmetic | `scientific_calculate`, `unit_convert`, `constant_lookup`: bounded trusted implementations, no arbitrary Python execution |
 | Model choices | `model_catalog`: current catalogue IDs, not a substitute for live capability/price preflight |
 
-Sandbox computation tools are offered only while the organization has a compute
-worker that is not revoked or draining, or an enabled compute scaler. Approving
-a computation proposal is refused while nothing can run it; the proposal stays
-pending so it can still be rejected.
+Sandbox submission tools (`compute_submit`, `compute_propose`, `lean_check`,
+`lean_project_check` and the Noether job tools) are offered only while the
+organization has a compute worker that is not revoked or draining, or an enabled
+compute scaler. A worker claims only jobs for its images that fit its resource
+limits, so a submission, a proposal, its approval and a bot's compute request are
+refused unless some live worker or enabled scaler accepts that image at that
+size; the refusal names the largest job the image can run. A refused approval
+leaves the proposal pending so it can still be rejected. `compute_catalog` lists,
+for each image, `runs_here` (the largest jobs that can run) and, where the
+catalog carries a verified capabilities document, `installed` runtimes, tools,
+paths, network and restrictions. An image provides nothing beyond what it lists,
+and jobs have no network.
 
 MathOverflow and reference encyclopedias are not automatic primary-source
 attestations. Source reads are bounded public HTTPS, DNS/IP checked, TLS verified,
