@@ -78,8 +78,8 @@ class ComputeStore:
             (org, org, int(time.time())),
         ).fetchall()
         offers = []
-        for images, limits in rows:
-            offer = {"image_ids": sorted(json.loads(images)), "resources": json.loads(limits)}
+        for row in rows:
+            offer = {"image_ids": sorted(json.loads(row["image_ids_json"])), "resources": json.loads(row["resources_json"])}
             if offer not in offers:
                 offers.append(offer)
         return offers
