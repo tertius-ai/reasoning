@@ -29,6 +29,7 @@ import { ComputeAttempt } from "./compute-api";
 import { MessageUsageDetails } from "./MessageUsageDetails";
 import { ReplyFiles } from "./ReplyFiles";
 import { ReplyTimeline, WorkingCard } from "./ReplyTimeline";
+import { SideChatGroup } from "./SideChatGroup";
 import { normalizeMathDelimiters, rehypeMath } from "./markdownMath";
 import { catalogModel, keptReplyModel, modelOptionGroups } from "./modelRecommendations";
 import { EffortPicker, ModelPicker, compactTokens } from "./ModelBrowser";
@@ -72,6 +73,7 @@ const UNAVAILABLE_LINK = "This link is unavailable. It may point to something th
 const projectTopic = (hierarchy: Hierarchy, projectId: string) => hierarchy.topics.find(topic =>
   hierarchy.channels.some(channel => channel.id === topic.channel_id && channel.project_id === projectId))?.id;
 const DirectConversationView = lazy(() => import("./DirectConversation").then(module => ({ default: module.DirectConversationView })));
+const SideChat = lazy(() => import("./SideChat").then(module => ({ default: module.SideChat })));
 
 /** ``addTo`` is the root run of a running model reply that the next message joins instead of starting its own. */
 type Draft = { text: string; clientId: string; attempted: boolean; mentions?: MentionBinding[]; replyTo?: string; addTo?: string };
@@ -100,6 +102,8 @@ export const MessageMarkdown = React.memo(function MessageMarkdown({ markdown }:
   return <ReactMarkdown remarkPlugins={messageRemarkPlugins} rehypePlugins={messageRehypePlugins} skipHtml
     components={messageMarkdownComponents}>{markdown}</ReactMarkdown>;
 });
+/** Side-chat text, in the side chat and in a group brought from one; mentions in it are not resolved. */
+const renderSideMarkdown = (markdown: string) => <MessageMarkdown markdown={normalizeMathDelimiters(markdown)} />;
 export const prepareMessageAttempt = (draft: Draft): Draft => ({
   ...draft, clientId: draft.clientId || crypto.randomUUID(), attempted: true,
 });
@@ -734,7 +738,7 @@ function PresenceSidebar({ organizationId, open, onClose, onAuthLost, userId, on
   </aside>;
 }
 
-function Conversation({ organizationId, topic, members, user, canWrite, canManage, draft, updateDraft, files, changeFiles, anchor, focus, referenceTargets = [], menuTarget = null, onPreference, onForked, onAuthLost, modelAttempt, onModelAttempt, computeAttempt, onComputeAttempt, workflowAttempt, onWorkflowAttempt, workflowExecutionAttempt, onWorkflowExecutionAttempt }: {
+function Conversation({ organizationId, topic, members, user, canWrite, canManage, draft, updateDraft, files, changeFiles, anchor, focus, referenceTargets = [], menuTarget = null, onPreference, onForked, onAuthLost, modelAttempt, onModelAttempt, computeAttempt, onComputeAttempt, workflowAttempt, onWorkflowAttempt, workflowExecutionAttempt, onWorkflowExecutionAttempt, sideChat = false, onCloseSideChat }: {
   organizationId: string; topic: Topic; members: Member[]; user: Account; canWrite: boolean; canManage: boolean;
   draft: Draft; updateDraft: (draft: Draft) => void; anchor: number | null;
   /** Files waiting to be sent with this topic's draft; `changeFiles` always changes this topic's, even after a switch. */
@@ -751,6 +755,8 @@ function Conversation({ organizationId, topic, members, user, canWrite, canManag
   computeAttempt?: ComputeAttempt; onComputeAttempt: (attempt?: ComputeAttempt) => void;
   workflowAttempt?: WorkflowAttempt; onWorkflowAttempt: (attempt?: WorkflowAttempt) => void;
   workflowExecutionAttempt?: WorkflowExecutionAttempt; onWorkflowExecutionAttempt: (attempt?: WorkflowExecutionAttempt) => void;
+  /** Whether your private side chat is open beside this AI chat. */
+  sideChat?: boolean; onCloseSideChat?: () => void;
 }) {
   // A recent visit's messages and cursors render at once; the poll then fetches only what changed.
   const snapshotKey = anchor === null && !focus ? `${user.id}/${organizationId}/${topic.id}` : "";
@@ -1208,6 +1214,10 @@ function Conversation({ organizationId, topic, members, user, canWrite, canManag
     } finally { if (alive.current) setSending(false); }
   };
 
+  const brought = useCallback((message: Message) => {
+    setMessages(existing => mergeMessages(existing, [message]));
+    bottom.current = true; setAtBottom(true);
+  }, []);
   const loadOlder = async () => {
     if (!messages.length || loadingOlder) return;
     setLoadingOlder(true);
@@ -1332,7 +1342,9 @@ function Conversation({ organizationId, topic, members, user, canWrite, canManag
           label={byId.get(message.reply_to) && speaker(byId.get(message.reply_to)!)} />}
         <header>{!index && <strong>{speaker(message)}</strong>}
           <time dateTime={new Date(message.created_at * 1000).toISOString()} title={new Date(message.created_at * 1000).toLocaleString()}>{topic.kind === "alpha" ? new Date(message.created_at * 1000).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" }) : new Date(message.created_at * 1000).toLocaleString()}</time></header>
-        <MessageMarkdown markdown={normalizeMathDelimiters(mentionMarkdown(message.content, mentionPeople))} />
+        {message.side_chat ? <SideChatGroup group={message.side_chat} owner={authorLabel(message, members)} own={isOwnMessage(message, user.id)}
+          renderMarkdown={renderSideMarkdown} />
+          : <MessageMarkdown markdown={normalizeMathDelimiters(mentionMarkdown(message.content, mentionPeople))} />}
         {!!message.files?.length && <ReplyFiles topicId={topic.id} files={message.files} />}
         <ReplyFooter message={message} userId={user.id} names={memberNames} />
         {!message.reply_to && !!replyCounts.get(message.id) && <ThreadCount count={replyCounts.get(message.id)!} onOpen={() => setThreadFor(message.id)} />}
@@ -1397,7 +1409,7 @@ function Conversation({ organizationId, topic, members, user, canWrite, canManag
   // The plus sits under the box beside the model picker in AI chats, and inside the box on its left everywhere else.
   const attach = <span ref={attachmentControl} className="org-composer-attach"><AttachFilesButton
     disabled={!canWrite || sending || (topic.kind === "beta" && !!modelAttempt)} onFiles={attachFiles} /></span>;
-  return <MediaScope.Provider value={{ organizationId, topicId: topic.id, canWrite }}><section className="org-conversation" aria-label="Topic conversation">
+  return <MediaScope.Provider value={{ organizationId, topicId: topic.id, canWrite }}><div className="org-conversation-row"><section className="org-conversation" aria-label="Topic conversation">
     {texOpen && <TexRequestDialog bots={botModels} names={botNames} onClose={() => setTexOpen(false)} onPrepare={(source, bot) => {
       const label = `@${botNames[bot.bot_id] ?? bot.name}`;
       updateDraft({ text: label + " " + texRequest(source), clientId: crypto.randomUUID(), attempted: false,
@@ -1563,7 +1575,12 @@ function Conversation({ organizationId, topic, members, user, canWrite, canManag
           aria-selected={index === completionIndex} key={target.kind + ":" + target.id}
           onMouseDown={(event) => event.preventDefault()} onClick={() => chooseReference(target)}>{target.label}<small> · {target.detail}</small></button>)}</div>}
     </form>
-  </section></MediaScope.Provider>;
+  </section>
+  {sideChat && topic.kind === "beta" && onCloseSideChat && <LazyView label="Side chat"><SideChat organizationId={organizationId} topic={topic}
+    owner={user.name} canWrite={canWrite} model={selectedModel} effort={selectedEffort} onClose={onCloseSideChat} onAuthLost={onAuthLost}
+    maxTokens={modelCatalog?.models.find(model => model.id === selectedModel)?.max_completion_tokens ?? null}
+    onBrought={brought} renderMarkdown={renderSideMarkdown} /></LazyView>}
+  </div></MediaScope.Provider>;
 }
 
 function Administration({ organization, onClose, onRefresh, onAuthLost }: { organization: Organization; onClose: () => void; onRefresh: () => void; onAuthLost: () => void }) {
@@ -1764,6 +1781,8 @@ export function OrganizationApp({ user, onAccount, onAuthenticated, onSignedOut,
     return () => window.removeEventListener("resize", resize);
   }, []);
   const [presenceOpen, setPresenceOpen] = useState(() => typeof window !== "undefined" && window.innerWidth > 1100);
+  // Your private side chat beside an AI chat; it stays open as you move between AI chats.
+  const [sideChatOpen, setSideChatOpen] = useState(false);
   useEffect(() => {
     const narrow = window.matchMedia("(max-width: 1100px)");
     const closeOnNarrowScreen = () => { if (narrow.matches) setPresenceOpen(false); };
@@ -2021,6 +2040,11 @@ export function OrganizationApp({ user, onAccount, onAuthenticated, onSignedOut,
         title={directTotal ? `People · ${directTotal} unread direct messages` : "People"} aria-expanded={presenceOpen}
         onClick={() => setPresenceOpen((value) => !value)}><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" aria-hidden="true"><circle cx="9" cy="7" r="3"/><path d="M3 21v-3a6 6 0 0 1 12 0v3M17 4a3 3 0 0 1 0 6M21 21v-3a6 6 0 0 0-3-5"/></svg>
         {directTotal > 0 && <span className="org-unread org-presence-unread" aria-hidden="true">{directTotal}</span>}</button>}
+      {organization && topic?.kind === "beta" && <button type="button" className="org-icon-button org-side-chat-toggle" aria-label="Side chat"
+        title="Side chat · ask the model privately" aria-expanded={sideChatOpen} onClick={() => setSideChatOpen(value => !value)}>
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" aria-hidden="true">
+          <path d="M3 5.5A2.5 2.5 0 0 1 5.5 3h8A2.5 2.5 0 0 1 16 5.5v5a2.5 2.5 0 0 1-2.5 2.5H9l-3.5 3v-3A2.5 2.5 0 0 1 3 10.5z" />
+          <path d="M19 8.5h.5A1.5 1.5 0 0 1 21 10v5.5a1.5 1.5 0 0 1-1.5 1.5H19v3l-3.5-3H12a1.5 1.5 0 0 1-1.5-1.5V16" /></svg></button>}
       {organization && topic && <TopicCopyButton key={organization.id + "/" + topic.id} organizationId={organization.id} topicId={topic.id} onAuthLost={authLost} />}
       {organization && <KnowledgeLinks organizationId={organization.id} topicId={topic?.id} onOpen={openKnowledge} onIntent={() => void loadKnowledgeWorkspace().catch(() => { /* The workspace view reports load failures. */ })} />}
       <WhatsNew />
@@ -2084,7 +2108,8 @@ export function OrganizationApp({ user, onAccount, onAuthenticated, onSignedOut,
           changeFiles={change => setComposerFiles(existing => ({ ...existing, [draftKey]: change(existing[draftKey] ?? []) }))} anchor={selection?.anchor ?? null} onPreference={preferenceRefresh}
           onForked={(id) => { void request<Hierarchy>(organizationPath(organization.id) + "/hierarchy").then((tree) => {
             setHierarchy(tree); select(id); preferenceRefresh();
-          }).catch((cause) => setError(errorMessage(cause))); }} onAuthLost={authLost} />
+          }).catch((cause) => setError(errorMessage(cause))); }} onAuthLost={authLost}
+          sideChat={sideChatOpen} onCloseSideChat={() => setSideChatOpen(false)} />
           : <section className="org-empty"><h1>{organization ? "A place to reason together" : "Choose or create an organization"}</h1>
             <p>{organization ? "Projects hold channels, and channels hold focused conversations." : "Organizations keep their own conversations, members, and provider keys."}</p>
             {canCreate && <button onClick={() => hierarchy.channels.length ? beginCreation("topic", hierarchy.channels[0].id)

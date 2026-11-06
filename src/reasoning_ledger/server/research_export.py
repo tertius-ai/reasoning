@@ -10,6 +10,7 @@ from .research_context import HARNESS_VERSION
 from .research_goals import RECOVERABLE_TURN_ERRORS
 from .research_media import view as media_view
 from .research_profiles import topic_instructions
+from .side_chat import public_request
 from .store import StoreError
 from .topic_forks import feedback_export
 from .usage_store import UsageStore
@@ -35,7 +36,9 @@ def export_topic(inference, user, org, topic, *, research_only=True):
             return [decoded(row) for row in db.execute(query, args)]
 
         runs = []
-        for row in db.execute(inference._joined() + "WHERE r.organization_id=? AND q.topic_id=? ORDER BY q.created_at,r.id", (org, topic)):
+        # Private side-chat replies belong to their owner's side chat, not to the topic's diagnostics.
+        for row in db.execute(inference._joined() + "WHERE r.organization_id=? AND q.topic_id=? AND " + public_request("q.id")
+                              + " ORDER BY q.created_at,r.id", (org, topic)):
             run = inference._view(row, db)
             run["events"] = rows(
                 "SELECT sequence,created_at,event_json FROM llm_events WHERE organization_id=? AND run_id=? ORDER BY sequence",
@@ -47,7 +50,8 @@ def export_topic(inference, user, org, topic, *, research_only=True):
             run["latest_session"] = next(iter(rows("SELECT state_json FROM research_sessions WHERE run_id=?", (row["id"],))), None)
             runs.append(run)
         calls = []
-        for row in db.execute(UsageStore._call_query() + " AND i.topic_id=? ORDER BY i.sequence", (user, org, role, topic)):
+        for row in db.execute(UsageStore._call_query() + " AND i.topic_id=? AND " + public_request("i.request_id")
+                              + " ORDER BY i.sequence", (user, org, role, topic)):
             call = UsageStore._call_view(row)
             call["receipts"] = rows(
                 "SELECT sequence,kind,recorded_at,data_json FROM inference_call_events "
@@ -175,7 +179,8 @@ def export_topic(inference, user, org, topic, *, research_only=True):
             ) if target["kind"] != "alpha" else [],
             "file_versions": file_versions,
             "captured_contexts": rows(
-                "SELECT * FROM research_contexts WHERE organization_id=? AND topic_id=? ORDER BY created_at,request_id"
+                "SELECT * FROM research_contexts WHERE organization_id=? AND topic_id=? AND "
+                + public_request("research_contexts.request_id") + " ORDER BY created_at,request_id"
             ),
             "memory_revisions": rows("SELECT * FROM research_memories WHERE organization_id=? AND topic_id=? ORDER BY revision"),
             "pins": rows("SELECT * FROM research_pins WHERE organization_id=? AND topic_id=? ORDER BY created_at,message_id"),

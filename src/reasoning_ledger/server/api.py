@@ -984,6 +984,10 @@ def create_app(config: Config, *, provider: OpenRouter | None = None, mail_provi
         return await run_in_threadpool(inference.enqueue, user, organization_id, topic_id, body.client_id, parameters, quotes,
                                        spans=spans)
 
+    from .side_chat import install_routes as install_side_chat_routes
+
+    install_side_chat_routes(app, inference, provider, config, authenticated)
+
     @app.get("/api/organizations/{organization_id}/topics/{topic_id}/inference-runs")
     def model_runs(organization_id: str, topic_id: str, user: User, limit: Annotated[int, Query(ge=1, le=50)] = 20):
         return inference.runs(user, organization_id, topic_id, limit=limit)

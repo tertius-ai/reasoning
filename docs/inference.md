@@ -61,6 +61,11 @@ finishes, its answer replaces the card, with its steps and usage row. The Thread
 plus as the main box: chosen pictures and PDFs wait as chips above the text
 while they upload, and are sent with the reply.
 
+A side chat asks the same kind of reply privately: the run reads the topic's compiled
+context followed by the asker's side chat, may record ledger statements in the topic as usual,
+and stores its answer in the side chat. Other members never see the run or its answer unless
+the asker brings it to the topic (see *Side chats* in [server.md](server.md#side-chats)).
+
 A later message can join a reply that is still running instead of starting
 its own. A running reply's card shows how long it has been working and a
 timeline of its steps. Each step has an icon for what it did and a short

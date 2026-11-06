@@ -287,7 +287,8 @@ class ResearchGoals:
                     self._check_in_transaction(db, current)
                     if db.execute(
                         "SELECT 1 FROM llm_requests q JOIN llm_runs r ON r.request_id=q.id "
-                        "WHERE q.organization_id=? AND q.topic_id=? AND r.status IN ('queued','running')",
+                        "WHERE q.organization_id=? AND q.topic_id=? AND r.status IN ('queued','running') "
+                        "AND NOT EXISTS (SELECT 1 FROM side_chat_runs sc WHERE sc.request_id=q.id)",
                         (goal["organization_id"], goal["topic_id"]),
                     ).fetchone():
                         continue

@@ -100,6 +100,14 @@ target see *unavailable* instead of its name. A link to a removed or inaccessibl
 message, topic or project opens with a notice instead. References also render in
 knowledge entries and the published research blog.
 
+In an AI chat, the **Side chat** button in the top bar opens your private side chat beside
+the conversation. Ask the selected model anything there: it reads the topic's conversation,
+only you see the side chat, and ledger statements it records go to the topic's ledger as usual.
+**Bring to chat** under a side reply posts it to the topic as one folded message from you,
+together with the earlier side messages it builds on; untick any you want to keep private.
+**Bring 2 with a context note** posts only that question and answer, with a line saying how many
+earlier side messages it built on.
+
 If a beta reply request is sent but the server's answer is lost, the
 conversation shows **Reply request not confirmed**: the message is saved, and
 the request may or may not have started. **Retry same request** resends it

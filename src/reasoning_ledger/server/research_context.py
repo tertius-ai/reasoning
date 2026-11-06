@@ -440,8 +440,10 @@ class ResearchContext:
         with self.store.transaction() as db:
             self.store._topic_access(db, user, org, topic)
             condition, values = ("AND request_id=?", [request_id]) if request_id else ("", [])
+            # A private side-chat reply's context holds its side chat, so the topic's view leaves it out.
             row = db.execute(
                 "SELECT * FROM research_contexts WHERE organization_id=? AND topic_id=? "
+                "AND NOT EXISTS (SELECT 1 FROM side_chat_runs sc WHERE sc.request_id=research_contexts.request_id) "
                 + condition
                 + " ORDER BY created_at DESC,request_id DESC LIMIT 1",
                 [org, topic, *values],

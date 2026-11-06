@@ -58,7 +58,23 @@ export type Message = { id: string; sequence: number; topic_id: string; author_i
   /** On a model answer: the later messages its reply read and took into account. */
   additions?: ReplyAddition[];
   /** On a model answer: its reply's recorded steps, for the folded timeline under it. */
-  steps?: ModelRun["activity"] };
+  steps?: ModelRun["activity"];
+  /** Set when the author brought these messages from their private side chat; the conversation folds them into one group. */
+  side_chat?: SideChatGroup };
+/** A ledger statement a model reply recorded or revised, with its latest text. */
+export type SideStatement = { claim_id: string; statement_text?: string };
+/** A message of your private side chat beside a topic: your question, or the model's answer to it. */
+export type SideMessage = { id: string; sequence: number; topic_id: string; owner_id: string; author_kind: "human" | "assistant";
+  content: string; client_id: string; created_at: number; assistant_model: string | null; inference_run_id: string | null;
+  /** On an answer: the side question it answers. */
+  reply_to: string | null; statements?: SideStatement[] };
+/** A model run answering a side question; only its requester can see it. */
+export type SideRun = ModelRun & { side_chat: { question_id: string } };
+export type SideChat = { messages: SideMessage[]; runs: SideRun[] };
+/** Side-chat messages brought into a topic, in their original order; `omitted` earlier ones stayed private behind a note. */
+export type SideChatGroup = { owner_id: string; omitted: number; omitted_statements?: SideStatement[];
+  messages: { id: string; author_kind: "human" | "assistant"; assistant_model: string | null; content: string; created_at: number;
+    statements: SideStatement[] }[] };
 export type ImpactProfile = { model: string; input_kwh_per_million: number; output_kwh_per_million: number;
   location: string; grid_grams_co2e_per_kwh: number | null; source: string };
 export type MessageUsage = { prompt_tokens: number | null; completion_tokens: number | null; actual_microusd: number | null;
