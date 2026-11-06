@@ -242,7 +242,7 @@ def register_actions(research):
                 "creates_paid_jobs": False,
             }
 
-    if "compute" in research.enabled and research.compute:
+    if "compute" in research.enabled and research.compute and research.compute_ready:
 
         @register(
             name="compute_submit",

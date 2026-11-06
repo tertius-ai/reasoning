@@ -23,8 +23,46 @@ def answer_state(db, row, *, status=None, error=None):
         else "working" if status in {"queued", "running"} else "response_ready" if status == "succeeded" else "partial"
     return {"status": state, "reason": waiting.get("reason") if state in {"waiting", "continued"} else error or row["error_code"],
             **({"next_run": handoff[0]} if handoff else {}),
+            **(waits(db, row) if state == "waiting" else {}),
             "checkpoint": {key: checkpoint[key] for key in ("summary", "remaining", "sources") if key in checkpoint}
             if checkpoint else None}
+
+
+PROGRAM_PREVIEW = 4000
+
+
+def waits(db, row):
+    """What a waiting turn still needs, so the reply can show it and offer the decisions it waits on."""
+    from .compute_store import ComputeStore
+    from .topic_agents import TopicAgents
+
+    found = []
+    for wait in db.execute("SELECT * FROM topic_agent_waits WHERE parent_run=? ORDER BY id", (row["id"],)).fetchall():
+        view = TopicAgents._wait_view(db, wait)
+        if not view["pending"]:
+            continue
+        item = {key: view[key] for key in ("kind", "id", "status")}
+        if view["kind"] == "proposal":
+            body = json.loads(db.execute("SELECT body_json FROM research_proposals WHERE id=?", (view["id"],)).fetchone()[0])
+            item["action"] = body["action"]
+            if body["action"] == "compute":
+                parameters = body["parameters"]
+                item["compute"] = {
+                    "image_id": parameters["image_id"], "language": parameters["language"], "resources": parameters["resources"],
+                    "program": parameters["program"][:PROGRAM_PREVIEW],
+                    "program_truncated": len(parameters["program"]) > PROGRAM_PREVIEW,
+                }
+        elif view["kind"] == "compute":
+            item["created_at"] = db.execute("SELECT created_at FROM compute_jobs WHERE id=?", (view["id"],)).fetchone()[0]
+        found.append(item)
+    delegated = db.execute(
+        "SELECT COUNT(*) FROM topic_agent_tasks t LEFT JOIN llm_runs r ON r.id=t.child_run LEFT JOIN bot_runs b ON b.id=t.child_bot_run "
+        "WHERE t.parent_run=? AND COALESCE(r.status,b.status) IN ('queued','running','waiting_approval')",
+        (row["id"],),
+    ).fetchone()[0]
+    if delegated:
+        found.append({"kind": "agents", "count": delegated})
+    return {"waits": found, "compute_available": ComputeStore.available(db, row["organization_id"])}
 
 
 def retained_answer(db, row, status, error):

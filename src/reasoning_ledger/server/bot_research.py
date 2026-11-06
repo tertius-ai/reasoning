@@ -24,6 +24,7 @@ class BotResearch(ResearchTools):
             self.enabled = set(json.loads(settings[0])) if settings else set(DEFAULT_TOOLS)
             if "knowledge:read" not in json.loads(bot["scopes_json"]):
                 self.enabled.clear()
+            self.compute_ready = bool(compute) and compute.available(db, self.org)
         self._register()
         selected = self.registry
         self.registry = ToolRegistry()

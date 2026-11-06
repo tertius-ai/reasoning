@@ -155,6 +155,13 @@ export type ModelAttempt = {
  * the server may or may not have accepted it.
  */
 export type PendingModelAttempt = ModelAttempt & { unconfirmed?: { reason: string } };
+/** Something a paused reply waits on: a proposal to decide, a computation, a review, a workflow, or delegated agents. */
+export type ReplyWait =
+  | { kind: "proposal"; id: string; status: string; action: string;
+      compute?: { image_id: string; language: string; resources: Record<string, number>; program: string; program_truncated: boolean } }
+  | { kind: "compute"; id: string; status: string; created_at: number }
+  | { kind: "review" | "workflow"; id: string; status: string }
+  | { kind: "agents"; count: number };
 export type ModelRun = {
   timing?: { wait_phase: "local_queue" | "preparing_context" | "provider_wait" | "provider_stream" | "tool_execution" | null;
     queue_wait_ms: number | null; preparation_ms: number | null; provider_elapsed_ms: number | null;
@@ -170,6 +177,8 @@ export type ModelRun = {
     detail?: string }[];
   /** "continued": the run waited and the server then handed its work to next_run, which carries the answer. */
   answer_state?: { status: "working" | "waiting" | "continued" | "partial" | "response_ready"; reason?: string | null; next_run?: string;
+    /** While waiting: what the turn still needs, and whether this organization can run computations at all. */
+    waits?: ReplyWait[]; compute_available?: boolean;
     checkpoint?: { summary: string; remaining?: string; sources?: string[] } | null } | null;
   diagnostics?: ProviderDiagnostics | null;
   usage?: MessageUsage;

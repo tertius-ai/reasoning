@@ -32,6 +32,8 @@ def environment(installation):
     image = ComputeImage.parse({**IMAGE, "languages": ["python", "sage"]})
     compute = ComputeStore(state.store, {image.id: image})
     compute.set_policy(owner["user_id"], owner["organization_id"], [image.id], 10000, 2)
+    # Sandbox tools are offered only while a worker can run their jobs. This one never claims; evidence() enrolls its own.
+    compute.register_worker(owner["user_id"], owner["organization_id"], "Standby fixture", [image.id], image.maximum_resources)
     return state, owner, topics, parent, quote, compute, image
 
 

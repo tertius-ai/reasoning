@@ -75,7 +75,7 @@ class BotTools:
             research = BotResearch(self.runtime, credential, run_id, lease, compute=self.compute)
             tools.extend({"name": item.name, "description": item.description, "input_schema": item.input_schema}
                          for item in research.registry.list())
-            if self.compute and "compute" in research.enabled and "knowledge:write" in scopes and topic["kind"] != "alpha":
+            if research.compute_ready and "compute" in research.enabled and "knowledge:write" in scopes and topic["kind"] != "alpha":
                 from .noether_compute import definitions
 
                 tools.extend({key: value for key, value in definition.items() if key != "risk"} for definition in definitions())

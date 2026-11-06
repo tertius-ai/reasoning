@@ -65,6 +65,17 @@ class ComputeStore:
                 os.close(parent)
 
     @staticmethod
+    def available(db: sqlite3.Connection, org: str) -> bool:
+        """Whether anything can run this organization's jobs: a live worker, or an enabled scaler that can start one."""
+        return bool(db.execute(
+            "SELECT 1 FROM compute_workers WHERE organization_id=? AND revoked_at IS NULL AND draining=0 UNION ALL "
+            "SELECT 1 FROM compute_scalers s JOIN memberships m ON m.organization_id=s.organization_id AND m.user_id=s.authorized_by "
+            "JOIN users u ON u.id=m.user_id WHERE s.organization_id=? AND s.revoked_at IS NULL AND s.expires_at>? "
+            "AND m.role IN ('owner','admin') AND u.account_kind='human' LIMIT 1",
+            (org, org, int(time.time())),
+        ).fetchone())
+
+    @staticmethod
     def parameters(image_id: str, language: str, program: str, limits: dict) -> dict:
         if not isinstance(image_id, str) or not 1 <= len(image_id) <= 64 or not isinstance(language, str) or language not in LANGUAGES:
             raise StoreError(400, "select an approved image and supported language")

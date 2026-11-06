@@ -5,6 +5,7 @@ Copyright Benjamin Antieau and Deven Manam. SPDX-License-Identifier: Apache-2.0
 
 import asyncio
 import json
+import time
 
 import httpx
 import pytest
@@ -377,6 +378,10 @@ def test_ordinary_agent_computation_waits_for_approval_and_execution_without_pai
     private_file(catalog, canonical([image]).encode())
     compute = ComputeStore(state.store, load_catalog(catalog))
     compute.set_policy(owner["user_id"], owner["organization_id"], [image["id"]], 10000, 2)
+    # Sandbox tools are offered only while a worker can run their jobs; it claims nothing until the job is approved.
+    worker = compute.register_worker(
+        owner["user_id"], owner["organization_id"], "Non-executing fixture", [image["id"]], image["maximum_resources"]
+    )
     with state.store.transaction(write=True) as db:
         db.execute(
             "INSERT INTO research_topic_settings(organization_id,topic_id,tools_json,compute_allowance_cpu_seconds) VALUES(?,?,?,?)",
@@ -415,9 +420,6 @@ def test_ordinary_agent_computation_waits_for_approval_and_execution_without_pai
         job = invoked
     agents.dispatch()
     assert state.claim() is None
-    worker = compute.register_worker(
-        owner["user_id"], owner["organization_id"], "Non-executing fixture", [image["id"]], image["maximum_resources"]
-    )
     claimed = compute.claim(worker["token"])
     assert claimed["id"] == job["id"]
     compute.finish(worker["token"], claimed["id"], claimed["attempt_id"], claimed["lease"], "succeeded", 1, 0, None)
@@ -429,6 +431,106 @@ def test_ordinary_agent_computation_waits_for_approval_and_execution_without_pai
     assert state.store.messages(owner["user_id"], owner["organization_id"], topics[1]["id"], 0, 20)
     with state.store.transaction() as db:
         assert db.execute("SELECT COUNT(*) FROM inference_calls").fetchone()[0] == 0
+
+
+def sandbox(state, owner, tmp_path):
+    from test_public_compute import IMAGE
+
+    from reasoning_ledger.server.compute_catalog import canonical, load_catalog
+    from reasoning_ledger.server.compute_store import ComputeStore
+    from reasoning_ledger.server.security import private_file
+
+    image = {**IMAGE, "languages": ["python"]}
+    catalog = tmp_path / "sandbox-images.json"
+    private_file(catalog, canonical([image]).encode())
+    compute = ComputeStore(state.store, load_catalog(catalog))
+    compute.set_policy(owner["user_id"], owner["organization_id"], [image["id"]], 10000, 2)
+    return compute, image
+
+
+def test_sandbox_tools_are_offered_only_while_a_worker_or_scaler_can_run_jobs(installation, tmp_path):
+    from reasoning_ledger.server.compute_scaler import ComputeScalers
+
+    state, _, owner, _, parent, _ = root(installation)
+    user, org = owner["user_id"], owner["organization_id"]
+    compute, image = sandbox(state, owner, tmp_path)
+    jobs = {"compute_catalog", "compute_submit", "compute_propose", "lean_check", "noether_compute"}
+
+    def offered():
+        return {tool.name for tool in ResearchTools(state, parent, compute=compute).registry.list()}
+
+    # Local arithmetic needs no sandbox and stays available.
+    assert not jobs & offered() and "scientific_calculate" in offered()
+    worker = compute.register_worker(user, org, "Fixture", [image["id"]], image["maximum_resources"])
+    assert jobs <= offered()
+    with state.store.transaction(write=True) as db:
+        db.execute("UPDATE compute_workers SET draining=1 WHERE id=?", (worker["id"],))
+    assert not jobs & offered()
+    scaler = ComputeScalers(compute).create(user, org, "Fixture scaler", [image["id"]], image["maximum_resources"], 1)
+    assert jobs <= offered()
+    with state.store.transaction(write=True) as db:
+        db.execute("UPDATE compute_scalers SET revoked_at=? WHERE id=?", (int(time.time()), scaler["id"]))
+    assert not jobs & offered()
+
+
+def waiting(state, run, text):
+    with state.store.transaction(write=True) as db:
+        state._event(db, run["organization_id"], run["id"], {"type": "agent", "phase": "waiting", "reason": "delegated work"})
+    finish(state, run, text)
+
+
+def test_waiting_reply_names_its_proposed_computation_and_continues_once_it_is_rejected(installation, tmp_path):
+    from reasoning_ledger.server.compute_catalog import DEFAULT_RESOURCES
+    from reasoning_ledger.server.research_tools import ResearchProposals
+
+    state, _, owner, topics, parent, _ = root(installation)
+    user, org = owner["user_id"], owner["organization_id"]
+    compute, image = sandbox(state, owner, tmp_path)
+    worker = compute.register_worker(user, org, "Fixture", [image["id"]], image["maximum_resources"])
+    proposal = ResearchTools(state, parent, compute=compute).invoke("compute_submit", {
+        "image_id": image["id"], "language": "python", "program": "print(2+2)", "resources": DEFAULT_RESOURCES,
+    })["result"]["proposal_id"]
+    waiting(state, parent, "Waiting for the computation.")
+    answer = state.run(user, org, parent["id"])["answer_state"]
+    assert answer["status"] == "waiting" and answer["compute_available"] is True
+    assert answer["waits"] == [{
+        "kind": "proposal", "id": proposal, "status": "pending", "action": "compute",
+        "compute": {"image_id": image["id"], "language": "python", "resources": DEFAULT_RESOURCES,
+                    "program": "print(2+2)", "program_truncated": False},
+    }]
+
+    # Without a worker the proposal can't be approved, and it stays pending so it can still be rejected.
+    with state.store.transaction(write=True) as db:
+        db.execute("UPDATE compute_workers SET revoked_at=? WHERE id=?", (int(time.time()), worker["id"]))
+    assert state.run(user, org, parent["id"])["answer_state"]["compute_available"] is False
+    proposals = ResearchProposals(state, compute, None)
+    with pytest.raises(StoreError, match="can't run computations"):
+        proposals.review(user, org, topics[1]["id"], proposal, True)
+    assert proposals.review(user, org, topics[1]["id"], proposal, False)["status"] == "rejected"
+    assert state.run(user, org, parent["id"])["answer_state"]["waits"] == []
+    TopicAgents(state, compute).dispatch()
+    assert state.claim() is not None
+    assert state.run(user, org, parent["id"])["answer_state"]["status"] == "continued"
+
+
+def test_waiting_reply_names_its_queued_computation(installation, tmp_path):
+    from reasoning_ledger.server.compute_catalog import DEFAULT_RESOURCES
+    from reasoning_ledger.server.research_tools import DEFAULT_TOOLS
+
+    state, _, owner, topics, parent, _ = root(installation)
+    user, org = owner["user_id"], owner["organization_id"]
+    compute, image = sandbox(state, owner, tmp_path)
+    compute.register_worker(user, org, "Fixture", [image["id"]], image["maximum_resources"])
+    with state.store.transaction(write=True) as db:
+        db.execute("INSERT INTO research_topic_settings(organization_id,topic_id,tools_json,compute_allowance_cpu_seconds) "
+                   "VALUES(?,?,?,?)", (org, topics[1]["id"], json.dumps(DEFAULT_TOOLS), 1000))
+    job = ResearchTools(state, parent, compute=compute).invoke("compute_submit", {
+        "image_id": image["id"], "language": "python", "program": "print(2+2)", "resources": DEFAULT_RESOURCES,
+    })["result"]
+    waiting(state, parent, "Waiting for the computation.")
+    [wait] = state.run(user, org, parent["id"])["answer_state"]["waits"]
+    assert wait["kind"] == "compute" and wait["id"] == job["id"] and wait["status"] == "queued"
+    assert isinstance(wait["created_at"], int)
 
 
 def test_ordinary_agent_review_returns_to_the_conversation_without_a_goal(installation):
