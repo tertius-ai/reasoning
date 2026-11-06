@@ -94,6 +94,8 @@ jobs:
           df -h "$RUNNER_TEMP"
       - name: Refuse a bundle with unresolved sources
         run: |
+          # The default step shell has no pipefail; tee must not hide the refusal.
+          set -o pipefail
           python3 - "$RUNNER_TEMP/sources/payload/collection.json" <<'EOF' | tee -a "$GITHUB_STEP_SUMMARY"
           import json, sys
           collection = json.load(open(sys.argv[1]))

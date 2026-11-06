@@ -539,6 +539,8 @@ def test_hosted_source_collection_checks_the_candidate_and_keeps_only_the_bundle
              "set(item) != {\"reason\"}", "upload-artifact"]
     assert [workflow.index(step) for step in order] == sorted(workflow.index(step) for step in order)
     assert "--ubuntu-keyring /usr/share/keyrings/ubuntu-archive-keyring.gpg" in workflow
+    refusal = workflow.split("Refuse a bundle with unresolved sources", 1)[1].split("- name:", 1)[0]
+    assert "set -o pipefail" in refusal and refusal.index("set -o pipefail") < refusal.index("| tee")
     uploaded = workflow.split("upload-artifact", 1)[1].split("if-no-files-found", 1)[0]
     assert "sources/sources.tar" in uploaded and "sources/source-review.draft.json" in uploaded
     assert "payload" not in uploaded and "download-failures" not in uploaded
