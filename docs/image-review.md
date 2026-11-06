@@ -61,7 +61,8 @@ the local wait limit leaves that workflow running and retains its identity for
 the next invocation. `compute-combine.yml` then repeats
 anonymous source/digest/pull/execution checks and binds the completed catalog to
 the selected successful publication run IDs. Modal remains a separate operator
-step, `make compute-setup`; publication never enables a paid compute relay.
+step, `make compute-setup`, or `make compute-add-images` for an existing Modal
+installation; publication never enables a paid compute relay.
 
 The exact `recipe.tar` is retained in each source bundle and hash-bound by the
 attestation. Before signing, the guided CLI reconstructs the unsigned archive

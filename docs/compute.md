@@ -29,6 +29,36 @@ Test with a small gamma-topic run after enabling it. Keep the private
 `DEPLOY_STATE/compute-setup` directory for retries. Do not repeat first-server
 `make deploy` to add compute.
 
+## Add images to an existing Modal installation
+
+`make compute-add-images` adds newly approved images, such as `tex`, to a running
+Modal installation from an onboarded operator computer. The installed release must
+include this step: run `make upgrade` first if `make compute-add-images` asks for
+it. The command synchronizes the operator, then asks for the organization, an
+administrator email, the approved published catalog (the release's bundled catalog
+by default) and the number of new relays. It reads the installed catalog and the
+active relays through the administrator API and refuses an approved catalog that
+would change an installed image. It shows the images to add, the relay limits and
+the Modal profile it will reuse, then asks for typed consent.
+
+The step changes only what it adds:
+
+1. It appends the new catalog entries on the chat host and restarts the server once.
+   Replies in progress can be interrupted, so pick a quiet time.
+2. It adds the new images to the compute policy, leaving the quota and limits as they are.
+3. It enrolls new relays for the new images only, through a six-hour enrollment grant.
+4. On the chat host, it copies an active relay's Modal profile into each new relay's
+   private directory and starts the relays from the installed release. Modal
+   credentials stay on the host and are never sent to the operator computer.
+5. It revokes the enrollment grant.
+
+Existing relays, their images and their jobs are unchanged, and new jobs bill to
+the same Modal account. The host keeps each addition's inputs under
+`/var/lib/reasoning-deploy/modal-setup/additions/`, and the operator keeps its
+journal in `DEPLOY_STATE/compute-images`; rerun the same command to resume after
+a failure. A completed addition means the relays are active, **not that a live
+computation has succeeded**; run a small job on each added image.
+
 For owned hardware or dedicated DigitalOcean workers, use the separate-worker
 installation/provisioning commands linked below. Those workers need Docker on
 their execution host, not on the operator computer. Local personal CLI bots can
@@ -53,10 +83,10 @@ The `tex` image compiles LaTeX offline with TeX Live 2021 (see
 the `.tex` sources and any `.bib` files, runs
 `latexmk -pdf -interaction=nonstopmode -halt-on-error main.tex` with `subprocess`,
 and copies the PDF to `/work/out`, where it becomes an artifact. Models see the
-installed tools and restrictions in `compute_catalog`. Allow the image in the
-organization's compute policy and add it to the workers or Modal relays that
-should run it; until a worker or scaler offers it, `compute_submit` refuses TeX
-jobs.
+installed tools and restrictions in `compute_catalog`. On Modal, `make compute-add-images`
+installs it (see [Add images to an existing Modal installation](#add-images-to-an-existing-modal-installation));
+other workers need an enrollment that includes it. Until a worker or scaler offers
+it, `compute_submit` refuses TeX jobs.
 
 ## Lean projects and formalization groundwork
 
