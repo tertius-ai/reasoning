@@ -55,7 +55,8 @@ class ChatFeedback:
             row = _row(
                 db.execute(
                     "SELECT r.id,r.model,r.output_text FROM llm_runs r JOIN llm_requests q ON q.id=r.request_id "
-                    "WHERE r.organization_id=? AND q.topic_id=? AND r.id=?",
+                    "WHERE r.organization_id=? AND q.topic_id=? AND r.id=? "
+                    "AND NOT EXISTS (SELECT 1 FROM side_chat_runs sc WHERE sc.request_id=q.id)",
                     (org, topic, target),
                 ).fetchone()
             )

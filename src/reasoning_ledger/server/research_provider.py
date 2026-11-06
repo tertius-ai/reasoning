@@ -152,7 +152,7 @@ class ResearchCompletion:
         self.next_cancel_check = 0.0
         self._last_visible_finish = None
         self.worker_spans, self._dispatch = None, None
-        self._reviewer, self._prefix = None, None
+        self._reviewer, self._side, self._prefix = None, None, None
         self._cache_end = None
 
     def complete(self, payload, *, timeout):
@@ -214,8 +214,13 @@ class ResearchCompletion:
                     db.execute("SELECT 1 FROM mathematical_reviews WHERE reviewer_run_id=?", (self.row["id"],)).fetchone()
                 )
         review = self._reviewer
+        if self._side is None:
+            with self.inference.store.transaction() as db:
+                self._side = bool(db.execute("SELECT 1 FROM side_chat_runs WHERE request_id=?", (self.row["request_id"],)).fetchone())
+        # A side-chat reply answers its owner even though its context names no topic message.
         purpose = purpose or (
-            "review" if review else "continuation" if self.calls else "workflow" if self.row["context_through_sequence"] == 0 else "answer"
+            "review" if review else "continuation" if self.calls
+            else "workflow" if self.row["context_through_sequence"] == 0 and not self._side else "answer"
         )
         if review:
             from .research_reviews import REVIEW_PROMPT_VERSION

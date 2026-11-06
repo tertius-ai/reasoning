@@ -13,6 +13,7 @@ from .research_export import export_topic
 from .research_goals import ResearchGoals
 from .research_profiles import profile_catalog, topic_instructions
 from .research_tools import DEFAULT_TOOLS, ResearchProposals
+from .side_chat import public_run
 from .store import StoreError, _row
 
 
@@ -176,7 +177,8 @@ def install_routes(app, inference, compute, workflows, authenticated, *, enabled
                 )
             ]
             current = db.execute(
-                "SELECT state_json FROM research_sessions WHERE organization_id=? AND topic_id=? ORDER BY updated_at DESC LIMIT 1",
+                "SELECT state_json FROM research_sessions WHERE organization_id=? AND topic_id=? AND "
+                + public_run("research_sessions.run_id") + " ORDER BY updated_at DESC LIMIT 1",
                 (organization_id, topic_id),
             ).fetchone()
             result["last_call_context"] = json.loads(current[0]) if current else None
@@ -286,7 +288,8 @@ def install_routes(app, inference, compute, workflows, authenticated, *, enabled
                     for row in db.execute(
                         "SELECT r.id,r.name,r.status,r.created_at,r.finished_at "
                         "FROM research_tool_receipts r JOIN research_sessions s ON s.run_id=r.run_id "
-                        "WHERE r.organization_id=? AND s.topic_id=? AND r.created_at>=? ORDER BY r.created_at DESC,r.id DESC LIMIT 50",
+                        "WHERE r.organization_id=? AND s.topic_id=? AND r.created_at>=? AND " + public_run("r.run_id")
+                        + " ORDER BY r.created_at DESC,r.id DESC LIMIT 50",
                         (organization_id, topic_id, after),
                     )
                 ]
@@ -295,7 +298,8 @@ def install_routes(app, inference, compute, workflows, authenticated, *, enabled
                 | {"arguments": json.loads(row["arguments_json"]), "result": json.loads(row["result_json"]) if row["result_json"] else None}
                 for row in db.execute(
                     "SELECT r.* FROM research_tool_receipts r JOIN research_sessions s ON s.run_id=r.run_id "
-                    "WHERE r.organization_id=? AND s.topic_id=? AND r.created_at>=? ORDER BY r.created_at DESC,r.id DESC LIMIT 50",
+                    "WHERE r.organization_id=? AND s.topic_id=? AND r.created_at>=? AND " + public_run("r.run_id")
+                    + " ORDER BY r.created_at DESC,r.id DESC LIMIT 50",
                     (organization_id, topic_id, after),
                 )
             ]
@@ -307,7 +311,7 @@ def install_routes(app, inference, compute, workflows, authenticated, *, enabled
             row = _row(
                 db.execute(
                     "SELECT r.* FROM research_tool_receipts r JOIN research_sessions s ON s.run_id=r.run_id "
-                    "WHERE r.organization_id=? AND s.topic_id=? AND r.id=?",
+                    "WHERE r.organization_id=? AND s.topic_id=? AND r.id=? AND " + public_run("r.run_id"),
                     (organization_id, topic_id, receipt_id),
                 ).fetchone()
             )

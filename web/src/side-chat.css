@@ -1,0 +1,61 @@
+/* Copyright Benjamin Antieau and Deven Manam. SPDX-License-Identifier: Apache-2.0 */
+/* Your private side chat beside a topic, and the folded groups that side chats bring into a topic. */
+.org-conversation-row { flex: 1; min-height: 0; display: flex; }
+.org-conversation-row > .org-conversation { flex: 1; min-width: 0; height: auto; }
+.org-side-chat { width: 360px; flex: none; display: flex; flex-direction: column; min-height: 0; border-left: 1px solid var(--border); background: var(--surface); }
+.org-side-chat > header { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 12px 10px 10px 16px; border-bottom: 1px solid var(--border); }
+.org-side-chat > header div { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.org-side-chat > header h2 { margin: 0; font-size: 13px; font-weight: 600; }
+.org-side-chat > header small { overflow: hidden; color: var(--muted); font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
+.org-side-transcript { flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 12px; padding: 12px 14px; overflow: auto; overscroll-behavior: contain; }
+.org-side-empty { color: var(--muted); font-size: 12.5px; line-height: 1.5; }
+.org-side-empty p { margin: 0 0 8px; }
+/* A dashed rail marks side messages, here and in a brought group. */
+.org-side-message { padding-left: 10px; border-left: 2px dashed color-mix(in srgb, var(--blue) 55%, transparent); border-radius: 0; font-size: 13.5px; line-height: 1.55; overflow-wrap: anywhere; }
+.org-side-message > header { display: flex; align-items: baseline; gap: 8px; font-size: 12px; }
+.org-side-message > header strong { font-weight: 600; }
+.org-side-message-assistant > header strong { color: var(--amber); }
+.org-side-message > header time { color: var(--muted); font-size: 11px; }
+.org-side-message p { margin: 4px 0; }
+.org-side-bring-button, .org-side-bring-actions button, .org-side-working button { padding: 2px 10px; border: 1px solid var(--border-strong); border-radius: var(--radius-pill); background: transparent; color: var(--foreground); font: 12px var(--font-sans); cursor: pointer; }
+.org-side-bring-button { margin-top: 4px; }
+.org-side-bring-button[aria-expanded="true"], .org-side-primary { border-color: color-mix(in srgb, var(--blue) 55%, transparent) !important; background: color-mix(in srgb, var(--blue) 16%, transparent) !important; color: var(--blue) !important; }
+.org-side-bring { margin-top: 6px; padding: 8px 10px; border: 1px solid var(--border-strong); border-radius: var(--radius-control); background: var(--surface-raised); font-size: 12.5px; line-height: 1.45; }
+.org-side-bring p { margin: 0 0 6px; }
+.org-side-bring ul { display: grid; gap: 4px; margin: 0 0 6px; padding: 0; list-style: none; }
+.org-side-bring label { display: flex; flex-direction: row; align-items: flex-start; gap: 7px; margin: 0; color: var(--muted); font-size: 12.5px; cursor: pointer; }
+.org-side-bring input[type="checkbox"] { flex: none; width: 14px; height: 14px; min-width: 0; margin: 3px 0 0; padding: 0; accent-color: var(--blue); }
+.org-side-bring label span { min-width: 0; overflow-wrap: anywhere; }
+.org-side-bring label strong { color: var(--foreground); font-weight: 600; }
+.org-side-bring-actions { display: flex; flex-wrap: wrap; gap: 6px; }
+.org-side-working { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 6px 10px; border: 1px dashed var(--border-strong); border-radius: var(--radius-control); color: var(--muted); font-size: 12.5px; }
+.org-side-ended { border-style: solid; }
+.org-side-error { margin: 0 14px 6px; }
+.org-side-notice { margin: 0 14px 6px; color: var(--teal); font-size: 12px; }
+.org-side-composer { flex: none; margin: 0 12px 12px; padding: 8px 10px 6px; border: 1px solid var(--border-strong); border-radius: var(--radius-composer); background: var(--surface-2); }
+.org-side-composer textarea { display: block; width: 100%; min-height: 40px; max-height: 160px; padding: 0 2px; border: none; background: transparent; color: var(--foreground); font: 13.5px/1.5 var(--font-sans); resize: vertical; box-sizing: border-box; }
+.org-side-composer textarea:focus { outline: none; }
+.org-side-composer-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: 4px; }
+.org-side-composer-row small { min-width: 0; color: var(--muted); font-size: 11px; }
+.org-side-composer-row button { flex: none; padding: 3px 12px; border: 1px solid var(--border-strong); border-radius: var(--radius-pill); background: var(--surface-raised); color: var(--foreground); font: 12px var(--font-sans); cursor: pointer; }
+.org-side-composer-row button:disabled, .org-side-bring-actions button:disabled { cursor: default; opacity: .55; }
+/* Ledger statements a reply recorded: a short ID and the statement's start, the full text on hover. */
+.org-side-statements { display: flex; flex-wrap: wrap; gap: 4px; margin: 4px 0 0; padding: 0; list-style: none; }
+.org-side-statements li { display: inline-flex; align-items: baseline; gap: 5px; max-width: 100%; padding: 1px 8px; border-radius: var(--radius-pill); background: color-mix(in srgb, var(--teal) 14%, transparent); color: var(--teal); font-size: 11px; }
+.org-side-statement-id { flex: none; font-family: var(--font-mono); }
+.org-side-statement-text { overflow: hidden; color: var(--muted); text-overflow: ellipsis; white-space: nowrap; }
+/* A group brought into a topic: one header, one line per message until opened. */
+.org-side-group { min-width: min(320px, 100%); margin: 2px 0; padding: 6px 10px; text-align: left; border: 1px solid color-mix(in srgb, var(--blue) 40%, transparent); border-radius: var(--radius-card); }
+.org-side-group-toggle { display: flex; width: 100%; align-items: center; justify-content: space-between; gap: 8px; padding: 0; border: none; background: none; color: inherit; font: inherit; text-align: left; cursor: pointer; }
+.org-side-chip { display: inline-block; padding: 1px 9px; white-space: nowrap; border-radius: var(--radius-pill); background: color-mix(in srgb, var(--blue) 16%, transparent); color: var(--blue); font-size: 11.5px; }
+.org-side-group-action { flex: none; color: var(--muted); font-size: 11.5px; }
+.org-side-group-note { margin: 6px 0 0; color: var(--muted); font-size: 12px; }
+.org-side-group-preview, .org-side-group-messages { display: grid; gap: 4px; margin: 6px 0 0; padding: 0; list-style: none; font-size: 13px; }
+.org-side-group-preview li { overflow: hidden; color: var(--muted); text-overflow: ellipsis; white-space: nowrap; }
+.org-side-group-messages > li { padding-left: 8px; border-left: 2px dashed color-mix(in srgb, var(--blue) 45%, transparent); border-radius: 0; }
+.org-side-group-messages p { margin: 4px 0; }
+.org-side-speaker { color: var(--foreground); font-weight: 600; }
+.org-side-speaker-assistant { color: var(--amber); }
+@media (max-width: 1000px) {
+  .org-side-chat { position: fixed; inset: 44px 0 0 auto; z-index: 23; width: min(360px, 92vw); box-shadow: var(--shadow-overlay); }
+}

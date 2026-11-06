@@ -585,6 +585,10 @@ Use the prefix `/api/organizations/{organization_id}` for organization resources
 | `{prefix}/inference-runs/{run_id}/cost` | PUT | Administrator reconciliation of an unknown charge |
 | `{prefix}/inference-runs/{run_id}/additions` | POST | Author moves a later posted message into the running reply; its own queued reply is cancelled |
 | `{prefix}/inference-runs/{run_id}/additions/{message_id}` | DELETE | Author removes an addition the reply has not read |
+| `{prefix}/topics/{topic_id}/side-chat` | GET | Your private side chat in a beta topic: its newest messages, or those after `after`, and your latest side replies' runs |
+| `{prefix}/topics/{topic_id}/side-chat/messages` | POST | Add a question to your side chat; idempotent by `client_id` |
+| `{prefix}/topics/{topic_id}/side-chat/replies` | POST | Ask one model to answer a side question privately |
+| `{prefix}/topics/{topic_id}/side-chat/bring` | POST | Post chosen side messages to the topic as one message from you, shown as a folded group |
 | `{prefix}/compute-configuration` | GET | Approved compute images, organization policy, and quota balance |
 | `{prefix}/compute-policy` | PUT | Administrator compute admission/concurrency limits |
 | `{prefix}/topics/{topic_id}/compute-jobs` | GET, POST | Gamma compute job history and idempotent submission |
@@ -745,6 +749,33 @@ membership clears that member's read and mute state and ends their access; the
 remaining participant keeps the history. Direct messages are retained like topic
 messages: there is no separate expiry or deletion. They are not end-to-end
 encrypted; operators with database or backup access can read them.
+
+### Side chats
+
+A side chat is one member's private conversation with a model beside a beta topic. Its
+messages use their own tables, so topic routes, organization search, webhooks, knowledge,
+topic exports and agent tools never read them. Every side-chat route works only on the
+caller's own side chat; nobody else, including organization owners and administrators, can
+read it. Viewers can open theirs but cannot ask in it.
+
+`POST …/side-chat/replies` with `question_id`, one `models` entry, `client_id` and optional
+`effort` and `max_completion_tokens` queues an ordinary run of the topic, with the same
+admission checks, limits and accounting as a topic reply. Its context is the topic's compiled
+context (instructions, memory, pins, ledger and recent messages) followed by the side chat up
+to that question, within the model's budget. The run is private: topic run listings, `/events`,
+the research context, tool receipts and exports leave it out, and only its requester can read,
+follow or cancel it through the `inference-runs` routes; anyone else receives 404. Its answer
+is stored in the side chat, not the topic. A side reply may read the topic, project files, the
+ledger and outside sources, and may record ledger statements and references; it has no other
+write tools. Its ledger statements belong to the topic's ledger as usual. An answer lists the
+statements its run recorded or revised as `statements`.
+
+`POST …/side-chat/bring` with `message_ids` (1–50 of your side messages, at least one of them
+an answer), `note` and `client_id` posts one topic message from you. Its text holds the chosen
+messages in order, which members and later replies read, and its `side_chat` field (`owner_id`,
+`messages`, `omitted`, `omitted_statements`) lets the conversation show it as a folded group.
+With `note`, the earlier side messages stay private and the message says how many there were and
+which statements they recorded. Bringing starts no model reply.
 
 Search uses `q` (1–200 characters), with a limit of 1–100 (default 50). It searches
 message content literally, including percent and underscore characters, and

@@ -1178,6 +1178,11 @@ class Store:
             addition = for_message(db, result["organization_id"], result["id"])
             if addition is not None:
                 result["addition"] = addition
+            from .side_chat import brought_group
+
+            group = brought_group(db, result)
+            if group is not None:
+                result["side_chat"] = group
         name = result.pop("sender_name", None)
         if result["author_kind"] == "bot":
             result["bot_name"] = name

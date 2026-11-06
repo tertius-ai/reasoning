@@ -301,7 +301,7 @@ class InferenceStore:
                 (org, quote.model, run_id),
             )
             self._event(db, org, run_id, {"type": "state", "status": "queued"})
-            if workflow_context is None and not internal_agent and not snapshot.get("review_id"):
+            if workflow_context is None and not internal_agent and not snapshot.get("review_id") and not snapshot.get("side_chat"):
                 db.execute("INSERT INTO topic_agent_threads(root_run,organization_id,topic_id) VALUES(?,?,?)", (run_id, org, topic))
         self.store._audit(db, org, user, "inference.request", request_id)
         spans.mark("ledger_write")
@@ -482,20 +482,27 @@ class InferenceStore:
         return [self._view(row, db) for row in db.execute(self._joined() + "WHERE request_id=? ORDER BY model", (request,))]
 
     def runs(self, user: str, org: str, topic: str, *, limit: int = 20) -> list[dict]:
+        """The topic's shared runs, newest first; private side-chat replies are listed only in their side chat."""
+        from .side_chat import public_request
+
         with self.store.transaction() as db:
             self.store._topic_access(db, user, org, topic)
             return [
                 self._view(row, db)
                 for row in db.execute(
-                    self._joined() + "WHERE r.organization_id=? AND q.topic_id=? ORDER BY q.created_at DESC,r.id DESC LIMIT ?",
+                    self._joined() + "WHERE r.organization_id=? AND q.topic_id=? AND " + public_request("q.id")
+                    + " ORDER BY q.created_at DESC,r.id DESC LIMIT ?",
                     (org, topic, limit),
                 )
             ]
 
     def run(self, user: str, org: str, run: str) -> dict:
+        from .side_chat import require_visible
+
         with self.store.transaction() as db:
             row = _row(db.execute(self._joined() + "WHERE r.organization_id=? AND r.id=?", (org, run)).fetchone())
             self.store._topic_access(db, user, org, row["topic_id"])
+            require_visible(db, user, row)
             return self._view(row, db)
 
     def events(self, user: str, org: str, run: str, after: int, limit: int = 200) -> list[dict]:
@@ -510,9 +517,12 @@ class InferenceStore:
             ]
 
     def cancel(self, user: str, org: str, run: str) -> dict:
+        from .side_chat import require_visible
+
         with self.store.transaction(write=True) as db:
             row = _row(db.execute(self._joined() + "WHERE r.organization_id=? AND r.id=?", (org, run)).fetchone())
             role = self.store._topic_access(db, user, org, row["topic_id"], write=True)[0]
+            require_visible(db, user, row)
             if user != row["requested_by"] and role not in {"owner", "admin"}:
                 raise StoreError(403, "only the requester or an administrator can cancel this run")
             self._request_cancel(db, org, row)
@@ -528,10 +538,12 @@ class InferenceStore:
     def add_message(self, user: str, org: str, run: str, message_id: str) -> dict:
         """Move your own later message into a running reply; its own queued reply is cancelled before it starts."""
         from . import inference_additions
+        from .side_chat import require_visible
 
         with self.store.transaction(write=True) as db:
             row = _row(db.execute(self._joined() + "WHERE r.organization_id=? AND r.id=?", (org, run)).fetchone())
             self.store._topic_access(db, user, org, row["topic_id"], write=True)
+            require_visible(db, user, row)
             message = db.execute("SELECT * FROM messages WHERE organization_id=? AND topic_id=? AND id=?",
                                  (org, row["topic_id"], message_id)).fetchone()
             if message is None:
@@ -543,10 +555,12 @@ class InferenceStore:
     def remove_addition(self, user: str, org: str, run: str, message_id: str) -> dict:
         """Undo an unread addition. A moved message's cancelled reply stays cancelled; request a new one to replace it."""
         from . import inference_additions
+        from .side_chat import require_visible
 
         with self.store.transaction(write=True) as db:
             row = _row(db.execute(self._joined() + "WHERE r.organization_id=? AND r.id=?", (org, run)).fetchone())
             self.store._topic_access(db, user, org, row["topic_id"], write=True)
+            require_visible(db, user, row)
             result = inference_additions.unlink(db, self, org, run, message_id, user)
             self.store._audit(db, org, user, "inference.addition-remove", message_id)
             return result
@@ -733,7 +747,16 @@ class InferenceStore:
             from .research_answers import retained_answer
 
             content = retained_answer(db, current, status, error)
-            if content.strip() and not is_review:
+            side = db.execute("SELECT * FROM side_chat_runs WHERE request_id=?", (current["request_id"],)).fetchone()
+            if content.strip() and side is not None:
+                # A side-chat answer stays in its owner's side chat; it is never posted to the topic.
+                db.execute(
+                    "INSERT INTO side_chat_messages(id,organization_id,topic_id,owner_id,sender_kind,content,client_id,created_at,"
+                    "assistant_model,inference_run_id,reply_to,through_sequence) VALUES(?,?,?,?,'assistant',?,?,?,?,?,?,?)",
+                    (_id(), row["organization_id"], side["topic_id"], side["owner_id"], content, "assistant-" + _id(), now,
+                     row["model"], row["id"], side["question_id"], side["through_sequence"]),
+                )
+            elif content.strip() and not is_review:
                 message_id = _id()
                 db.execute(
                     "INSERT INTO messages(id,organization_id,topic_id,author_id,content,client_id,created_at,"
