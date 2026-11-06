@@ -190,3 +190,130 @@ def test_host_rejects_invalid_enrollment_before_writes(host, mutation):
 def test_service_units_reject_shell_path_injection():
     with pytest.raises(InstallError):
         relay_unit("a" * 64, "../unsafe")
+
+
+TEX = {**IMAGE, "id": "tex", "name": "Reasoning TeX", "languages": ["python"],
+       "reference": "registry.example.org/research/tex@sha256:" + "e" * 64}
+
+
+@pytest.fixture
+def addition(host):
+    """A host whose original Modal setup is running, plus a request that adds one image."""
+    root, payload, worker, installer, calls, identity = host
+    installer.install(payload, "prepare")
+    installer.install({**payload, "workers": [worker]}, "activate")
+    calls.clear()
+    installer.identity_client = lambda config: SimpleNamespace(
+        request=lambda *a: {**config, "revoked_at": None, "draining": identity["draining"]}, close=lambda: None)
+    config = {**worker["enrollment"], "id": "f" * 32, "image_ids": ["tex"]}
+    request = {"format": 1, "release_id": payload["release_id"], "addition_id": "9" * 64, "public_url": payload["public_url"],
+               "previous": [IMAGE], "images": sorted([IMAGE, TEX], key=lambda record: record["id"]),
+               "source_worker": worker["enrollment"]["id"], "workers": []}
+    return root, request, {"enrollment": config}, worker, installer, calls, identity
+
+
+def relay_files(root, identifier):
+    state = root / "var/lib/reasoning-modal" / identifier
+    return {path.name: path.read_bytes() for path in state.iterdir()}
+
+
+def test_adding_an_image_extends_the_catalog_and_starts_its_own_relays_without_touching_existing_ones(addition):
+    root, request, new, worker, installer, calls, _ = addition
+    existing = relay_files(root, worker["enrollment"]["id"])
+    existing_unit = (root / "etc/systemd/system" / ("reasoning-modal-" + worker["enrollment"]["id"] + ".service")).read_bytes()
+
+    assert installer.add_images(request, "extend") == {"addition_id": request["addition_id"], "catalog_installed": True,
+                                                       "relays_active": 0}
+    assert json.loads((root / "etc/reasoning/compute-images.json").read_text()) == request["images"]
+    assert calls == [["systemctl", "restart", "reasoning-server"]]
+    calls.clear()
+    installer.add_images(request, "extend")
+    assert calls == [["systemctl", "restart", "reasoning-server"]]
+
+    value = {**request, "workers": [new]}
+    result = installer.add_images(value, "relays")
+    assert installer.add_images(value, "relays") == result == {"addition_id": request["addition_id"], "relays_active": 1,
+                                                               "live_compute_verified": False}
+    files = relay_files(root, "f" * 32)
+    assert json.loads(files["catalog.json"]) == [TEX]
+    assert json.loads(files["enrollment.json"]) == new["enrollment"]
+    assert files["modal-profile.json"] == existing["modal-profile.json"]
+    assert (root / "var/lib/reasoning-modal" / ("f" * 32) / "modal-profile.json").stat().st_mode & 0o777 == 0o600
+    assert relay_files(root, worker["enrollment"]["id"]) == existing
+    assert (root / "etc/systemd/system" / ("reasoning-modal-" + worker["enrollment"]["id"] + ".service")).read_bytes() == existing_unit
+    assert "as_fixture_secret" not in str(calls)
+    assert ["systemctl", "enable", "--now", "reasoning-modal-" + "f" * 32] in calls
+    assert not any(call[:2] in (["systemctl", "stop"], ["systemctl", "disable"]) for call in calls)
+    assert not any(call[-1] == "reasoning-modal-" + worker["enrollment"]["id"] and call[:2] == ["systemctl", "enable"]
+                   for call in calls)
+
+
+def test_adding_an_image_after_an_upgrade_runs_new_relays_from_the_installed_release(addition):
+    root, request, new, worker, installer, calls, _ = addition
+    upgraded = "8" * 64
+    original = root / "opt/reasoning/releases" / ("a" * 64)
+    target = root / "opt/reasoning/releases" / upgraded
+    (target / "wheel").mkdir(parents=True)
+    for name in ("modal-requirements.txt", "manifest.json", "wheel/reasoning_ledger-0.1.0-py3-none-any.whl"):
+        (target / name).write_bytes((original / name).read_bytes())
+    path = root / "var/lib/reasoning-deploy/installation.json"
+    write_document(path, {**json.loads(path.read_text()), "release_id": upgraded})
+    request = {**request, "release_id": upgraded}
+    with pytest.raises(InstallError, match="inputs changed"):
+        installer.install({"format": 1, "release_id": upgraded, "setup_id": "b" * 64, "public_url": request["public_url"],
+                           "images": [IMAGE], "workers": []}, "prepare")
+
+    installer.add_images(request, "extend")
+    installer.add_images({**request, "workers": [new]}, "relays")
+
+    unit = (root / "etc/systemd/system" / ("reasoning-modal-" + "f" * 32 + ".service")).read_text()
+    assert f"/opt/reasoning/modal/{upgraded}/venv/bin/reasoning-compute-worker" in unit
+    old = (root / "etc/systemd/system" / ("reasoning-modal-" + worker["enrollment"]["id"] + ".service")).read_text()
+    assert "/opt/reasoning/modal/" + "a" * 64 + "/venv" in old
+
+
+@pytest.mark.parametrize("change", ["host-catalog", "replaced-image", "relays-first", "limits", "source", "unsafe-source", "journal"])
+def test_image_addition_refuses_changes_it_cannot_prove_safe(addition, change):
+    root, request, new, worker, installer, calls, _ = addition
+    value = copy.deepcopy(request)
+    operation = "extend"
+    match = None
+    if change == "host-catalog":
+        (root / "etc/reasoning/compute-images.json").write_text(json.dumps([{**IMAGE, "name": "Changed"}]))
+        match = "catalog changed"
+    elif change == "replaced-image":
+        value["images"] = sorted([{**IMAGE, "name": "Replaced"}, TEX], key=lambda record: record["id"])
+        match = "invalid Modal image addition"
+    elif change == "relays-first":
+        value["workers"], operation, match = [new], "relays", "extend the image catalog"
+    elif change == "limits":
+        installer.add_images(request, "extend")
+        changed = copy.deepcopy(new)
+        changed["enrollment"]["resources"]["cpu"] = 2
+        value["workers"], operation, match = [changed], "relays", "differ from the source relay"
+    elif change == "source":
+        value["source_worker"], match = "7" * 32, "source Modal relay"
+    elif change == "unsafe-source":
+        (root / "var/lib/reasoning-modal" / worker["enrollment"]["id"] / "modal-profile.json").chmod(0o640)
+        match = "source Modal relay profile"
+    else:
+        installer.add_images(request, "extend")
+        value["images"] = sorted([IMAGE, TEX, {**TEX, "id": "tex-two"}], key=lambda record: record["id"])
+        match = "addition inputs changed"
+    before = (root / "etc/reasoning/compute-images.json").read_bytes()
+    calls.clear()
+    with pytest.raises(InstallError, match=match):
+        installer.add_images(value, operation)
+    assert (root / "etc/reasoning/compute-images.json").read_bytes() == before
+    assert not any(call[:2] == ["systemctl", "enable"] for call in calls)
+    assert not (root / "var/lib/reasoning-modal" / ("f" * 32)).exists()
+
+
+def test_image_addition_requires_an_installed_modal_setup(host):
+    root, payload, worker, installer, calls, _ = host
+    request = {"format": 1, "release_id": payload["release_id"], "addition_id": "9" * 64, "public_url": payload["public_url"],
+               "previous": [IMAGE], "images": sorted([IMAGE, TEX], key=lambda record: record["id"]),
+               "source_worker": worker["enrollment"]["id"], "workers": []}
+    with pytest.raises(InstallError, match="installed Modal setup"):
+        installer.add_images(request, "extend")
+    assert calls == []

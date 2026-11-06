@@ -62,6 +62,7 @@ help:
 		'make bot-cloud-enable  Operator opt-in for web installer outbound SSH; no inbound SSH change' \
 		'make compute-images Build and exercise the compute images on GitHub Actions (no local Docker)' \
 		'make compute-setup Enable Modal compute for this existing deployment, with CLI consent' \
+		'make compute-add-images Add approved images and their own Modal relays to existing compute' \
 		'make compute-source-publish Publish a maintainer source archive to Spaces, with private CLI consent' \
 		'make compute-publish Sign exact observed-source provenance and verify public images on hosted runners' \
 		'make email-setup   Enable Resend invitations and verification on this existing deployment' \
@@ -123,7 +124,7 @@ bot-run: check-uv
 bot-status bot-doctor: check-uv
 	@$(UV) run --locked reasoning-bot $(patsubst bot-%,%,$@) --state-dir "$(BOT_STATE)" --config "$(BOT_CONFIG)"
 
-.PHONY: compute-images compute-setup _compute-setup compute-source-publish compute-publish
+.PHONY: compute-images compute-setup _compute-setup compute-add-images _compute-add-images compute-source-publish compute-publish
 compute-publish: check-uv
 	@$(UV) run --locked --extra publication python -m reasoning_ledger.compute_publish \
 		--source-root "$(CURDIR)" --state "$(COMPUTE_PUBLICATION_STATE)" --source-state "$(SOURCE_STATE)" \
@@ -147,6 +148,14 @@ compute-setup: check-uv check-deploy-tools
 _compute-setup:
 	@$(UV) run --locked --extra modal reasoning-deploy operator-sync --state-dir "$(DEPLOY_STATE)" --require-no-pending-upgrade
 	@$(UV) run --locked --extra modal reasoning-deploy compute-setup --state-dir "$(DEPLOY_STATE)"
+
+compute-add-images: check-uv check-deploy-tools
+	@$(UV) run --locked reasoning-deploy operator-session --state-dir "$(DEPLOY_STATE)" -- \
+		$(MAKE) --no-print-directory _compute-add-images DEPLOY_STATE="$(DEPLOY_STATE)"
+
+_compute-add-images:
+	@$(UV) run --locked reasoning-deploy operator-sync --state-dir "$(DEPLOY_STATE)" --require-no-pending-upgrade
+	@$(UV) run --locked reasoning-deploy compute-add-images --state-dir "$(DEPLOY_STATE)"
 
 .PHONY: email-setup _email-setup
 email-setup: check-uv check-deploy-tools

@@ -95,3 +95,17 @@ def test_modal_upload_refuses_changed_provider_resources_or_url_before_ssh(prepa
     with pytest.raises(InstallError):
         owned_modal_remote(config, document, directory, bundle, value, "prepare", command=command)
     assert calls == [] and len(provider.writes) == writes
+
+
+def test_image_addition_needs_an_installed_release_that_has_the_host_operation(prepared):
+    config, document, directory, bundle, value, command, calls, _, provider, _ = prepared
+    tex = {**IMAGE, "id": "tex", "reference": "registry.example.org/research/tex@sha256:" + "e" * 64}
+    addition = {"format": 1, "release_id": value["release_id"], "addition_id": "9" * 64, "public_url": value["public_url"],
+                "previous": [IMAGE], "images": sorted([IMAGE, tex], key=lambda record: record["id"]),
+                "source_worker": "1" * 32, "workers": []}
+    writes = len(provider.writes)
+    with pytest.raises(InstallError, match="can add Modal images"):
+        owned_modal_remote(config, document, directory, bundle, addition, "extend", command=command)
+    with pytest.raises(InstallError, match="invalid Modal image addition"):
+        owned_modal_remote(config, document, directory, bundle, {**addition, "images": [IMAGE]}, "extend", command=command)
+    assert calls == [] and len(provider.writes) == writes

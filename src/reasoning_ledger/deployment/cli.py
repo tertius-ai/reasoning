@@ -537,6 +537,9 @@ def main(argv: list[str] | None = None, *, raise_errors: bool = False) -> int:
     )
     compute_setup = commands.add_parser("compute-setup", help="enable Modal compute on an existing synchronized organization")
     compute_setup.add_argument("--state-dir", type=Path, default=Path.home() / ".reasoning-deploy")
+    compute_images = commands.add_parser(
+        "compute-add-images", help="add approved images and their own relays to an existing Modal installation")
+    compute_images.add_argument("--state-dir", type=Path, default=Path.home() / ".reasoning-deploy")
     mail_setup = commands.add_parser("email-setup", help="enable Resend mail on an existing synchronized managed deployment")
     mail_setup.add_argument("--state-dir", type=Path, default=Path.home() / ".reasoning-deploy")
     upgrade_stage = commands.add_parser("upgrade-stage", help="retain the currently installed release before building its replacement")
@@ -950,6 +953,15 @@ def main(argv: list[str] | None = None, *, raise_errors: bool = False) -> int:
                 result = run_compute_setup(args.state_dir, lambda arguments: main(arguments, raise_errors=True))
             except (EOFError, KeyboardInterrupt):
                 raise InstallError("compute setup stopped; preserve its private directory and resume the same command") from None
+        elif args.command == "compute-add-images":
+            from .compute_images import run_add_images
+
+            if not sys.stdin.isatty():
+                raise InstallError("add compute images in your terminal; consent and the administrator password belong in the CLI")
+            try:
+                result = run_add_images(args.state_dir, lambda arguments: main(arguments, raise_errors=True))
+            except (EOFError, KeyboardInterrupt):
+                raise InstallError("adding images stopped; preserve its private directory and resume the same command") from None
         elif args.command == "email-setup":
             from .mail_setup import run_mail_setup
 
