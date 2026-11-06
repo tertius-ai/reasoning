@@ -113,6 +113,10 @@ def apt_sources(components: list[dict], payload: Path, *, snapshot: str, keyring
         state = Path(temporary)
         for directory in ("lists/partial", "cache/archives/partial"):
             (state / directory).mkdir(parents=True)
+        # An empty package database: the collecting host's installed packages must not
+        # stand in for the image's. apt resolves a name it finds installed to that
+        # installed version, so "ucf=3.0043" fails on a host with ucf 3.0043+nmu1.
+        (state / "status").write_bytes(b"")
         source_list = state / "sources.list"
         source_list.write_text(
             "".join(
@@ -138,6 +142,8 @@ def apt_sources(components: list[dict], payload: Path, *, snapshot: str, keyring
             "Dir::State=" + str(state),
             "-o",
             "Dir::State::lists=" + str(state / "lists"),
+            "-o",
+            "Dir::State::status=" + str(state / "status"),
             "-o",
             "Dir::Cache=" + str(state / "cache"),
             "-o",

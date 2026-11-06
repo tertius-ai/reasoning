@@ -214,6 +214,9 @@ def test_apt_collection_uses_isolated_signed_indexes_and_records_unavailable_ver
         assert "APT::Get::AllowUnauthenticated=false" in argv
         assert "Dir::Etc::parts=-" in argv and "Dir::Etc::main=-" in argv
         assert "Dir::Etc::Trusted=" + str(keyring) in argv
+        status = next(Path(item.split("=", 1)[1]) for item in argv if item.startswith("Dir::State::status="))
+        assert status.parent == Path(next(item for item in argv if item.startswith("Dir::State=")).split("=", 1)[1])
+        assert status.read_bytes() == b"", "the collecting host's installed packages must not resolve image sources"
         assert "--allow-unauthenticated" not in argv
         if argv[-1] == "update":
             (cwd / "lists" / "fixture_InRelease").write_bytes(b"synthetic signed index receipt")
