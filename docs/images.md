@@ -278,6 +278,22 @@ Ubuntu package whose exact source package is collected from the authenticated
 snapshots. Add `--ubuntu-snapshot` for the base image's date (for example
 `20260930T000000Z`) if some base package versions were superseded by the TeX
 snapshot.
+
+The collector needs `apt-get`. Without a Linux maintainer machine, dispatch
+`.github/workflows/compute-sources.yml` for the `tex` profile with the ID of a
+successful manual **Compute image acceptance** run that retained the candidate:
+
+```sh
+gh workflow run compute-sources.yml -f profile=tex -f candidate_run_id=RUN_ID
+```
+
+It checks that run with `reasoning_ledger.image_candidate`, checks out the run's
+exact revision, reads the candidate's installed SBOM from its acceptance artifact,
+and collects against the snapshots in `ubuntu_snapshots` with the runner's Ubuntu
+archive keyring. It fails, listing them, when any installed source version stays
+unresolved. Otherwise it keeps `sources.tar` and `source-review.draft.json` for
+seven days as `sources-REVISION-tex`. The workflow uses read-only repository and
+Actions permissions and uploads nothing else.
 The Noether checkout supplies the immutable approved source commit; collection
 does not edit that checkout or run its scripts. The collector conveys the whole
 checksummed Cargo.lock registry-source superset, including build/development

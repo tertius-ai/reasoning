@@ -522,3 +522,23 @@ def test_multiple_signed_snapshots_only_retry_unresolved_exact_versions(tmp_path
     assert calls == [("20261006T000000Z", ["glibc", "other"]), ("20250215T000000Z", ["other"])]
     report = json.loads((tmp_path / "output/payload/collection.json").read_bytes())
     assert len(report["apt_attempts"]) == 2 and not any("source_version" in item for item in report["unresolved"])
+
+
+def test_hosted_source_collection_checks_the_candidate_and_keeps_only_the_bundle_and_draft():
+    import re
+
+    root = Path(__file__).resolve().parents[1]
+    workflow = (root / ".github/workflows/compute-sources.yml").read_text()
+    assert "workflow_dispatch:" in workflow and "pull_request:" not in workflow and "push:" not in workflow
+    assert re.search(r"^permissions:\n  contents: read\n  actions: read\n\n", workflow, re.MULTILINE)
+    assert "write" not in workflow
+    assert set(re.findall(r"secrets\.([A-Z_]+)", workflow)) == {"GITHUB_TOKEN"}
+    assert "options: [tex]" in workflow, "profiles with Noether or upstream archives are collected on a maintainer machine"
+    order = ["image_candidate", "ref: ${{ steps.candidate.outputs.revision }}", "acceptance-$REVISION", "image_sources",
+             "set(item) != {\"reason\"}", "upload-artifact"]
+    assert [workflow.index(step) for step in order] == sorted(workflow.index(step) for step in order)
+    assert "--ubuntu-keyring /usr/share/keyrings/ubuntu-archive-keyring.gpg" in workflow
+    uploaded = workflow.split("upload-artifact", 1)[1].split("if-no-files-found", 1)[0]
+    assert "sources/sources.tar" in uploaded and "sources/source-review.draft.json" in uploaded
+    assert "payload" not in uploaded and "download-failures" not in uploaded
+    assert "retention-days: 7" in workflow and "persist-credentials: false" in workflow
