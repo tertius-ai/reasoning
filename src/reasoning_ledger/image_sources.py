@@ -6,6 +6,7 @@ Copyright Benjamin Antieau and Deven Manam. SPDX-License-Identifier: Apache-2.0
 from __future__ import annotations
 
 import argparse
+import gzip
 import hashlib
 import io
 import json
@@ -16,7 +17,7 @@ import subprocess
 import tarfile
 import tempfile
 import uuid
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 import httpx
 
@@ -26,6 +27,9 @@ from .image_release import PROFILES, BoundedTarInfo, command, member_name, profi
 from .server.compute_catalog import canonical
 
 MAX_ARTIFACT = 8 * 1024**3
+NOTICE_NAME = re.compile(r"(?:licen[sc]e|copying|copyright|notice)(?:[._-].*)?")
+NOTICE_BYTES = 4 * 1024**2
+HUNK = re.compile(rb"@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@.*\n?", re.DOTALL)
 NOETHER_PIN = NOETHER_PUBLIC_COMMIT
 
 
@@ -380,17 +384,105 @@ def rust_notices(payload: Path, destination: Path, artifact: dict, noether: dict
     return records
 
 
+def bounded_lines(stream, limit: int):
+    """Yield (line prefix, overlong) without holding a line longer than `limit` in memory."""
+    while line := stream.readline(limit + 1):
+        if len(line) <= limit or line.endswith(b"\n"):
+            yield line, False
+            continue
+        while (rest := stream.readline(limit + 1)) and not rest.endswith(b"\n"):
+            pass
+        yield line, True
+
+
+def diff_notices(path: Path):
+    """Yield (member, content) for notice files that a Debian 1.0 source diff creates whole.
+
+    Format-1.0 packages carry `debian/copyright` only in their `.diff.gz`. A file
+    counts as created when its only hunk is `@@ -0,0 +1,N @@`; changes to upstream
+    files are not reconstructed, because the original tarball supplies those.
+    """
+    malformed = "Debian source diff notice is malformed or oversized; manual collection required"
+    with gzip.open(path, "rb") as stream:
+        lines = bounded_lines(stream, NOTICE_BYTES)
+        line = next(lines, None)
+        while line is not None:
+            if line[1] or not line[0].startswith(b"--- "):
+                line = next(lines, None)
+                continue
+            target = next(lines, None)
+            if target is None or target[1] or not target[0].startswith(b"+++ "):
+                line = target
+                continue
+            name = target[0][4:].rstrip(b"\r\n").split(b"\t", 1)[0].decode("utf-8", "surrogateescape")
+            wanted = NOTICE_NAME.fullmatch(PurePosixPath(name).name.lower()) is not None
+            body, hunks, size = [], 0, 0
+            line = next(lines, None)
+            while line is not None and not line[1] and (hunk := HUNK.fullmatch(line[0])):
+                old_start, old, new = int(hunk[1]), int(hunk[2] or 1), int(hunk[4] or 1)
+                hunks += 1
+                creating = wanted and hunks == 1 and old_start == 0 and old == 0
+                previous = None
+                while True:
+                    line = next(lines, None)
+                    if line is not None and line[0].startswith(b"\\"):
+                        if creating and previous == b"+":
+                            body[-1] = body[-1].removesuffix(b"\n")
+                        continue
+                    if not old and not new:
+                        break
+                    if line is None:
+                        raise ValueError(malformed)
+                    kind = line[0][:1]
+                    if kind == b" ":
+                        old, new = old - 1, new - 1
+                    elif kind == b"-":
+                        old -= 1
+                    elif kind == b"+":
+                        new -= 1
+                        if creating:
+                            size += len(line[0]) - 1
+                            if line[1] or size > NOTICE_BYTES:
+                                raise ValueError(malformed)
+                            body.append(line[0][1:])
+                    else:
+                        raise ValueError(malformed)
+                    if old < 0 or new < 0:
+                        raise ValueError(malformed)
+                    previous = kind
+            if hunks == 1 and wanted and body:
+                yield name, b"".join(body)
+
+
 def notices(payload: Path, retained: list[dict] | None = None) -> list[dict]:
     """Copy only bounded regular notice members; never extract upstream paths or follow links."""
     records = list(retained or [])
     total = sum(item["bytes"] for item in records)
     directory = payload / "notices"
     directory.mkdir(exist_ok=True)
+
+    def keep(path: Path, member: str, content: bytes) -> None:
+        nonlocal total
+        if len(content) > NOTICE_BYTES or len(records) >= 10000 or total + len(content) > 64 * 1024**2:
+            raise ValueError("source notice inventory exceeds its bounded allowance; manual collection required")
+        total += len(content)
+        identity = hashlib.sha256((str(path.relative_to(payload)) + "\0" + member).encode()).hexdigest()
+        name = "notices/" + identity + ".txt"
+        write_new(payload / name, content)
+        records.append(
+            {
+                "path": name,
+                "archive": str(path.relative_to(payload)),
+                "member": member,
+                "sha256": hashlib.sha256(content).hexdigest(),
+                "bytes": len(content),
+            }
+        )
+
     candidates = [*sorted((payload / "upstream").iterdir()), *sorted((payload / "cargo").glob("*"))]
+    apt = sorted(path for path in (payload / "apt").rglob("*") if path.is_file())
     candidates.extend(
-        path
-        for path in sorted((payload / "apt").rglob("*"))
-        if path.is_file() and path.name.endswith((".tar", ".tar.gz", ".tar.bz2", ".tar.xz", ".tgz", ".tbz", ".tbz2", ".txz"))
+        path for path in apt if path.name.endswith((".tar", ".tar.gz", ".tar.bz2", ".tar.xz", ".tgz", ".tbz", ".tbz2", ".txz"))
     )
     if (payload / "noether-source.tar").exists():
         candidates.append(payload / "noether-source.tar")
@@ -398,25 +490,15 @@ def notices(payload: Path, retained: list[dict] | None = None) -> list[dict]:
         with tarfile.open(path, "r|*", tarinfo=BoundedTarInfo) as archive:
             for entry in archive:
                 archive.members.clear()
-                basename = Path(entry.name).name.lower()
-                if not entry.isreg() or not re.fullmatch(r"(?:licen[sc]e|copying|copyright|notice)(?:[._-].*)?", basename):
+                if not entry.isreg() or not NOTICE_NAME.fullmatch(Path(entry.name).name.lower()):
                     continue
-                if entry.size > 4 * 1024**2 or len(records) >= 10000 or total + entry.size > 64 * 1024**2:
+                if entry.size > NOTICE_BYTES:
                     raise ValueError("source notice inventory exceeds its bounded allowance; manual collection required")
-                content = archive.extractfile(entry).read()
-                total += len(content)
-                identity = hashlib.sha256((str(path.relative_to(payload)) + "\0" + entry.name).encode()).hexdigest()
-                name = "notices/" + identity + ".txt"
-                write_new(payload / name, content)
-                records.append(
-                    {
-                        "path": name,
-                        "archive": str(path.relative_to(payload)),
-                        "member": entry.name,
-                        "sha256": hashlib.sha256(content).hexdigest(),
-                        "bytes": len(content),
-                    }
-                )
+                keep(path, entry.name, archive.extractfile(entry).read())
+    for path in apt:
+        if path.name.endswith(".diff.gz"):
+            for member, content in diff_notices(path):
+                keep(path, member, content)
     write_new(directory / "inventory.json", canonical(records).encode())
     return records
 
@@ -612,19 +694,18 @@ def assemble(
                 "need exact corresponding build/source review"
             }
         )
+    notice_bytes = {notice["path"]: notice["bytes"] for notice in notice_records}
     for item in components:
         item["source_candidates"] = candidates(item, artifacts, payload, apt)
         origins = notice_origins(item, artifacts)
         item["notice_candidates"] = [notice["path"] for notice in notice_records if notice["archive"] in origins]
+        reason = None
         if not item["source_candidates"]:
-            unresolved.append(
-                {
-                    "id": item["id"],
-                    "name": item["name"],
-                    "version": item["version"],
-                    "reason": "no retained exact source candidate was found for this installed component",
-                }
-            )
+            reason = "no retained exact source candidate was found for this installed component"
+        elif not any(notice_bytes[path] > 0 for path in item["notice_candidates"]):
+            reason = "no retained non-empty notice was found in this component's source candidates"
+        if reason:
+            unresolved.append({"id": item["id"], "name": item["name"], "version": item["version"], "reason": reason})
     report = {
         "format": 1,
         "profile": profile,

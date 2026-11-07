@@ -290,10 +290,10 @@ gh workflow run compute-sources.yml -f profile=tex -f candidate_run_id=RUN_ID
 It checks that run with `reasoning_ledger.image_candidate`, checks out the run's
 exact revision, reads the candidate's installed SBOM from its acceptance artifact,
 and collects against the snapshots in `ubuntu_snapshots` with the runner's Ubuntu
-archive keyring. It fails, listing them, when any installed source version stays
-unresolved. Otherwise it keeps `sources.tar` and `source-review.draft.json` for
-seven days as `sources-REVISION-tex`. The workflow uses read-only repository and
-Actions permissions and uploads nothing else.
+archive keyring. It fails, listing them, when any installed component lacks an
+exact source version or a non-empty notice. Otherwise it keeps `sources.tar` and
+`source-review.draft.json` for seven days as `sources-REVISION-tex`. The workflow
+uses read-only repository and Actions permissions and uploads nothing else.
 The Noether checkout supplies the immutable approved source commit; collection
 does not edit that checkout or run its scripts. The collector conveys the whole
 checksummed Cargo.lock registry-source superset, including build/development
@@ -315,12 +315,16 @@ SHA256-checked; `--cached-archives /path/to/cache` reuses only identical verifie
 bytes, and `--cached-crates /path/to/crate-cache` does the same against Cargo.lock.
 The bundle retains recipe material, installed inventory, signed apt-index
 evidence when available, source archives, copied regular license/notice members,
-and explicit unresolved requirements. Incomplete apt downloads remain recoverable
-under private `download-failures/`, outside the bundle and notice scan; their
-unresolved records identify that relative location. Upstream archive paths are
-never extracted or executed.
+and explicit unresolved requirements. A component whose source candidates hold no
+non-empty notice is unresolved, as is one with no source candidate. Incomplete
+apt downloads remain recoverable under private `download-failures/`, outside the
+bundle and notice scan; their unresolved records identify that relative location.
+Upstream archive paths are never extracted or executed.
 Detached OS source signatures remain in the bundle as evidence; the notice scan
-opens only supported tar archive suffixes, not signature sidecars or `.dsc` files.
+opens only supported tar archive suffixes and Debian source-format-1.0
+`.diff.gz` patches, not signature sidecars or `.dsc` files. From a patch it copies
+only notice files that the patch creates whole, such as `debian/copyright`;
+changed upstream notices come from the original tarball.
 Full Sage/Julia archives and duplicate retained payload/bundle bytes
 require several gigabytes of local disk.
 

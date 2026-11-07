@@ -104,7 +104,7 @@ jobs:
           for item in concrete:
               print("- " + json.dumps(item, sort_keys=True))
           if concrete:
-              print("Add an Ubuntu snapshot that still lists these exact versions, then run again.")
+              print("Each reason says what is missing. For a missing source version, add an Ubuntu snapshot that still lists it, then run again.")
               sys.exit(1)
           EOF
       - name: Retain the source bundle and its draft review

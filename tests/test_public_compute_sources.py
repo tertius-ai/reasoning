@@ -176,6 +176,97 @@ def test_os_source_signature_sidecars_are_retained_but_not_scanned_as_tar(tmp_pa
     assert (tmp_path / records[0]["path"]).read_bytes() == b"synthetic source notice"
 
 
+CREATED_COPYRIGHT = (
+    b"--- pkg-1.0.orig/debian/copyright\n+++ pkg-1.0/debian/copyright\t2026-01-01 00:00:00\n@@ -0,0 +1,2 @@\n"
+    b"+Copyright: synthetic fixture authors\n+last line\n\\ No newline at end of file\n"
+)
+
+
+def test_debian_1_0_diff_notice_is_rebuilt_only_for_files_the_diff_creates(tmp_path):
+    (tmp_path / "upstream").mkdir()
+    directory = tmp_path / "apt/20261006T000000Z/fixture"
+    directory.mkdir(parents=True)
+    diff = (
+        # Changed upstream notices come from the original tarball, not from the diff.
+        b"--- pkg-1.0.orig/COPYING\n+++ pkg-1.0/COPYING\n@@ -1,2 +1,2 @@\n line one\n-old notice\n+new notice\n"
+        # Header-shaped lines inside a hunk are counted as content, never parsed as a file.
+        b"--- pkg-1.0.orig/debian/control\n+++ pkg-1.0/debian/control\n@@ -1,3 +1,3 @@\n Source: pkg\n"
+        b"--- pkg-1.0.orig/debian/NOTICE\n+++ pkg-1.0/debian/NOTICE\n context\n"
+        + CREATED_COPYRIGHT
+        + b"--- pkg-1.0.orig/debian/rules\n+++ pkg-1.0/debian/rules\n@@ -0,0 +1 @@\n+#!/usr/bin/make -f\n"
+    )
+    (directory / "pkg_1.0-1.diff.gz").write_bytes(gzip.compress(diff))
+    records = sources.notices(tmp_path)
+    assert [(item["archive"], item["member"]) for item in records] == [
+        ("apt/20261006T000000Z/fixture/pkg_1.0-1.diff.gz", "pkg-1.0/debian/copyright")
+    ]
+    assert (tmp_path / records[0]["path"]).read_bytes() == b"Copyright: synthetic fixture authors\nlast line"
+    assert not (tmp_path / "debian").exists() and not (tmp_path / "pkg-1.0").exists()
+
+
+@pytest.mark.parametrize(
+    "diff",
+    [
+        b"--- p.orig/debian/copyright\n+++ p/debian/copyright\n@@ -0,0 +1,3 @@\n+only one line\n",
+        b"--- p.orig/debian/copyright\n+++ p/debian/copyright\n@@ -0,0 +1,2 @@\n+one\n?not a diff line\n",
+        b"--- p.orig/debian/copyright\n+++ p/debian/copyright\n@@ -0,0 +1,1 @@\n+" + b"x" * (4 * 1024**2 + 1) + b"\n",
+    ],
+)
+def test_truncated_malformed_or_oversized_diff_notices_are_refused(tmp_path, diff):
+    (tmp_path / "upstream").mkdir()
+    directory = tmp_path / "apt/20261006T000000Z/fixture"
+    directory.mkdir(parents=True)
+    (directory / "p_1-1.diff.gz").write_bytes(gzip.compress(diff))
+    with pytest.raises(ValueError, match="manual collection required"):
+        sources.notices(tmp_path)
+    assert not list((tmp_path / "notices").glob("*.txt"))
+
+
+def test_component_with_sources_but_no_notice_is_a_concrete_unresolved_record(tmp_path, monkeypatch):
+    sbom = tmp_path / "sbom.json"
+    sbom.write_text(json.dumps({"packages": [component("fonts", source="fonts"), component("bare", source="bare")]}))
+    lock = tmp_path / "lock.json"
+    other = {
+        "id": "source",
+        "profiles": ["research-cpu"],
+        "file": "source.tar.gz",
+        "url": "https://source.example.org/source.tar.gz",
+        "sha256": "a" * 64,
+    }
+    lock.write_text(json.dumps({"format": 1, "artifacts": [other]}))
+    keyring = tmp_path / "keyring"
+    keyring.write_bytes(b"synthetic keyring")
+    recipe = archive_bytes({"images/tex/inputs.json": b"synthetic recipe"})
+    monkeypatch.setattr(sources, "command", lambda argv, cwd: ("a" * 40 + "\n").encode() if argv[1] == "rev-parse" else recipe)
+
+    def apt(components, payload, *, snapshot, keyring):
+        directory = payload / "apt" / snapshot / "fixture"
+        directory.mkdir(parents=True, exist_ok=True)
+        (directory / "fonts_2.35-1.diff.gz").write_bytes(gzip.compress(CREATED_COPYRIGHT))
+        (directory / "fonts_2.35-1.dsc").write_bytes(b"synthetic authenticated source fixture")
+        (directory / "bare_2.35-1.dsc").write_bytes(b"synthetic source without any notice")
+        base = "apt/" + snapshot + "/fixture/"
+        return {
+            ("fonts", "2.35-1"): [base + "fonts_2.35-1.diff.gz", base + "fonts_2.35-1.dsc"],
+            ("bare", "2.35-1"): [base + "bare_2.35-1.dsc"],
+        }, []
+
+    monkeypatch.setattr(sources, "apt_sources", apt)
+    sources.assemble(tmp_path, sbom, lock, tmp_path / "output", profile="tex", snapshot=["20261006T000000Z"], keyring=keyring)
+    report = json.loads((tmp_path / "output/payload/collection.json").read_bytes())
+    concrete = [item for item in report["unresolved"] if set(item) != {"reason"}]
+    assert concrete == [
+        {
+            "id": "SPDXRef-bare",
+            "name": "bare",
+            "version": "2.35",
+            "reason": "no retained non-empty notice was found in this component's source candidates",
+        }
+    ]
+    fonts = next(item for item in report["components"] if item["name"] == "fonts")
+    assert len(fonts["notice_candidates"]) == 1
+
+
 def test_cargo_superset_uses_exact_lock_checksums_without_running_builds(tmp_path, monkeypatch):
     cargo = """version = 3
 [[package]]
