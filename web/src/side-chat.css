@@ -7,55 +7,90 @@
 .org-side-chat > header div { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
 .org-side-chat > header h2 { margin: 0; font-size: 13px; font-weight: 600; }
 .org-side-chat > header small { overflow: hidden; color: var(--muted); font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
-.org-side-transcript { flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 12px; padding: 12px 14px; overflow: auto; overscroll-behavior: contain; }
+.org-side-transcript { flex: 1; min-height: 0; display: flex; flex-direction: column; padding: 8px 10px 12px; overflow: auto; overscroll-behavior: contain; }
 .org-side-empty { color: var(--muted); font-size: 12.5px; line-height: 1.5; }
 .org-side-empty p { margin: 0 0 8px; }
-/* A dashed rail marks side messages, here and in a brought group. */
-.org-side-message { padding-left: 10px; border-left: 2px dashed color-mix(in srgb, var(--blue) 55%, transparent); border-radius: 0; font-size: 13.5px; line-height: 1.55; overflow-wrap: anywhere; }
-.org-side-message > header { display: flex; align-items: baseline; gap: 8px; font-size: 12px; }
-.org-side-message > header strong { font-weight: 600; }
-.org-side-message-assistant > header strong { color: var(--amber); }
-.org-side-message > header time { color: var(--muted); font-size: 11px; }
-.org-side-message p { margin: 4px 0; }
-.org-side-bring-button, .org-side-bring-actions button, .org-side-working button { padding: 2px 10px; border: 1px solid var(--border-strong); border-radius: var(--radius-pill); background: transparent; color: var(--foreground); font: 12px var(--font-sans); cursor: pointer; }
-.org-side-bring-button { margin-top: 4px; }
-.org-side-bring-button[aria-expanded="true"], .org-side-primary { border-color: color-mix(in srgb, var(--blue) 55%, transparent) !important; background: color-mix(in srgb, var(--blue) 16%, transparent) !important; color: var(--blue) !important; }
-.org-side-bring { margin-top: 6px; padding: 8px 10px; border: 1px solid var(--border-strong); border-radius: var(--radius-control); background: var(--surface-raised); font-size: 12.5px; line-height: 1.45; }
-.org-side-bring p { margin: 0 0 6px; }
-.org-side-bring ul { display: grid; gap: 4px; margin: 0 0 6px; padding: 0; list-style: none; }
-.org-side-bring label { display: flex; flex-direction: row; align-items: flex-start; gap: 7px; margin: 0; color: var(--muted); font-size: 12.5px; cursor: pointer; }
-.org-side-bring input[type="checkbox"] { flex: none; width: 14px; height: 14px; min-width: 0; margin: 3px 0 0; padding: 0; accent-color: var(--blue); }
-.org-side-bring label span { min-width: 0; overflow-wrap: anywhere; }
-.org-side-bring label strong { color: var(--foreground); font-weight: 600; }
-.org-side-bring-actions { display: flex; flex-wrap: wrap; gap: 6px; }
-.org-side-working { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 6px 10px; border: 1px dashed var(--border-strong); border-radius: var(--radius-control); color: var(--muted); font-size: 12.5px; }
+/* The conversation's groups and colors, with a dashed rail: a side chat is private. */
+.org-side-transcript .org-message-group { margin-block: 6px; }
+.org-side-transcript .org-message-group::before { width: 0; background: none; border-left: 1.5px dashed color-mix(in srgb, var(--speaker-tone) 70%, transparent); }
+.org-side-transcript .org-message { position: relative; font-size: 13.5px; line-height: 1.55; }
+.org-side-transcript .org-message p { margin: 4px 0; }
+/* A reply's tools show on hover or focus: copy, and Bring to chat (or a link to the post that brought it). */
+.org-side-actions { position: absolute; top: -6px; right: 4px; z-index: 1; display: flex; gap: 2px; padding: 2px; border: 1px solid var(--border-strong); border-radius: 8px; background: var(--surface-raised); opacity: 0; pointer-events: none; }
+.org-side-message:hover > .org-side-actions, .org-side-message:focus-within > .org-side-actions, .org-side-actions:has([aria-expanded="true"]) { opacity: 1; pointer-events: auto; }
+.org-side-actions button, .org-side-actions a { display: grid; place-items: center; width: 26px; height: 24px; padding: 0; border: none; border-radius: 6px; background: transparent; color: var(--muted); cursor: pointer; }
+.org-side-actions button:hover, .org-side-actions a:hover, .org-side-actions :focus-visible { background: var(--surface-2); color: var(--foreground); }
+.org-side-actions [aria-expanded="true"] { background: color-mix(in srgb, var(--blue) 16%, transparent); color: var(--blue); }
+@media (hover: none) { .org-side-actions { position: static; width: fit-content; margin-top: 4px; opacity: 1; pointer-events: auto; } }
+@media (prefers-reduced-motion: no-preference) { .org-side-actions { transition: opacity var(--motion, .12s); } }
+/* Bring to chat: the exchanges to post, an optional answer target, and your own words. */
+.org-side-bring { margin: 2px 0 8px 20px; padding: 8px 10px; border: 1px solid var(--border-strong); border-radius: var(--radius-control); background: var(--surface-raised); font-size: 12.5px; line-height: 1.45; }
+.org-side-bring-title { margin: 0 0 4px; font-size: 12.5px; font-weight: 600; }
+.org-side-exchanges { max-height: 220px; margin: 0 0 6px; padding: 0; overflow: auto; list-style: none; }
+.org-side-exchanges li { display: flex; align-items: flex-start; gap: 8px; padding: 5px 0; border-top: 1px solid var(--border); }
+.org-side-exchanges li > span:last-child, .org-side-exchanges label > span { display: flex; flex-direction: column; min-width: 0; }
+.org-side-exchanges strong { color: var(--foreground); font-weight: 500; }
+.org-side-exchanges small { overflow: hidden; color: var(--muted); font-size: 11.5px; text-overflow: ellipsis; white-space: nowrap; }
+.org-side-exchange-mark { display: grid; flex: none; place-items: center; width: 14px; margin-top: 1px; color: var(--blue); }
+.org-side-exchange-posted strong { color: var(--muted); }
+.org-side-exchanges label { display: flex; flex: 1; flex-direction: row; align-items: flex-start; gap: 8px; min-width: 0; margin: 0; color: inherit; font-size: inherit; cursor: pointer; }
+.org-side-exchanges input[type="checkbox"] { flex: none; width: 14px; height: 14px; min-width: 0; margin: 2px 0 0; padding: 0; accent-color: var(--blue); }
+.org-side-answer { display: flex; align-items: center; gap: 6px; margin: 2px 0 6px; padding: 3px 4px 3px 8px; border-radius: var(--radius-control); background: color-mix(in srgb, var(--blue) 10%, transparent); color: var(--muted); font-size: 12px; }
+.org-side-answer > span:nth-child(2) { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.org-side-answer strong { color: var(--blue); font-weight: 500; }
+.org-side-answer button { flex: none; width: 22px; height: 22px; padding: 0; border: none; border-radius: 6px; background: transparent; color: var(--muted); font-size: 15px; line-height: 1; cursor: pointer; }
+.org-side-words { display: block; width: 100%; min-height: 34px; max-height: 120px; padding: 6px 8px; box-sizing: border-box; border: 1px solid var(--border-strong); border-radius: var(--radius-control); background: var(--surface-2); color: var(--foreground); font: 13px/1.45 var(--font-sans); overflow-y: auto; resize: none; }
+.org-side-words:focus { border-color: color-mix(in srgb, var(--blue) 55%, transparent); outline: none; }
+.org-mention-menu.org-side-people { position: static; width: auto; max-height: 180px; margin-top: 4px; box-shadow: none; }
+.org-side-bring-actions { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 6px; margin-top: 8px; }
+.org-side-bring-actions small { margin-right: auto; color: var(--muted); font-size: 11px; }
+.org-side-bring-actions button, .org-side-working button { padding: 2px 10px; border: 1px solid var(--border-strong); border-radius: var(--radius-pill); background: transparent; color: var(--foreground); font: 12px var(--font-sans); cursor: pointer; }
+.org-side-primary { border-color: color-mix(in srgb, var(--blue) 55%, transparent) !important; background: color-mix(in srgb, var(--blue) 16%, transparent) !important; color: var(--blue) !important; }
+.org-side-bring-actions button:disabled { cursor: default; opacity: .55; }
+/* A reply's place while it is at work or after it ended without an answer: under the model's name, on the model's side. */
+.org-side-working { display: flex; align-items: center; gap: 12px; width: fit-content; max-width: 100%; margin: 4px 0; padding: 6px 10px; border: 1px dashed var(--border-strong); border-radius: var(--radius-control); color: var(--muted); font-size: 12.5px; }
 .org-side-ended { border-style: solid; }
+/* "+ Add" while your next message joins the reply. */
+.org-side-working .org-side-add[aria-pressed="true"] { border-color: color-mix(in srgb, var(--blue) 60%, transparent);
+  color: color-mix(in srgb, var(--blue) 80%, var(--foreground)); }
 .org-side-error { margin: 0 14px 6px; }
 .org-side-notice { margin: 0 14px 6px; color: var(--teal); font-size: 12px; }
-.org-side-composer { flex: none; margin: 0 12px 12px; padding: 8px 10px 6px; border: 1px solid var(--border-strong); border-radius: var(--radius-composer); background: var(--surface-2); }
-.org-side-composer textarea { display: block; width: 100%; min-height: 40px; max-height: 160px; padding: 0 2px; border: none; background: transparent; color: var(--foreground); font: 13.5px/1.5 var(--font-sans); resize: vertical; box-sizing: border-box; }
+.org-side-unsupported { margin: 0 14px 6px; color: var(--muted); font-size: 12px; }
+/* The box asks the conversation's chosen model; it grows with its text and has no size handle. */
+.org-side-composer { flex: none; display: flex; align-items: flex-end; gap: 6px; margin: 0 12px 12px; padding: 5px 5px 5px 12px; border: 1px solid var(--border-strong); border-radius: var(--radius-composer); background: var(--surface-2); }
+.org-side-composer textarea { flex: 1; min-width: 0; min-height: 24px; max-height: 160px; padding: 3px 0; box-sizing: border-box; border: none; background: transparent; color: var(--foreground); font: 13.5px/1.5 var(--font-sans); overflow-y: auto; resize: none; }
 .org-side-composer textarea:focus { outline: none; }
-.org-side-composer-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: 4px; }
-.org-side-composer-row small { min-width: 0; color: var(--muted); font-size: 11px; }
-.org-side-composer-row button { flex: none; padding: 3px 12px; border: 1px solid var(--border-strong); border-radius: var(--radius-pill); background: var(--surface-raised); color: var(--foreground); font: 12px var(--font-sans); cursor: pointer; }
-.org-side-composer-row button:disabled, .org-side-bring-actions button:disabled { cursor: default; opacity: .55; }
-/* Ledger statements a reply recorded: a short ID and the statement's start, the full text on hover. */
-.org-side-statements { display: flex; flex-wrap: wrap; gap: 4px; margin: 4px 0 0; padding: 0; list-style: none; }
-.org-side-statements li { display: inline-flex; align-items: baseline; gap: 5px; max-width: 100%; padding: 1px 8px; border-radius: var(--radius-pill); background: color-mix(in srgb, var(--teal) 14%, transparent); color: var(--teal); font-size: 11px; }
-.org-side-statement-id { flex: none; font-family: var(--font-mono); }
-.org-side-statement-text { overflow: hidden; color: var(--muted); text-overflow: ellipsis; white-space: nowrap; }
-/* A group brought into a topic: one header, one line per message until opened. */
-.org-side-group { min-width: min(320px, 100%); margin: 2px 0; padding: 6px 10px; text-align: left; border: 1px solid color-mix(in srgb, var(--blue) 40%, transparent); border-radius: var(--radius-card); }
-.org-side-group-toggle { display: flex; width: 100%; align-items: center; justify-content: space-between; gap: 8px; padding: 0; border: none; background: none; color: inherit; font: inherit; text-align: left; cursor: pointer; }
-.org-side-chip { display: inline-block; padding: 1px 9px; white-space: nowrap; border-radius: var(--radius-pill); background: color-mix(in srgb, var(--blue) 16%, transparent); color: var(--blue); font-size: 11.5px; }
-.org-side-group-action { flex: none; color: var(--muted); font-size: 11.5px; }
+/* A post brought from a side chat: its author's words, then the exchange as a card that opens in the right-hand panel. */
+.org-side-card { width: min(420px, 100%); margin: 4px 0 2px; border: 1px solid var(--border-strong); border-radius: var(--radius-card); background: var(--surface); text-align: left; }
+.org-side-card[data-open] { border-color: color-mix(in srgb, var(--blue) 55%, transparent); box-shadow: 0 0 0 2px color-mix(in srgb, var(--blue) 16%, transparent); }
+.org-side-card > .org-side-card-open { display: flex; align-items: center; gap: 10px; width: 100%; padding: 8px 10px; border: 0; border-radius: calc(var(--radius-card) - 1px); background: none; color: inherit; font: inherit; text-align: left; cursor: pointer; }
+.org-side-card-open:focus-visible { outline: 2px solid color-mix(in srgb, var(--blue) 55%, transparent); outline-offset: -2px; }
+.org-side-card-icon { display: grid; flex: none; place-items: center; width: 32px; height: 32px; border-radius: 8px; background: color-mix(in srgb, var(--blue) 16%, transparent); color: var(--blue); }
+.org-side-card-text { display: flex; flex: 1; flex-direction: column; min-width: 0; }
+.org-side-card-text strong { overflow: hidden; font-size: 13px; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
+.org-side-card-text small { overflow: hidden; color: var(--muted); font-size: 11.5px; text-overflow: ellipsis; white-space: nowrap; }
+.org-side-card-panel { display: grid; flex: none; color: var(--muted); }
+.org-side-card[data-open] .org-side-card-panel { color: var(--blue); }
+/* What the post builds on is the card's footer: a thin line above it, the text centered below the line. */
+/* Above a footer, the button's hover and focus keep square bottom corners. */
+.org-side-card[data-footer] > .org-side-card-open { border-bottom-left-radius: 0; border-bottom-right-radius: 0; }
+.org-side-card > .org-side-group-note { margin: 0; padding: 4px 10px 4px 52px; border-top: 1px solid var(--border); line-height: normal; }
 .org-side-group-note { margin: 6px 0 0; color: var(--muted); font-size: 12px; }
-.org-side-group-preview, .org-side-group-messages { display: grid; gap: 4px; margin: 6px 0 0; padding: 0; list-style: none; font-size: 13px; }
-.org-side-group-preview li { overflow: hidden; color: var(--muted); text-overflow: ellipsis; white-space: nowrap; }
-.org-side-group-messages > li { padding-left: 8px; border-left: 2px dashed color-mix(in srgb, var(--blue) 45%, transparent); border-radius: 0; }
-.org-side-group-messages p { margin: 4px 0; }
-.org-side-speaker { color: var(--foreground); font-weight: 600; }
-.org-side-speaker-assistant { color: var(--amber); }
+.org-side-group-link { color: var(--blue); }
+/* The exchange in the panel: read-only, in the side chat's style, with what it builds on and what to do next. */
+.org-side-chat[hidden] { display: none; }
+.org-brought-chain { padding: 6px 16px; border-bottom: 1px solid var(--border); }
+.org-brought-chain .org-side-group-note { margin: 0; }
+.org-brought-footer { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 6px; padding: 8px 12px 12px; border-top: 1px solid var(--border); }
+.org-brought-footer button { padding: 3px 12px; border: 1px solid var(--border-strong); border-radius: var(--radius-pill); background: transparent; color: var(--foreground); font: 12px var(--font-sans); cursor: pointer; }
+/* A side question about a post names it, and asking about one shows it above the box until you ask. */
+.org-side-about { margin: 0 0 2px; color: var(--blue); font-size: 12px; }
+.org-side-about button { padding: 0; border: none; background: none; color: inherit; font: inherit; text-align: left; cursor: pointer; }
+.org-side-about q { color: var(--foreground); }
+.org-side-about-bar { display: flex; align-items: center; gap: 6px; margin: 0 12px 6px; padding: 4px 4px 4px 10px; border-radius: var(--radius-control); background: color-mix(in srgb, var(--blue) 10%, transparent); color: var(--muted); font-size: 12px; }
+.org-side-about-bar > span:nth-child(2) { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.org-side-about-bar strong { color: var(--blue); font-weight: 500; }
+.org-side-about-bar button { flex: none; width: 22px; height: 22px; padding: 0; border: none; border-radius: 6px; background: transparent; color: var(--muted); font-size: 15px; line-height: 1; cursor: pointer; }
 @media (max-width: 1000px) {
   .org-side-chat { position: fixed; inset: 44px 0 0 auto; z-index: 23; width: min(360px, 92vw); box-shadow: var(--shadow-overlay); }
 }

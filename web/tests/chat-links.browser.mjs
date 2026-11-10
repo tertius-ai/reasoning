@@ -93,11 +93,15 @@ test("message links land on the message in long topics and # references stay acc
     if (process.env.REASONING_SCREENSHOT_DIR) await page.screenshot({ path: join(process.env.REASONING_SCREENSHOT_DIR, "message-link.png") });
     assert.equal(await page.locator("article.org-message").first().innerText().then(text => /Message 151\b/.test(text)), true);
     assert.ok(!writes.some(write => write.path.endsWith("/read")), "opening a link does not acknowledge unseen newer messages");
+    // The mark fades after a moment, and the address then drops the link, so a reload opens the topic as usual.
+    await linked.waitFor({ state: "detached", timeout: 6000 });
+    assert.equal(new URL(page.url()).searchParams.get("message"), null);
 
-    await linked.hover();
-    await linked.hover(); await linked.getByLabel("Message actions", { exact: true }).click();
+    const shown = page.locator(`article[data-message-id="${target.id}"]`);
+    await shown.hover();
+    await shown.hover(); await shown.getByLabel("Message actions", { exact: true }).click();
     await page.getByRole("menuitem", { name: "Copy link", exact: true }).click();
-    await linked.getByText("Link copied.", { exact: true }).waitFor();
+    await shown.getByText("Link copied.", { exact: true }).waitFor();
     const copied = await page.evaluate(() => window.__copied);
     assert.equal(copied, new URL(`/organization.html?organization=${org}&topic=${long}&message=${target.id}`, base).href);
 

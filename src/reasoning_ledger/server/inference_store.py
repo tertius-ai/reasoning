@@ -566,14 +566,16 @@ class InferenceStore:
             return result
 
     def take_additions(self, row: dict, step: int) -> list[dict]:
-        """Additions this attempt has not read yet, marked read at ``step``; none once the attempt is fenced."""
+        """Additions this attempt has not read yet, marked read at ``step``; none once the attempt is fenced. A topic reply
+        reads the topic messages added to it, a side reply the side messages."""
         from . import inference_additions
+        from .side_chat import take_additions as side_additions
 
         with self.store.transaction(write=True) as db:
             current = db.execute("SELECT status,attempt_id FROM llm_runs WHERE id=?", (row["id"],)).fetchone()
             if current is None or current["status"] != "running" or current["attempt_id"] != row["attempt_id"]:
                 return []
-            return inference_additions.take(db, self, row, step)
+            return inference_additions.take(db, self, row, step) + side_additions(db, self, row, step)
 
     def _request_cancel(self, db, org, row):
         if row["status"] == "queued":

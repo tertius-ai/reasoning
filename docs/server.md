@@ -586,9 +586,10 @@ Use the prefix `/api/organizations/{organization_id}` for organization resources
 | `{prefix}/inference-runs/{run_id}/additions` | POST | Author moves a later posted message into the running reply; its own queued reply is cancelled |
 | `{prefix}/inference-runs/{run_id}/additions/{message_id}` | DELETE | Author removes an addition the reply has not read |
 | `{prefix}/topics/{topic_id}/side-chat` | GET | Your private side chat in a beta topic: its newest messages, or those after `after`, and your latest side replies' runs |
-| `{prefix}/topics/{topic_id}/side-chat/messages` | POST | Add a question to your side chat; idempotent by `client_id` |
+| `{prefix}/topics/{topic_id}/side-chat/messages` | POST | Add a question to your side chat, optionally about a topic message (`about_message_id`), or with `adds_to` a message that joins your side reply at work; idempotent by `client_id` |
+| `{prefix}/topics/{topic_id}/side-chat/additions/{message_id}` | DELETE | Take back a message you added to a side reply that has not read it yet |
 | `{prefix}/topics/{topic_id}/side-chat/replies` | POST | Ask one model to answer a side question privately |
-| `{prefix}/topics/{topic_id}/side-chat/bring` | POST | Post chosen side messages to the topic as one message from you, shown as a folded group |
+| `{prefix}/topics/{topic_id}/side-chat/bring` | POST | Post your words and chosen side exchanges to the topic as one message from you, shown as a folded group; it may answer a topic message |
 | `{prefix}/compute-configuration` | GET | Approved compute images, organization policy, and quota balance |
 | `{prefix}/compute-policy` | PUT | Administrator compute admission/concurrency limits |
 | `{prefix}/topics/{topic_id}/compute-jobs` | GET, POST | Gamma compute job history and idempotent submission |
@@ -762,20 +763,37 @@ read it. Viewers can open theirs but cannot ask in it.
 `effort` and `max_completion_tokens` queues an ordinary run of the topic, with the same
 admission checks, limits and accounting as a topic reply. Its context is the topic's compiled
 context (instructions, memory, pins, ledger and recent messages) followed by the side chat up
-to that question, within the model's budget. The run is private: topic run listings, `/events`,
+to that question, within the model's budget. A question with `about_message_id`, which names a
+message of the same topic, also gives the run a note with that message's author, time and text,
+and lists it as `about` in the side chat. The run is private: topic run listings, `/events`,
 the research context, tool receipts and exports leave it out, and only its requester can read,
 follow or cancel it through the `inference-runs` routes; anyone else receives 404. Its answer
 is stored in the side chat, not the topic. A side reply may read the topic, project files, the
 ledger and outside sources, and may record ledger statements and references; it has no other
-write tools. Its ledger statements belong to the topic's ledger as usual. An answer lists the
-statements its run recorded or revised as `statements`.
+write tools. Its ledger statements belong to the topic's ledger as usual. An answer carries its
+run's `steps` and `usage`, as a topic reply does, and each side message names the topic post that
+brought it as `brought`.
+
+A side message posted with `adds_to`, naming your side reply that is still queued or running,
+joins that reply instead of asking a question of its own; once the reply has finished, the
+request is refused with 409 and nothing is posted. The reply reads unread added messages before
+its next provider call, as a topic reply reads messages added to it, and records an
+`additions_read` step. The message carries `addition` (`run_id`, `read_at`, `read_step`), the
+side chat lists a reply's added messages in its run's `additions`, and the answer lists those it
+read in `additions`. `DELETE …/side-chat/additions/{message_id}` takes back an added message the
+reply has not read; it stays in the side chat as a message of its own. Bringing an exchange
+brings the added messages its answer read.
 
 `POST …/side-chat/bring` with `message_ids` (1–50 of your side messages, at least one of them
-an answer), `note` and `client_id` posts one topic message from you. Its text holds the chosen
-messages in order, which members and later replies read, and its `side_chat` field (`owner_id`,
-`messages`, `omitted`, `omitted_statements`) lets the conversation show it as a folded group.
-With `note`, the earlier side messages stay private and the message says how many there were and
-which statements they recorded. Bringing starts no model reply.
+an answer), optional `words` (at most 4,000 characters; mentions notify as in any message),
+optional `reply_to` (a message of the same topic) and `client_id` posts one topic message from
+you. Its text holds your words and then the chosen messages in order, which members and later
+replies read; its `side_chat` field (`owner_id`, `words`, `messages`, `linked`, `omitted`) lets
+the conversation show your words above a folded group. A side message reaches the topic once: a
+request naming one that is already there is refused with 409. The chosen answers read the side
+chat before their questions; `linked` lists the earlier posts that brought any of it, and
+`omitted` counts the rest, which stays private. A brought post cannot be edited. Bringing starts
+no model reply.
 
 Search uses `q` (1–200 characters), with a limit of 1–100 (default 50). It searches
 message content literally, including percent and underscore characters, and

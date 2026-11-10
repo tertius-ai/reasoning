@@ -115,10 +115,14 @@ def test_side_replies_record_ledger_statements_and_write_nothing_else(side):
     assert not names & {"artifact_write", "agent_delegate", "compute_propose", "compute_submit", "goal_checkpoint",
                         "account_update", "ledger_request_review", "knowledge_propose", "workflow_propose_run"}
     claim = tools.invoke("ledger_claim", {"statement": "The motivic regulator is injective for number fields."})["result"]
+    with side["state"].store.transaction(write=True) as db:
+        side["state"]._event(db, side["org"], run["id"], {"type": "progress", "phase": "round", "round": 1})
     assert side["state"].progress(row, ANSWER, None)
     assert side["state"].finish(row, "succeeded", usage=Usage(10, 20, 5))
     reply = side["owner"].get(side["path"] + "/side-chat").json()["messages"][-1]
-    assert reply["statements"] == [{"claim_id": claim["claim_id"], "statement_text": claim["statement_text"]}]
+    # As under a topic reply, the answer carries its run's steps and usage; statement identifiers stay in the ledger.
+    assert "statements" not in reply and claim["claim_id"] not in json.dumps(reply)
+    assert [step["phase"] for step in reply["steps"]] == ["round"] and reply["usage"]["completion_tokens"] == 5
     # The statement belongs to the topic's ledger as usual, so other readers see it.
     ledger = side["member"].get(side["root"] + "/mathematics", params={"topic_id": side["topic"], "scope": "topic"}).json()
     assert claim["claim_id"] in json.dumps(ledger)
@@ -137,36 +141,166 @@ def test_side_replies_record_ledger_statements_and_write_nothing_else(side):
     assert later.registry.invoke("tool_receipt_read", {"receipt_id": receipt})["run_id"] == run["id"]
 
 
-def test_bringing_replies_posts_one_folded_group_from_the_owner(side):
-    first, _ = ask(side)
-    answer(side)
-    second, _ = ask(side, "And the second private question?", number=2)
-    answer(side, "The second private answer.")
-    messages = side["owner"].get(side["path"] + "/side-chat").json()["messages"]
+def exchanges(side, count):
+    """``count`` answered side questions; returns the side chat's messages, oldest first."""
+    for number in range(1, count + 1):
+        ask(side, SECRET if number == 1 else f"Private question {number}?", number=number)
+        answer(side, ANSWER if number == 1 else f"Private answer {number}.")
+    return side["owner"].get(side["path"] + "/side-chat").json()["messages"]
+
+
+def bring(side, ids, client_id, **fields):
+    return side["owner"].post(side["path"] + "/side-chat/bring", json={"message_ids": ids, "client_id": client_id, **fields})
+
+
+def test_bringing_posts_your_words_and_one_folded_group_and_counts_what_stays_private(side):
+    messages = exchanges(side, 2)
     identities = [item["id"] for item in messages]
     runs_before = len(side["owner"].get(side["path"] + "/inference-runs").json())
-    brought = side["owner"].post(side["path"] + "/side-chat/bring", json={"message_ids": identities[::-1], "client_id": "bring-all"})
+    brought = bring(side, identities[:1:-1], "bring-second", words="  Here is the **second** case.  ")
     assert brought.status_code == 201, brought.text
-    group = brought.json()
-    assert group["author_id"] == side["owner_id"] and group["author_kind"] == "human"
-    assert group["content"].startswith("From my side chat (4 messages):") and SECRET in group["content"]
-    assert [item["id"] for item in group["side_chat"]["messages"]] == identities
-    assert group["side_chat"]["omitted"] == 0 and group["side_chat"]["owner_id"] == side["owner_id"]
+    post = brought.json()
+    assert post["author_id"] == side["owner_id"] and post["author_kind"] == "human" and post["reply_to"] is None
+    assert post["content"].startswith("Here is the **second** case.\n\nFrom my side chat (2 messages):")
+    assert "_Builds on 2 side messages that stay private._" in post["content"] and SECRET not in post["content"]
+    group = post["side_chat"]
+    assert [item["id"] for item in group["messages"]] == identities[2:]
+    assert group["words"] == "Here is the **second** case." and group["owner_id"] == side["owner_id"]
+    assert group["omitted"] == 2 and group["linked"] == []
     # Members read the brought group in the topic; bringing starts no reply there.
     shared = side["member"].get(side["path"] + "/messages").json()
-    assert next(item for item in shared if item["id"] == group["id"])["side_chat"]["messages"][1]["content"] == ANSWER
+    assert next(item for item in shared if item["id"] == post["id"])["side_chat"]["messages"][1]["content"] == "Private answer 2."
     assert len(side["owner"].get(side["path"] + "/inference-runs").json()) == runs_before
-    replay = side["owner"].post(side["path"] + "/side-chat/bring", json={"message_ids": identities, "client_id": "bring-all"})
-    assert replay.json()["id"] == group["id"]
-    noted = side["owner"].post(side["path"] + "/side-chat/bring",
-                               json={"message_ids": identities[2:], "note": True, "client_id": "bring-note"}).json()
-    assert noted["side_chat"]["omitted"] == 2 and len(noted["side_chat"]["messages"]) == 2
-    assert "builds on 2 earlier side messages that stay private" in noted["content"] and SECRET not in noted["content"]
-    assert side["owner"].post(side["path"] + "/side-chat/bring",
-                              json={"message_ids": [first["id"], second["id"]], "client_id": "questions"}).status_code == 400
-    assert side["owner"].post(side["path"] + "/side-chat/bring",
-                              json={"message_ids": [first["id"], first["id"]], "client_id": "twice"}).status_code == 400
-    assert side["owner"].post(side["path"] + "/side-chat/bring", json={"message_ids": [], "client_id": "none"}).status_code == 422
+    # A repeated request returns its post; the same client_id with other words is refused.
+    assert bring(side, identities[2:], "bring-second", words="Here is the **second** case.").json()["id"] == post["id"]
+    assert bring(side, identities[2:], "bring-second", words="Other words").status_code == 409
+    # The side chat names the post that carried each brought message.
+    view = side["owner"].get(side["path"] + "/side-chat").json()["messages"]
+    assert [item["brought"] and item["brought"]["message_id"] for item in view] == [None, None, post["id"], post["id"]]
+    edit = side["owner"].patch(side["path"] + "/messages/" + post["id"], json={"content": "Changed", "revision": 0})
+    assert edit.status_code == 400
+
+
+def test_a_side_message_reaches_the_topic_once_and_later_posts_link_to_it(side):
+    messages = exchanges(side, 3)
+    identities = [item["id"] for item in messages]
+    first = bring(side, identities[2:4], "bring-second").json()
+    for repeat in (identities[2:4], identities[3:6]):
+        refused = bring(side, repeat, "again-" + repeat[0])
+        assert refused.status_code == 409 and "already in the topic" in refused.text
+    question = side["member"].post(side["path"] + "/messages", json={"content": "And the motivic case?", "client_id": "asks"}).json()
+    words = f"@[{side['member_id']}] yes, see below."
+    answered = bring(side, identities[4:], "bring-third", words=words, reply_to=question["id"])
+    assert answered.status_code == 201, answered.text
+    post = answered.json()
+    assert post["reply_to"] == question["id"]
+    # The third reply read all of the side chat before it: the second exchange is linked, the first only counted.
+    assert post["side_chat"]["linked"] == [{"message_id": first["id"], "created_at": first["created_at"]}]
+    assert post["side_chat"]["omitted"] == 2
+    link = f"/organization.html?organization={side['org']}&topic={side['topic']}&message={first['id']}"
+    assert f"_Builds on [my earlier post]({link}) and 2 side messages that stay private._" in post["content"]
+    with side["state"].store.transaction() as db:
+        mentioned = db.execute("SELECT user_id FROM message_mentions WHERE message_id=?", (post["id"],)).fetchall()
+    assert [row[0] for row in mentioned] == [side["member_id"]]
+    # The first exchange is still free to bring; nothing before it was read, so its post builds on nothing.
+    earliest = bring(side, identities[:2], "bring-first").json()
+    assert earliest["side_chat"]["omitted"] == 0 and earliest["side_chat"]["linked"] == []
+    assert "Builds on" not in earliest["content"]
+    other = side["owner"].post(side["root"] + f"/topics/{side['topics'][0]['id']}/messages",
+                               json={"content": "Elsewhere", "client_id": "elsewhere"}).json()
+    ask(side, "Private question 4?", number=4)
+    answer(side, "Private answer 4.")
+    latest = side["owner"].get(side["path"] + "/side-chat").json()["messages"][-2:]
+    refused = bring(side, [item["id"] for item in latest], "cross", reply_to=other["id"])
+    assert refused.status_code == 400 and "same topic" in refused.text
+
+
+def test_bringing_needs_a_reply_distinct_messages_and_short_words(side):
+    messages = exchanges(side, 2)
+    first, second = messages[0], messages[2]
+    assert bring(side, [first["id"], second["id"]], "questions").status_code == 400
+    assert bring(side, [first["id"], first["id"]], "twice").status_code == 400
+    assert bring(side, [], "none").status_code == 422
+    assert bring(side, [messages[1]["id"]], "long", words="x" * 4001).status_code == 422
+    assert bring(side, [messages[1]["id"]], "old", note=True).status_code == 422
+
+
+def test_a_side_question_can_be_about_a_message_of_the_topic(side):
+    shared = side["member"].post(side["path"] + "/messages", json={"content": "SHARED POST about K-groups", "client_id": "shared"}).json()
+    asked = side["owner"].post(side["path"] + "/side-chat/messages",
+                               json={"content": "Does the rank match?", "client_id": "about", "about_message_id": shared["id"]})
+    assert asked.status_code == 201, asked.text
+    question = asked.json()
+    assert question["about"]["message_id"] == shared["id"] and question["about"]["author_id"] == side["member_id"]
+    assert question["about"]["created_at"] == shared["created_at"] and question["about"]["author_name"]
+    # The same client_id about nothing is another question; a message of another topic cannot be named.
+    again = side["owner"].post(side["path"] + "/side-chat/messages", json={"content": "Does the rank match?", "client_id": "about"})
+    assert again.status_code == 409
+    elsewhere = side["owner"].post(side["root"] + f"/topics/{side['topics'][0]['id']}/messages",
+                                   json={"content": "Elsewhere", "client_id": "elsewhere"}).json()
+    refused = side["owner"].post(side["path"] + "/side-chat/messages",
+                                 json={"content": "Hm?", "client_id": "about-elsewhere", "about_message_id": elsewhere["id"]})
+    assert refused.status_code == 404
+    # The reply reads a note naming the message, with its text, just before the instruction.
+    parameters = side["state"].parameters([MODELS[0]], 256, 50, None)
+    runs = SideChats(side["state"]).enqueue(side["owner_id"], side["org"], side["topic"], "about-reply", parameters, [QUOTE],
+                                            question["id"])
+    with side["state"].store.transaction() as db:
+        context = json.loads(db.execute("SELECT context_json FROM llm_requests WHERE id=?", (runs[0]["request_id"],)).fetchone()[0])
+    assert context[-1] == {"role": "user", "content": INSTRUCTION}
+    assert context[-2]["role"] == "system" and "is about this message" in context[-2]["content"]
+    assert "SHARED POST about K-groups" in context[-2]["content"] and shared["id"] in context[-2]["content"]
+
+
+def add(side, run, content, client_id, client=None):
+    return (client or side["owner"]).post(side["path"] + "/side-chat/messages",
+                                          json={"content": content, "client_id": client_id, "adds_to": run["id"]})
+
+
+def test_a_side_message_joins_a_side_reply_at_work_which_reads_it_at_its_next_step(side):
+    question, run = ask(side)
+    added = add(side, run, "ALSO consider K_3", "added")
+    assert added.status_code == 201, added.text
+    added = added.json()
+    assert added["addition"] == {"run_id": run["id"], "read_at": None, "read_step": None}
+    assert add(side, run, "ALSO consider K_3", "added").json()["id"] == added["id"], "a replay returns the same message"
+    [listed] = side["owner"].get(side["path"] + "/side-chat").json()["runs"]
+    assert [(item["message_id"], item["content"], item["read_at"]) for item in listed["additions"]] == [
+        (added["id"], "ALSO consider K_3", None)]
+    # The reply reads it once, before its next provider call, as a side message of its owner.
+    row = side["state"].claim()
+    name = side["owner"].get("/api/auth/me").json()["name"]
+    assert side["state"].take_additions(row, 2) == [
+        {"id": added["id"], "side_sequence": added["sequence"], "kind": "human", "text": "ALSO consider K_3", "sender": name}]
+    assert side["state"].take_additions(row, 3) == []
+    assert side["owner"].delete(side["path"] + "/side-chat/additions/" + added["id"]).status_code == 409, "it was read"
+    assert side["state"].progress(row, ANSWER, None)
+    assert side["state"].finish(row, "succeeded", usage=Usage(10, 20, 5))
+    reply = side["owner"].get(side["path"] + "/side-chat").json()["messages"][-1]
+    assert reply["author_kind"] == "assistant" and reply["reply_to"] == question["id"]
+    assert [(item["message_id"], item["read_step"]) for item in reply["additions"]] == [(added["id"], 2)]
+    assert [step["message_ids"] for step in reply["steps"] if step["phase"] == "additions_read"] == [[added["id"]]]
+    # A reply that finished takes nothing more, and nothing is posted.
+    late = add(side, run, "TOO LATE for that reply", "late")
+    assert late.status_code == 409
+    assert "TOO LATE" not in side["owner"].get(side["path"] + "/side-chat").text
+
+
+def test_an_unread_addition_can_be_taken_back_and_only_your_own_side_reply_takes_one(side):
+    _, run = ask(side)
+    added = add(side, run, "Never mind", "added").json()
+    member = side["member"]
+    assert member.delete(side["path"] + "/side-chat/additions/" + added["id"]).status_code == 404
+    assert add(side, run, "Mine too", "member-added", client=member).status_code == 404
+    taken = side["owner"].delete(side["path"] + "/side-chat/additions/" + added["id"])
+    assert taken.status_code == 200 and taken.json()["addition"] is None and taken.json()["id"] == added["id"]
+    assert side["owner"].delete(side["path"] + "/side-chat/additions/" + added["id"]).status_code == 404
+    assert side["state"].take_additions(side["state"].claim(), 2) == []
+    # A message joins a side reply of this side chat, and is about nothing else.
+    assert add(side, {"id": "0" * 32}, "Where?", "nowhere").status_code == 404
+    about = side["owner"].post(side["path"] + "/side-chat/messages",
+                               json={"content": "Both?", "client_id": "both", "adds_to": run["id"], "about_message_id": "a" * 32})
+    assert about.status_code == 400
 
 
 def test_side_chats_need_a_beta_topic_write_access_and_their_own_questions(installation):

@@ -101,12 +101,21 @@ message, topic or project opens with a notice instead. References also render in
 knowledge entries and the published research blog.
 
 In an AI chat, the **Side chat** button in the top bar opens your private side chat beside
-the conversation. Ask the selected model anything there: it reads the topic's conversation,
-only you see the side chat, and ledger statements it records go to the topic's ledger as usual.
-**Bring to chat** under a side reply posts it to the topic as one folded message from you,
-together with the earlier side messages it builds on; untick any you want to keep private.
-**Bring 2 with a context note** posts only that question and answer, with a line saying how many
-earlier side messages it built on.
+the conversation. Ask there with the model chosen in the conversation's model menu: it reads the
+topic's conversation, only you see the side chat, and ledger statements it records go to the
+topic's ledger as usual. While a side reply works, it shows its steps; **+ Add** makes your next
+message join it, and the reply reads that message before its next step. Until then, **Undo** takes
+the message back. Point at a side reply and choose **Bring to chat** to post its question
+and answer to the topic as one message from you. Tick earlier exchanges to bring them as well;
+one that is already in the topic is linked rather than posted again, and the post says how many
+side messages stay private. Add your own words above it, with @ mentions. When someone has
+written since your last message, the post answers them unless you remove that.
+
+In the conversation, a brought post shows its author's words and a card titled by its first
+question. The card opens the exchange beside the conversation, in place of the side chat until
+you close it. On your own card, **Continue in side chat** goes back to that exchange; on someone
+else's, **Ask privately about this** starts your next side question about it, and bringing that
+answer later replies to their post.
 
 If a beta reply request is sent but the server's answer is lost, the
 conversation shows **Reply request not confirmed**: the message is saved, and
