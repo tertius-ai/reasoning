@@ -8,6 +8,8 @@ import React, { useEffect, useRef, useState } from "react";
 import { toneClass } from "./mentions";
 import { replyExcerpt } from "./MessageReplies";
 import { modelName } from "./ReplyAdditions";
+import { FoldToggle, ReplyBody, foldFor, useOpenReplies } from "./FoldedReply";
+import { replyParts } from "./replySummary";
 import { appLink, followApplicationLink } from "./references";
 import type { BroughtPost, Message, SideChatGroup as Group } from "./organization-api";
 import "./side-chat.css";
@@ -115,6 +117,7 @@ export function BroughtPanel({ post, owner, own, answers, organizationId, topicI
 }) {
   const group = post.side_chat, speaker = own ? "You" : owner;
   const [copied, setCopied] = useState(false);
+  const [replyOpen, toggleReply] = useOpenReplies();
   const close = useRef<HTMLButtonElement>(null);
   useEffect(() => { close.current?.focus(); }, [post.id]);
   const key = (message: Brought) => message.author_kind === "assistant" ? "model:" + (message.assistant_model ?? "") : group.owner_id;
@@ -139,12 +142,16 @@ export function BroughtPanel({ post, owner, own, answers, organizationId, topicI
       {runs.map(run => {
         const first = run[0], mine = own && first.author_kind === "human";
         return <div key={first.id} className={"org-message-group org-speaker-" + first.author_kind + " " + toneClass(tones, key(first))
-          + (mine ? " org-message-group-mine" : "")}>{run.map((message, index) =>
-          <article key={message.id} className={"org-message org-side-message" + (index ? " org-message-continuation" : "")}>
+          + (mine ? " org-message-group-mine" : "")}>{run.map((message, index) => {
+          const parts = message.author_kind === "assistant" ? replyParts(message.content) : null;
+          const fold = foldFor(parts, replyOpen(message.id), () => toggleReply(message.id));
+          return <article key={message.id} className={"org-message org-side-message" + (index ? " org-message-continuation" : "")}>
             <header>{!index && <strong>{sideSpeaker(message, speaker)}</strong>}
               <time dateTime={new Date(message.created_at * 1000).toISOString()}>{postTime(message.created_at)}</time></header>
-            {renderMarkdown(message.content)}
-          </article>)}</div>;
+            {parts ? <ReplyBody parts={parts} fold={fold} render={renderMarkdown} /> : renderMarkdown(message.content)}
+            {fold && <div className="org-usage-row"><FoldToggle fold={fold} /></div>}
+          </article>;
+        })}</div>;
       })}
     </div>
     <footer className="org-brought-footer">

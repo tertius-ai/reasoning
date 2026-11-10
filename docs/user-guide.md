@@ -87,6 +87,14 @@ Your own messages sit on the right under **You**, each as wide as its text and l
 everyone else's messages and model and bot replies sit on the left. Direct messages and the
 Thread view follow the same rule, and the Thread view shows consecutive messages from one
 person under one name.
+Model replies start folded to one sentence. The reply prompt asks the model to begin with a line
+`Summary: …` that states its answer; the reply shows that sentence, and clicking it or **Show full
+answer** under it opens the whole answer, with the summary as its first line. A reply without
+that line folds to its first sentence, marked *first sentence*. A short reply of one paragraph
+shows whole. While a reply streams, its summary appears once the first line is complete, and
+**Show the answer as it streams** shows the rest as it arrives. Replies in side chats and in the
+Thread view fold the same way; a bot reply folds only when it writes the summary line. Copying a
+reply copies its text with the summary line.
 The fork icon opens the message actions: **Copy link**, and where allowed beta-topic
 forking, editing and version history. Forked conversations have a captured
 history, not access to future origin messages.

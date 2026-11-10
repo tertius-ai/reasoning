@@ -1,0 +1,22 @@
+/* A model reply folded to its summary line; the row under it says how much "Show full answer" opens. */
+.org-reply-lead { margin: 5px 0; }
+.org-reply-lead > p { display: inline; margin: 0; font-weight: 500; }
+.org-reply-fold-lead { margin-inline: -6px; padding-inline: 6px; border-radius: 6px; cursor: pointer; }
+.org-reply-fold-lead:hover { background: var(--accent-dim); }
+.org-reply-fold-lead:focus-visible { outline: 2px solid var(--blue); outline-offset: 1px; }
+.org-reply-fold-lead[aria-expanded="true"] { margin-bottom: 8px; }
+.org-reply-first { display: inline-block; margin-left: 8px; padding: 0 6px; border: 1px solid var(--border-strong); border-radius: var(--radius-pill);
+  color: var(--muted); font-size: 10.5px; font-weight: 400; line-height: 1.6; vertical-align: 1px; white-space: nowrap; }
+.org-app .org-reply-fold { min-height: 0; padding: 0; border: 0; background: none; font: inherit; font-size: 12px; color: var(--muted); cursor: pointer; }
+.org-app .org-reply-fold:hover { background: none; color: var(--foreground); }
+.org-reply-fold::before { content: ""; display: inline-block; width: 5px; height: 5px; margin: 0 8px 3px 2px;
+  border: solid currentColor; border-width: 0 1.5px 1.5px 0; transform: rotate(45deg); }
+.org-reply-fold[aria-expanded="true"]::before { transform: rotate(-135deg); margin-bottom: 0; }
+.org-reply-size { color: var(--faint); font-size: 11px; }
+.org-reply-pending { margin: 8px 0 4px; color: var(--muted); font-size: 13px; font-style: italic; }
+.org-model-run .org-reply-lead { font-size: 15px; }
+.org-model-run > .org-stream-fold { margin: 4px 0; font-family: var(--font-sans); }
+@media (prefers-reduced-motion: no-preference) {
+  .org-reply-pending { animation: org-reply-pending 1.8s ease-in-out infinite; }
+  @keyframes org-reply-pending { 50% { opacity: 0.55; } }
+}

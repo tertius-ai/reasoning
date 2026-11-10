@@ -15,6 +15,8 @@ import { TONES, mentionInitials, speakerKey, toneClass } from "./mentions";
 import { replyExcerpt } from "./MessageReplies";
 import { modelName, replyTimeline } from "./ReplyAdditions";
 import { ReplyFooter } from "./ReplyFooter";
+import { ReplyBody, foldFor, useOpenReplies } from "./FoldedReply";
+import { replyParts } from "./replySummary";
 import { ReplyTimeline } from "./ReplyTimeline";
 import { type AboutDraft, type AnswerTarget, postTime } from "./SideChatGroup";
 import { ApiError, BroughtPost, Member, Message, ReplyAddition, SideChat as SideChatState, SideMessage, SideRun, Topic, aborted,
@@ -280,6 +282,7 @@ export function SideChat({ organizationId, topic, userId, canWrite, model, effor
   const [text, setText] = useState("");
   const [sending, setSending] = useState(false);
   const [bringing, setBringing] = useState<string | null>(null);
+  const [replyOpen, toggleReply] = useOpenReplies();
   const [busy, setBusy] = useState(false);
   const [copied, setCopied] = useState<string | null>(null);
   const [marked, setMarked] = useState<string | null>(null);
@@ -469,6 +472,9 @@ export function SideChat({ organizationId, topic, userId, canWrite, model, effor
         const first = item[0], mine = first.author_kind === "human";
         return <div key={first.id} className={"org-message-group org-speaker-" + first.author_kind + " " + toneClass(colors, sideKey(first))
           + (mine ? " org-message-group-mine" : "")}>{item.map((message, index) => {
+          // A reply folds to its summary line, or else its first sentence, like a reply in the topic.
+          const parts = message.author_kind === "assistant" ? replyParts(message.content) : null;
+          const fold = foldFor(parts, replyOpen(message.id), () => toggleReply(message.id));
           return <React.Fragment key={message.id}>
             <article className={"org-message org-side-message" + (index ? " org-message-continuation" : "")
               + (message.id === marked ? " org-message-linked" : "")} data-side-message-id={message.id}>
@@ -478,8 +484,8 @@ export function SideChat({ organizationId, topic, userId, canWrite, model, effor
               {message.about && <p className="org-side-about"><button type="button" onClick={() => onShowAbout?.(message.about!.message_id)}>
                 About {message.about.author_id === userId ? "your" : `${message.about.author_name ?? "someone"}'s`} post at {postTime(message.about.created_at)}
               </button></p>}
-              {renderMarkdown(message.content)}
-              {message.author_kind === "assistant" && <ReplyFooter message={message} userId={userId} names={{}} />}
+              {parts ? <ReplyBody parts={parts} fold={fold} render={renderMarkdown} /> : renderMarkdown(message.content)}
+              {message.author_kind === "assistant" && <ReplyFooter message={message} userId={userId} names={{}} fold={fold} />}
               {message.author_kind === "assistant" && <div className="org-side-actions" role="toolbar" aria-label="Reply actions">
                 <button type="button" aria-label={copied === message.id ? "Copied" : "Copy reply"} title="Copy"
                   onClick={() => copy(message)}>{copied === message.id ? COPIED : COPY}</button>

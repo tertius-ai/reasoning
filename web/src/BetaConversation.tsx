@@ -2,6 +2,7 @@ import { PollBackoff, recordTiming, startPolling } from "./polling";
 import { LIVE_SAFETY_POLL_MS, subscribeTopicEvents } from "./topicEvents";
 import React, { useEffect, useRef, useState } from "react";
 import { MessageUsageDetails } from "./MessageUsageDetails";
+import { StreamedAnswer } from "./FoldedReply";
 import { CardStop, TopicActivity } from "./TopicActivity";
 import { submitModelAttempt } from "./BotConversation";
 import { OutputActions } from "./ChatFeedback";
@@ -135,7 +136,7 @@ export const replacedByReply = (run: ModelRun, transcript?: LoadedTranscript) =>
 /** A queued request whose agent conversation is paused: it does not start until someone resumes it. */
 export const pausedRun = (run: ModelRun) => run.status === "queued" && run.agent?.thread_status === "paused";
 
-export function BetaConversation({ organizationId, topicId, userId, canWrite, canManage, online, attempt, onAttempt, onAuthLost, onActivity, toolbarTarget, hidePlay, wake, transcript, onReplyPending, onRuns, stopRef, addingTo, onAddTo, onUndoAddition, names, refusal }: {
+export function BetaConversation({ organizationId, topicId, userId, canWrite, canManage, online, attempt, onAttempt, onAuthLost, onActivity, toolbarTarget, hidePlay, wake, transcript, onReplyPending, onRuns, stopRef, addingTo, onAddTo, onUndoAddition, names, refusal, renderMarkdown }: {
   organizationId: string; topicId: string; userId: string; canWrite: boolean; canManage: boolean;
   online: boolean; attempt?: PendingModelAttempt; onAttempt: (attempt?: PendingModelAttempt) => void; onAuthLost: () => void;
   onActivity: (entries: TopicActivity[]) => void;
@@ -158,6 +159,8 @@ export function BetaConversation({ organizationId, topicId, userId, canWrite, ca
   names?: Record<string, string>;
   /** Ways forward from a reply the privacy settings refused: the model it suggests, and what each choice does. */
   refusal?: { replacement: (model: string) => string | null; onSendWith: (run: ModelRun, model: string) => void; onChoose: () => void };
+  /** Renders a streaming reply's summary line, which shows while the rest of the answer streams folded. */
+  renderMarkdown?: (markdown: string) => React.ReactNode;
 }) {
   const [runs, setRuns] = useState<ModelRun[]>([]), [reconciled, setReconciled] = useState<ReadonlySet<string>>(new Set());
   const [threads, setThreads] = useState<{ root_run: string; status: string; reason?: string | null; requested_by: string; tasks: number }[]>([]);
@@ -347,8 +350,8 @@ export function BetaConversation({ organizationId, topicId, userId, canWrite, ca
       refusal={refusal && canWrite && run.id === latestRun?.id && privacyRefusal(run) ? {
         replacement: refusal.replacement(run.model), disabled: busy || !online || !!attempt,
         onSendWith: model => refusal.onSendWith(run, model), onChoose: refusal.onChoose } : undefined}
-      onUpdated={() => setRefresh(value => value + 1)} onAuthLost={onAuthLost} />,
-  }))); }, [runs, reconciled, transcript, busy, online, connected, canWrite, canManage, userId, root, organizationId, topicId, onActivity, onAuthLost, addingTo, onAddTo, onUndoAddition, names, threads, refusal, latestRun, attempt]);
+      onUpdated={() => setRefresh(value => value + 1)} onAuthLost={onAuthLost} renderMarkdown={renderMarkdown} />,
+  }))); }, [runs, reconciled, transcript, busy, online, connected, canWrite, canManage, userId, root, organizationId, topicId, onActivity, onAuthLost, addingTo, onAddTo, onUndoAddition, names, threads, refusal, latestRun, attempt, renderMarkdown]);
   return <section className="org-beta" aria-label="Agent activity">
     {toolbarTarget && createPortal(<TransportControls {...{ canPlay, hidePlay }}
       playTitle={attempt?.unconfirmed ? "Retry the unconfirmed reply request"
@@ -381,9 +384,10 @@ export const privacyRefusal = (run: ModelRun) => run.status === "failed" && run.
 /** Ways forward from a reply its model's privacy settings refused, offered on the topic's latest reply only. */
 export type RefusalActions = { replacement: string | null; disabled: boolean; onSendWith: (model: string) => void; onChoose: () => void };
 
-function BetaRunCard({ root, organizationId, topicId, run, canManage, canControl, canReact, awaiting, thread, timeline, onStop, stopping, online, onReconciled, onUpdated, onAuthLost, refusal }: {
+function BetaRunCard({ root, organizationId, topicId, run, canManage, canControl, canReact, awaiting, thread, timeline, onStop, stopping, online, onReconciled, onUpdated, onAuthLost, refusal, renderMarkdown }: {
   root: string; organizationId: string; topicId: string; run: ModelRun; canManage: boolean; canReact: boolean; online?: boolean;
   refusal?: RefusalActions;
+  renderMarkdown?: (markdown: string) => React.ReactNode;
   /** Stops this reply, shown in the header while it runs or waits. */
   onStop?: () => void; stopping?: boolean;
   /** The thread line of a running reply: a button that adds the next message to it. */
@@ -439,7 +443,7 @@ function BetaRunCard({ root, organizationId, topicId, run, canManage, canControl
       onUpdated={onUpdated} onAuthLost={onAuthLost} />
       : run.answer_state?.status === "waiting" && <p role="status">Waiting: {run.answer_state.reason}. Continue from the retained checkpoint when the result arrives.</p>}
     {run.answer_state?.status === "continued" && <p className="org-help">Waited for {run.answer_state.reason}. A later reply continued this work and carries the answer.</p>}
-    {run.output_text && !shownElsewhere && <pre aria-label={"Streaming response from " + run.model}>{run.output_text}</pre>}
+    {run.output_text && !shownElsewhere && <StreamedAnswer text={run.output_text} model={run.model} done={!active} render={renderMarkdown} />}
     {!active && !shownElsewhere && run.output_text && <OutputActions {...{ organizationId, topicId, onAuthLost }} targetKind="run" targetId={run.id} canWrite={canReact} text={run.output_text} />}
     <div className="org-usage-row"><MessageUsageDetails usage={run.usage} />
       {active && !paused && run.cost_progress && <small>Confirmed {usd(run.cost_progress.confirmed_microusd)} · next-call estimate {usd(run.cost_progress.next_call_estimate_microusd)}</small>}</div>

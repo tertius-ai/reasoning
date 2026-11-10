@@ -1,6 +1,7 @@
 // Copyright Benjamin Antieau and Deven Manam. SPDX-License-Identifier: Apache-2.0
-/** The row under a model answer, in a topic and in a side chat: its folded steps and its usage. */
+/** The row under a model answer, in a topic and in a side chat: "Show full answer" when it is folded, its steps and its usage. */
 import React, { useState } from "react";
+import { FoldToggle, type Fold } from "./FoldedReply";
 import { MessageUsageDetails } from "./MessageUsageDetails";
 import { stepCount } from "./ReplyAdditions";
 import { ReplyTimeline } from "./ReplyTimeline";
@@ -14,15 +15,19 @@ export function replyRecordSummary(message: Pick<Message, "steps" | "additions">
     .replace(/^./, letter => letter.toUpperCase());
 }
 
-/** One row under a model answer: its folded steps on the left and its usage at the right; the steps open below the row. */
-export function ReplyFooter({ message, userId, names }: {
-  message: Pick<Message, "steps" | "additions" | "author_kind" | "usage">; userId: string; names: Record<string, string>;
+/**
+ * One row under a model answer: "Show full answer" when it is folded, its folded steps, and its usage at the right; the
+ * steps open below the row.
+ */
+export function ReplyFooter({ message, userId, names, fold }: {
+  message: Pick<Message, "steps" | "additions" | "author_kind" | "usage">; userId: string; names: Record<string, string>; fold?: Fold;
 }) {
   const [open, setOpen] = useState(false);
   const record = !!message.steps?.some(step => step.phase === "round") || !!message.additions?.length;
-  if (!record && message.author_kind !== "assistant") return null;
+  if (!record && !fold && message.author_kind !== "assistant") return null;
   return <>
     <div className="org-usage-row">
+      {fold && <FoldToggle fold={fold} />}
       {record && <button type="button" className="org-reply-record-toggle" aria-expanded={open} onClick={() => setOpen(!open)}>
         {replyRecordSummary(message)}</button>}
       {message.author_kind === "assistant" && <MessageUsageDetails usage={message.usage} />}
