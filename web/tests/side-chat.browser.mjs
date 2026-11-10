@@ -154,6 +154,8 @@ test("a private side chat answers beside the topic; Bring to chat posts an excha
     const menu = panel.getByRole("group", { name: "Bring to chat", exact: true });
     await menu.getByText("This exchange", { exact: true }).waitFor();
     assert.equal(await menu.getByRole("checkbox").count(), 1);
+    // Your words have focus as soon as the menu shows, so an Escape pressed at once closes it.
+    assert.equal(await menu.getByLabel("Your words", { exact: true }).evaluate(field => field === document.activeElement), true);
     await page.keyboard.press("Escape");
     await menu.waitFor({ state: "detached" });
     assert.deepEqual(brought, []);
