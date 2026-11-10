@@ -162,7 +162,6 @@ function BringMenu({ messages, reply, answer: suggested, people, tones, busy, on
   const [mention, setMention] = useState<{ start: number; end: number; query: string } | null>(null);
   const [active, setActive] = useState(0);
   const field = useRef<HTMLTextAreaElement>(null), clientId = useRef(crypto.randomUUID()), id = useId();
-  useEffect(() => { requestAnimationFrame(() => field.current?.focus()); }, []);
   useEffect(() => grow(field.current, 120), [words]);
   // The caret goes after a chosen mention in the same commit as the new text, so the next key lands after it.
   const caretAfter = useRef<number | null>(null);
@@ -215,7 +214,8 @@ function BringMenu({ messages, reply, answer: suggested, people, tones, busy, on
       <button type="button" aria-label={`Post without answering ${answer.name}`} title="Post without answering" disabled={busy}
         onClick={() => { setAnswering(false); field.current?.focus(); }}>×</button></p>}
     <label className="org-visually-hidden" htmlFor={id}>Your words</label>
-    <textarea id={id} ref={field} className="org-side-words" rows={1} value={words} maxLength={4000} disabled={busy}
+    {/* Focused as the menu opens, in the same commit, so an Escape pressed at once reaches the menu. */}
+    <textarea id={id} ref={field} className="org-side-words" rows={1} value={words} maxLength={4000} disabled={busy} autoFocus
       placeholder="Add your own words · @ mentions someone" aria-autocomplete="list"
       aria-controls={matches.length ? id + "-people" : undefined}
       aria-activedescendant={matches.length ? `${id}-person-${matches[active % matches.length].id}` : undefined}
