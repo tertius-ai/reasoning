@@ -29,6 +29,8 @@ import { WorkflowExecutionAttempt } from "./workflow-run-api";
 import { ComputeAttempt } from "./compute-api";
 import { ReplyFiles } from "./ReplyFiles";
 import { ReplyFooter } from "./ReplyFooter";
+import { ReplyBody, foldFor, useOpenReplies } from "./FoldedReply";
+import { replyParts } from "./replySummary";
 import { WorkingCard } from "./ReplyTimeline";
 import { type AboutDraft, BroughtPanel, SideChatCard, answerTarget, groupTitle } from "./SideChatGroup";
 import { normalizeMathDelimiters, rehypeMath } from "./markdownMath";
@@ -103,7 +105,7 @@ export const MessageMarkdown = React.memo(function MessageMarkdown({ markdown }:
   return <ReactMarkdown remarkPlugins={messageRemarkPlugins} rehypePlugins={messageRehypePlugins} skipHtml
     components={messageMarkdownComponents}>{markdown}</ReactMarkdown>;
 });
-/** Side-chat text, in the side chat and in a group brought from one; mentions in it are not resolved. */
+/** Side-chat text, in the side chat and in a group brought from one, and a streaming reply's summary; mentions in it are not resolved. */
 const renderSideMarkdown = (markdown: string) => <MessageMarkdown markdown={normalizeMathDelimiters(markdown)} />;
 export const prepareMessageAttempt = (draft: Draft): Draft => ({
   ...draft, clientId: draft.clientId || crypto.randomUUID(), attempted: true,
@@ -819,6 +821,8 @@ function Conversation({ organizationId, topic, members, user, canWrite, canManag
   currentDraft.current = draft;
   const root = topicPath(organizationId, topic.id);
   const [threadFor, setThreadFor] = useState<string | null>(null);
+  // Model replies start folded to their summary line; these are the ones opened here.
+  const [replyOpen, toggleReply] = useOpenReplies();
   const unseen = useUnseenMessages(messages, atBottom, user.id);
   // Choosing or cancelling a reply target starts a fresh attempt, so a retry never changes what a sent message answers.
   const startReply = useRef((_id: string) => {});
@@ -1228,9 +1232,17 @@ function Conversation({ organizationId, topic, members, user, canWrite, canManag
     bottom.current = true; setAtBottom(true);
   }, []);
   // A post brought from a side chat shows its author's words and the exchange as a card, which opens it in the panel.
+  // A model reply's summary and answer render the same way.
   const renderWords = useCallback((words: string) => <MessageMarkdown markdown={normalizeMathDelimiters(mentionMarkdown(words, mentionPeople))} />,
     [mentionPeople]);
-  const messageBody = (message: Message) => message.side_chat ? <>
+  // A model reply folds to its summary line, or else its first sentence; a bot reply folds only when it writes the line.
+  const replyView = (message: Message) => {
+    const parts = message.author_kind === "assistant" || message.author_kind === "bot"
+      ? replyParts(message.content, { fallback: message.author_kind === "assistant" }) : null;
+    return { parts, fold: foldFor(parts, replyOpen(message.id), () => toggleReply(message.id)) };
+  };
+  const messageBody = (message: Message, { parts, fold } = replyView(message)) =>
+    parts ? <ReplyBody parts={parts} fold={fold} render={renderWords} /> : message.side_chat ? <>
     {message.side_chat.words && renderWords(message.side_chat.words)}
     <SideChatCard group={message.side_chat} owner={authorLabel(message, members)} own={isOwnMessage(message, user.id)}
       open={excerpt === message.id} organizationId={organizationId} topicId={topic.id} onShowPost={showMessage}
@@ -1363,6 +1375,7 @@ function Conversation({ organizationId, topic, members, user, canWrite, canManag
         const addition = topic.kind === "beta" ? threads.flatMap(thread => thread.additions).find(item => item.message_id === message.id)
           ?? message.addition : undefined;
         const additionThread = addition ? threads.find(thread => thread.root.id === addition.run_id) : undefined;
+        const view = replyView(message);
         const movable = topic.kind === "beta" && canWrite && !addition && message.author_id === user.id
           && (message.author_kind ?? "human") === "human" ? moveTarget(threads, message) : undefined;
         return <React.Fragment key={message.id}>
@@ -1373,9 +1386,9 @@ function Conversation({ organizationId, topic, members, user, canWrite, canManag
           label={byId.get(message.reply_to) && speaker(byId.get(message.reply_to)!)} />}
         <header>{!index && <strong>{speaker(message)}</strong>}
           <time dateTime={new Date(message.created_at * 1000).toISOString()} title={new Date(message.created_at * 1000).toLocaleString()}>{topic.kind === "alpha" ? new Date(message.created_at * 1000).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" }) : new Date(message.created_at * 1000).toLocaleString()}</time></header>
-        {messageBody(message)}
+        {messageBody(message, view)}
         {!!message.files?.length && <ReplyFiles topicId={topic.id} files={message.files} />}
-        <ReplyFooter message={message} userId={user.id} names={memberNames} />
+        <ReplyFooter message={message} userId={user.id} names={memberNames} fold={view.fold} />
         {!message.reply_to && !!replyCounts.get(message.id) && <ThreadCount count={replyCounts.get(message.id)!} onOpen={() => setThreadFor(message.id)} />}
         {addition && <p className={"org-addition-receipt" + (addition.read_at === null && additionThread?.active ? " org-addition-waiting" : "")}
           role="status"><span aria-hidden="true">↳</span>{additionReceipt(addition, additionThread?.root.model ?? "the model", Boolean(additionThread?.active))}
@@ -1410,7 +1423,7 @@ function Conversation({ organizationId, topic, members, user, canWrite, canManag
             onForked(id);
           }} onAuthLost={onAuthLost} onMarkUnread={() => markUnread(message)} />
       </article></React.Fragment>; })}</div></> }));
-  }, [messages, reactions, workflowRunKey, topic.kind, topic.id, mentionPeople, tones, members, user.id, organizationId, canWrite, canReplyAgain, onAuthLost, focus, highlighted, excerpt, unreadFrom, threadKey]);
+  }, [messages, reactions, workflowRunKey, topic.kind, topic.id, mentionPeople, tones, members, user.id, organizationId, canWrite, canReplyAgain, onAuthLost, focus, highlighted, excerpt, unreadFrom, threadKey, replyOpen]);
   // Chosen files wait as chips above the text, each uploading on its own, and are sent with the message.
   const uploading = files.some(file => !file.markdown);
   const freshDraft = () => { if (currentDraft.current.attempted) updateDraft({ ...currentDraft.current, clientId: crypto.randomUUID(), attempted: false }); };
@@ -1465,13 +1478,15 @@ function Conversation({ organizationId, topic, members, user, canWrite, canManag
           onStop={online && (canManage || answering.root.requested_by === user.id) ? () => void stopReply.current?.(id) : undefined} />;
       })}
       renderGroup={group => <div className={"org-message-group org-speaker-" + (group[0].author_kind ?? "human") + " " + speakerTone(group[0], tones)
-        + (isOwnMessage(group[0], user.id) ? " org-message-group-mine" : "")}>{group.map((message, index) =>
-        <article key={message.id} className={"org-message" + (index ? " org-message-continuation" : "")}>
+        + (isOwnMessage(group[0], user.id) ? " org-message-group-mine" : "")}>{group.map((message, index) => {
+        const view = replyView(message);
+        return <article key={message.id} className={"org-message" + (index ? " org-message-continuation" : "")}>
         <header>{!index && <strong>{isOwnMessage(message, user.id) ? "You" : authorLabel(message, members)}</strong>}
           <time dateTime={new Date(message.created_at * 1000).toISOString()}>{index ? new Date(message.created_at * 1000).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" })
             : new Date(message.created_at * 1000).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" })}</time></header>
-        {messageBody(message)}
-        <ReplyFooter message={message} userId={user.id} names={memberNames} /></article>)}</div>} />}
+        {messageBody(message, view)}
+        <ReplyFooter message={message} userId={user.id} names={memberNames} fold={view.fold} /></article>;
+      })}</div>} />}
     {topic.kind === "beta" && <ForkOrigin organizationId={organizationId} topicId={topic.id} />}
     {focusMissing && <p role="status" className="org-link-notice">The linked message is unavailable. It may have been removed, or you may not have access to it.
       <button type="button" aria-label="Dismiss notice" onClick={() => setFocusMissing(false)}>×</button></p>}
@@ -1489,7 +1504,7 @@ function Conversation({ organizationId, topic, members, user, canWrite, canManag
         canWrite={canWrite} canManage={canManage} online={online} toolbarTarget={composerButton} hidePlay={Boolean(draft.text.trim() || files.length)}
         attempt={modelAttempt} onAttempt={onModelAttempt} onAuthLost={onAuthLost} onActivity={setBetaActivity} wake={activityWake}
         onRuns={setBetaRuns} stopRef={stopReply} addingTo={adding?.root.id} onAddTo={onAddTo} onUndoAddition={undoFromReply} names={memberNames}
-        transcript={transcript} onReplyPending={refreshMessages} refusal={refusal} />}
+        transcript={transcript} onReplyPending={refreshMessages} refusal={refusal} renderMarkdown={renderSideMarkdown} />}
       <BotConversation organizationId={organizationId} topicId={topic.id} names={botNames} userId={user.id}
         canWrite={canWrite} canManage={canManage} onActivity={setBotActivity} onAuthLost={onAuthLost} wake={activityWake} />
 

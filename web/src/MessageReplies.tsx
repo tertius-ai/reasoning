@@ -3,13 +3,15 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 import { ApiError, Message, errorMessage, request } from "./organization-api";
 import { ReturnIcon } from "./ComposerIcons";
 import { AttachFilesButton, MAX_DIRECT_ATTACHMENTS, PendingFile, PendingFiles, joinAttachments, pendingFile } from "./DirectMedia";
+import { withoutSummaryLabel } from "./replySummary";
 import "./direct-messages.css";
 
 export type MessageThread = { root_id: string; message_id: string; messages: Message[]; truncated: boolean };
 
 /** One line of a message's text for a reply pointer: mentions and references keep their visible names, markup is dropped. */
 export function replyExcerpt(content: string, limit = 90): string {
-  const text = content
+  // A model reply starts with its summary line; quote the summary without its label.
+  const text = withoutSummaryLabel(content)
     .replace(/!\[([^\]\n]*)\]\([^)\s]*\)/g, (_, name: string) => "📎 " + (name || "attachment"))
     .replace(/@\[[a-f0-9]{32}(?::([^\]]+))?\]/g, (_, name?: string) => "@" + (name ?? "member"))
     .replace(/#\[(topic|project):[a-f0-9]{32}\]/g, (_, kind: string) => "#" + kind)
