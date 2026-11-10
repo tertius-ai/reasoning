@@ -58,7 +58,34 @@ export type Message = { id: string; sequence: number; topic_id: string; author_i
   /** On a model answer: the later messages its reply read and took into account. */
   additions?: ReplyAddition[];
   /** On a model answer: its reply's recorded steps, for the folded timeline under it. */
-  steps?: ModelRun["activity"] };
+  steps?: ModelRun["activity"];
+  /** Set when the author brought these messages from their private side chat; the conversation folds them into one group. */
+  side_chat?: SideChatGroup };
+/** A topic post that brought side messages, as a side message or a later post refers to it. */
+export type BroughtPost = { message_id: string; created_at: number };
+/** A message of your private side chat beside a topic: your question, or the model's answer to it. */
+export type SideMessage = { id: string; sequence: number; topic_id: string; owner_id: string; author_kind: "human" | "assistant";
+  content: string; client_id: string; created_at: number; assistant_model: string | null; inference_run_id: string | null;
+  /** On an answer: the side question it answers. */
+  reply_to: string | null;
+  /** On an answer: its run's steps and usage, as under a topic reply, and the side messages added to it that it read. */
+  steps?: ModelRun["activity"]; usage?: MessageUsage | null; additions?: ReplyAddition[];
+  /** The topic post that brought this message, once one has; a side message reaches the topic once. */
+  brought?: BroughtPost | null;
+  /** On a question asked about a topic message, such as someone's brought post: that message. */
+  about?: { message_id: string; created_at: number; author_id: string; author_name: string | null } | null;
+  /** On a message added to a side reply at work instead of asked: that reply's run, and when and at which step the reply had
+   * read it when the message was loaded. */
+  addition?: { run_id: string; read_at: number | null; read_step: number | null } | null };
+/** A model run answering a side question; only its requester can see it. */
+export type SideRun = ModelRun & { side_chat: { question_id: string } };
+export type SideChat = { messages: SideMessage[]; runs: SideRun[] };
+/**
+ * Side-chat messages brought into a topic, in their original order, below the author's own `words`. What the replies read
+ * before them is in `linked` earlier posts or among the `omitted` side messages that stay private.
+ */
+export type SideChatGroup = { owner_id: string; words: string; omitted: number; linked: BroughtPost[];
+  messages: { id: string; author_kind: "human" | "assistant"; assistant_model: string | null; content: string; created_at: number }[] };
 export type ImpactProfile = { model: string; input_kwh_per_million: number; output_kwh_per_million: number;
   location: string; grid_grams_co2e_per_kwh: number | null; source: string };
 export type MessageUsage = { prompt_tokens: number | null; completion_tokens: number | null; actual_microusd: number | null;

@@ -47,14 +47,18 @@ test("a member messages a colleague from People, who finds, reads and replies, t
     // People doubles as the inbox: there is no separate conversation list, and + messages any member.
     await visible(owner.getByRole("complementary", { name: "Online people and bots" }).getByRole("button", { name: "New direct message", exact: true }));
     assert.equal(await owner.getByRole("navigation", { name: "Direct messages" }).count(), 0);
-    // The People header's buttons are the same 24px squares as the sidebar header's.
+    // The People header's buttons are the same 24px squares as the sidebar header's, each with a 12px drawn icon in the exact middle:
+    // a typed + or × sat on the font's math axis, below the middle.
     const headerButtons = await Promise.all(["New project", "Organization information", "New direct message", "Collapse online sidebar"]
       .map(name => owner.getByRole("button", { name, exact: true }).evaluate(button => {
-        const box = button.getBoundingClientRect(), style = getComputedStyle(button);
-        return { width: box.width, height: box.height, border: style.borderTopColor, radius: style.borderTopLeftRadius, size: style.fontSize };
+        const box = button.getBoundingClientRect(), style = getComputedStyle(button), icon = button.querySelector("svg").getBoundingClientRect();
+        const offset = value => Math.round(value * 100) / 100 + 0;
+        return { width: box.width, height: box.height, border: style.borderTopColor, radius: style.borderTopLeftRadius, text: button.textContent,
+          icon: [icon.width, icon.height, offset(icon.left + icon.width / 2 - box.left - box.width / 2), offset(icon.top + icon.height / 2 - box.top - box.height / 2)] };
       })));
     for (const button of headerButtons) assert.deepEqual(button, headerButtons[0]);
     assert.equal(headerButtons[0].width, 24); assert.equal(headerButtons[0].height, 24);
+    assert.deepEqual(headerButtons[0].icon, [12, 12, 0, 0]); assert.equal(headerButtons[0].text, "");
 
     await owner.getByRole("button", { name: "Account menu", exact: true }).click();
     await owner.getByRole("button", { name: "Administration" }).click();

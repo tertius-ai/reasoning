@@ -16,9 +16,10 @@ import { Brand } from "./Brand";
 import { ComputeConversation } from "./ComputeConversation";
 import { DirectConversation, DirectMessageMarks, DirectMessagePicker, NewDirectMessageButton, directPath, directUnread, directUnreadTotal, peopleInbox } from "./DirectMessages";
 import { AttachFilesButton, MAX_DIRECT_ATTACHMENTS, PendingFile, PendingFiles, pendingFile } from "./DirectMedia";
+import { HeaderIcon } from "./HeaderIcon";
 import { KnowledgeLinks, KnowledgeView } from "./KnowledgeLinks";
 import { ReplyBar, ReplyPointer, ThreadCount, ThreadDialog, continuesRun, threadReplyCounts } from "./MessageReplies";
-import { additionReceipt, modelName, moveBlocked, moveTarget, replyThreads, shownInReply, stepCount, threadAnswering } from "./ReplyAdditions";
+import { additionReceipt, modelName, moveBlocked, moveTarget, replyThreads, shownInReply, threadAnswering } from "./ReplyAdditions";
 import { MentionMirror, MentionSelf, MentionTag, chatTones, mentionFromHref, mentionInitials, speakerKey, speakerTone, toneClass } from "./mentions";
 import { LazyView } from "./LazyView";
 import { WorkflowConversation } from "./WorkflowConversation";
@@ -26,9 +27,10 @@ import { TopicActivity, orderedActivity } from "./TopicActivity";
 import { WorkflowAttempt } from "./workflow-api";
 import { WorkflowExecutionAttempt } from "./workflow-run-api";
 import { ComputeAttempt } from "./compute-api";
-import { MessageUsageDetails } from "./MessageUsageDetails";
 import { ReplyFiles } from "./ReplyFiles";
-import { ReplyTimeline, WorkingCard } from "./ReplyTimeline";
+import { ReplyFooter } from "./ReplyFooter";
+import { WorkingCard } from "./ReplyTimeline";
+import { type AboutDraft, BroughtPanel, SideChatCard, answerTarget, groupTitle } from "./SideChatGroup";
 import { normalizeMathDelimiters, rehypeMath } from "./markdownMath";
 import { catalogModel, keptReplyModel, modelOptionGroups } from "./modelRecommendations";
 import { EffortPicker, ModelPicker, compactTokens } from "./ModelBrowser";
@@ -46,7 +48,7 @@ import { AccountSecurity } from "./PasswordRecovery";
 import { BatchInvitations, InvitationDeliveryProgress } from "./BatchInvitations";
 import { ProviderKeyUsage } from "./ProviderKeyUsage";
 import { WhatsNew } from "./WhatsNew";
-import { ReferenceCandidate, ReferenceContext, ReferenceLink, ReferenceResolver, ReferenceText, applicationHref, followApplicationLink, matchReferences,
+import { ReferenceCandidate, ReferenceContext, ReferenceLink, ReferenceResolver, ReferenceText, appLink, applicationHref, followApplicationLink, matchReferences,
   referenceCandidates, referenceFromHref, referenceQuery, referenceToken, remarkReferences, topicLink } from "./references";
 import {
   Account, ApiError, Channel, EMPTY_HIERARCHY, Hierarchy, InferenceConfiguration, Invitation, InvitationMail, KeyMetadata, KIND_LABEL, KIND_SYMBOL, KnowledgeTool,
@@ -72,6 +74,7 @@ const UNAVAILABLE_LINK = "This link is unavailable. It may point to something th
 const projectTopic = (hierarchy: Hierarchy, projectId: string) => hierarchy.topics.find(topic =>
   hierarchy.channels.some(channel => channel.id === topic.channel_id && channel.project_id === projectId))?.id;
 const DirectConversationView = lazy(() => import("./DirectConversation").then(module => ({ default: module.DirectConversationView })));
+const SideChat = lazy(() => import("./SideChat").then(module => ({ default: module.SideChat })));
 
 /** ``addTo`` is the root run of a running model reply that the next message joins instead of starting its own. */
 type Draft = { text: string; clientId: string; attempted: boolean; mentions?: MentionBinding[]; replyTo?: string; addTo?: string };
@@ -100,6 +103,8 @@ export const MessageMarkdown = React.memo(function MessageMarkdown({ markdown }:
   return <ReactMarkdown remarkPlugins={messageRemarkPlugins} rehypePlugins={messageRehypePlugins} skipHtml
     components={messageMarkdownComponents}>{markdown}</ReactMarkdown>;
 });
+/** Side-chat text, in the side chat and in a group brought from one; mentions in it are not resolved. */
+const renderSideMarkdown = (markdown: string) => <MessageMarkdown markdown={normalizeMathDelimiters(markdown)} />;
 export const prepareMessageAttempt = (draft: Draft): Draft => ({
   ...draft, clientId: draft.clientId || crypto.randomUUID(), attempted: true,
 });
@@ -613,31 +618,6 @@ export const BetaModelMenu = React.memo(function BetaModelMenu({ configuration, 
   </ModelPicker>;
 });
 
-/** The folded line under a model answer: how many steps its reply took and how many later messages it read. */
-export function replyRecordSummary(message: Pick<Message, "steps" | "additions">): string {
-  const steps = stepCount(message.steps ?? []), added = message.additions?.length ?? 0;
-  return [steps ? `${steps} ${steps === 1 ? "step" : "steps"}` : "",
-    added ? `took ${added} later ${added === 1 ? "message" : "messages"} into account` : ""].filter(Boolean).join(" · ")
-    .replace(/^./, letter => letter.toUpperCase());
-}
-
-/** One row under a model answer: its folded steps on the left and its usage at the right; the steps open below the row. */
-function ReplyFooter({ message, userId, names }: { message: Message; userId: string; names: Record<string, string> }) {
-  const [open, setOpen] = useState(false);
-  const record = !!message.steps?.some(step => step.phase === "round") || !!message.additions?.length;
-  if (!record && message.author_kind !== "assistant") return null;
-  return <>
-    <div className="org-usage-row">
-      {record && <button type="button" className="org-reply-record-toggle" aria-expanded={open} onClick={() => setOpen(!open)}>
-        {replyRecordSummary(message)}</button>}
-      {message.author_kind === "assistant" && <MessageUsageDetails usage={message.usage} />}
-    </div>
-    {record && open && <div className="org-reply-record">
-      <ReplyTimeline activity={message.steps ?? []} additions={message.additions ?? []} active={false} userId={userId}
-        names={names} unplaced label="Steps and later messages of this reply" /></div>}
-  </>;
-}
-
 /** People shown in the panel: online people, people with bots, and anyone in `keep` (direct-conversation partners). */
 export function peopleWithBots(presence: Presence | null, keep: ReadonlySet<string> = new Set()) {
   return (presence?.humans ?? []).map(person => ({ ...person,
@@ -721,7 +701,7 @@ function PresenceSidebar({ organizationId, open, onClose, onAuthLost, userId, on
   ];
   return <aside className="org-presence" aria-label="Online people and bots"><header><div><strong>People</strong><small>{connected} connected</small></div>
     <span className="org-presence-actions">{onMessage && canStartDirect && <NewDirectMessageButton open={picking} onToggle={() => setPicking(value => !value)} />}
-      <button aria-label="Collapse online sidebar" onClick={onClose}>×</button></span></header>
+      <button aria-label="Collapse online sidebar" onClick={onClose}><HeaderIcon name="close" /></button></span></header>
     {picking && onMessage && userId && <DirectMessagePicker members={members} userId={userId} onStart={onMessage} onClose={() => setPicking(false)} />}
     {!presence && <p role="status">Checking presence…</p>}
     {groups.map(group => group.rows.length > 0 && <section key={group.key} className={"org-presence-group org-presence-" + group.key} aria-labelledby={"org-presence-" + group.key}>
@@ -734,13 +714,15 @@ function PresenceSidebar({ organizationId, open, onClose, onAuthLost, userId, on
   </aside>;
 }
 
-function Conversation({ organizationId, topic, members, user, canWrite, canManage, draft, updateDraft, files, changeFiles, anchor, focus, referenceTargets = [], menuTarget = null, onPreference, onForked, onAuthLost, modelAttempt, onModelAttempt, computeAttempt, onComputeAttempt, workflowAttempt, onWorkflowAttempt, workflowExecutionAttempt, onWorkflowExecutionAttempt }: {
+function Conversation({ organizationId, topic, members, user, canWrite, canManage, draft, updateDraft, files, changeFiles, anchor, focus, onLinkSeen, referenceTargets = [], menuTarget = null, onPreference, onForked, onAuthLost, modelAttempt, onModelAttempt, computeAttempt, onComputeAttempt, workflowAttempt, onWorkflowAttempt, workflowExecutionAttempt, onWorkflowExecutionAttempt, sideChat = false, onCloseSideChat, onOpenSideChat }: {
   organizationId: string; topic: Topic; members: Member[]; user: Account; canWrite: boolean; canManage: boolean;
   draft: Draft; updateDraft: (draft: Draft) => void; anchor: number | null;
   /** Files waiting to be sent with this topic's draft; `changeFiles` always changes this topic's, even after a switch. */
   files: PendingFile[]; changeFiles: (change: (files: PendingFile[]) => PendingFile[]) => void;
   /** A linked message: the conversation opens around it, scrolls to it and highlights it. */
   focus?: string;
+  /** Called once a linked message has been shown, so the address can drop the link. */
+  onLinkSeen?: (messageId: string) => void;
   /** The topic details card in the top bar, where research items appear. */
   menuTarget?: HTMLElement | null;
   /** Topics and projects the writer can reference with `#`. */
@@ -751,6 +733,8 @@ function Conversation({ organizationId, topic, members, user, canWrite, canManag
   computeAttempt?: ComputeAttempt; onComputeAttempt: (attempt?: ComputeAttempt) => void;
   workflowAttempt?: WorkflowAttempt; onWorkflowAttempt: (attempt?: WorkflowAttempt) => void;
   workflowExecutionAttempt?: WorkflowExecutionAttempt; onWorkflowExecutionAttempt: (attempt?: WorkflowExecutionAttempt) => void;
+  /** Whether your private side chat is open beside this AI chat. */
+  sideChat?: boolean; onCloseSideChat?: () => void; onOpenSideChat?: () => void;
 }) {
   // A recent visit's messages and cursors render at once; the poll then fetches only what changed.
   const snapshotKey = anchor === null && !focus ? `${user.id}/${organizationId}/${topic.id}` : "";
@@ -1102,6 +1086,37 @@ function Conversation({ organizationId, topic, members, user, canWrite, canManag
     pendingScroll.current = null; setHighlighted(id);
     element.scrollIntoView({ block: "center" }); element.focus({ preventScroll: true });
   }, [messages]);
+  // A linked message is marked for a moment, as in direct messages; then the address drops the link, so a reload opens
+  // the topic as usual.
+  useEffect(() => {
+    if (!highlighted) return;
+    const timer = setTimeout(() => { setHighlighted(null); onLinkSeen?.(highlighted); }, 2600);
+    return () => clearTimeout(timer);
+  }, [highlighted]);
+  // A message on screen is scrolled to and marked again without a new address; one further back opens the
+  // conversation around it.
+  const revealMessage = useCallback((id: string) => {
+    const element = viewport.current?.querySelector<HTMLElement>(`[data-message-id="${id}"]`);
+    if (!element) {
+      window.history.pushState(null, "", appLink({ organization: organizationId, topic: topic.id, message: id }));
+      window.dispatchEvent(new PopStateEvent("popstate"));
+      return;
+    }
+    setHighlighted(null);
+    requestAnimationFrame(() => setHighlighted(id));
+    element.scrollIntoView({ block: "center" });
+  }, [organizationId, topic.id]);
+  const showMessage = useCallback((id: string, event: React.MouseEvent<HTMLAnchorElement>) => {
+    if (event.defaultPrevented || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+    event.preventDefault();
+    revealMessage(id);
+  }, [revealMessage]);
+  // The right-hand panel shows a brought post's exchange in place of the side chat while it is open. Your next side
+  // question can be about a brought post, and an exchange that continues in the side chat is scrolled to there.
+  const [excerpt, setExcerpt] = useState<string | null>(null);
+  const [askAbout, setAskAbout] = useState<AboutDraft | null>(null);
+  const [sideFocus, setSideFocus] = useState<{ id: string; nonce: number } | null>(null);
+  useEffect(() => { if (sideChat) setExcerpt(null); }, [sideChat]);
 
   // One permission-scoped request reads reactions for every newly loaded message; a reaction change then
   // updates only its own message.
@@ -1208,6 +1223,32 @@ function Conversation({ organizationId, topic, members, user, canWrite, canManag
     } finally { if (alive.current) setSending(false); }
   };
 
+  const brought = useCallback((message: Message) => {
+    setMessages(existing => mergeMessages(existing, [message]));
+    bottom.current = true; setAtBottom(true);
+  }, []);
+  // A post brought from a side chat shows its author's words and the exchange as a card, which opens it in the panel.
+  const renderWords = useCallback((words: string) => <MessageMarkdown markdown={normalizeMathDelimiters(mentionMarkdown(words, mentionPeople))} />,
+    [mentionPeople]);
+  const messageBody = (message: Message) => message.side_chat ? <>
+    {message.side_chat.words && renderWords(message.side_chat.words)}
+    <SideChatCard group={message.side_chat} owner={authorLabel(message, members)} own={isOwnMessage(message, user.id)}
+      open={excerpt === message.id} organizationId={organizationId} topicId={topic.id} onShowPost={showMessage}
+      onOpen={() => setExcerpt(current => current === message.id ? null : message.id)} />
+  </> : <MessageMarkdown markdown={normalizeMathDelimiters(mentionMarkdown(message.content, mentionPeople))} />;
+  // Bringing from the side chat offers to answer the newest message from someone else since your own last one.
+  const answer = useMemo(() => topic.kind === "beta" ? answerTarget(messages, user.id, message => authorLabel(message, members)) : undefined,
+    [topic.kind, messages, user.id, members]);
+  const sidePeople = useMemo(() => members.filter(member => member.id !== user.id), [members, user.id]);
+  const excerptPost = excerpt ? messages.find(item => item.id === excerpt && item.side_chat) : undefined;
+  const excerptAnswered = excerptPost?.reply_to ? messages.find(item => item.id === excerptPost.reply_to) : undefined;
+  // A link in the panel to an earlier brought post opens that post's exchange there; other links show the message.
+  const openPost = (id: string, event: React.MouseEvent<HTMLAnchorElement>) => {
+    if (!messages.some(item => item.id === id && item.side_chat) || event.button !== 0 || event.metaKey || event.ctrlKey
+      || event.shiftKey || event.altKey) { showMessage(id, event); return; }
+    event.preventDefault(); setExcerpt(id);
+  };
+  const showAbout = (id: string) => { if (messages.some(item => item.id === id && item.side_chat)) setExcerpt(id); else revealMessage(id); };
   const loadOlder = async () => {
     if (!messages.length || loadingOlder) return;
     setLoadingOlder(true);
@@ -1332,7 +1373,7 @@ function Conversation({ organizationId, topic, members, user, canWrite, canManag
           label={byId.get(message.reply_to) && speaker(byId.get(message.reply_to)!)} />}
         <header>{!index && <strong>{speaker(message)}</strong>}
           <time dateTime={new Date(message.created_at * 1000).toISOString()} title={new Date(message.created_at * 1000).toLocaleString()}>{topic.kind === "alpha" ? new Date(message.created_at * 1000).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" }) : new Date(message.created_at * 1000).toLocaleString()}</time></header>
-        <MessageMarkdown markdown={normalizeMathDelimiters(mentionMarkdown(message.content, mentionPeople))} />
+        {messageBody(message)}
         {!!message.files?.length && <ReplyFiles topicId={topic.id} files={message.files} />}
         <ReplyFooter message={message} userId={user.id} names={memberNames} />
         {!message.reply_to && !!replyCounts.get(message.id) && <ThreadCount count={replyCounts.get(message.id)!} onOpen={() => setThreadFor(message.id)} />}
@@ -1351,7 +1392,8 @@ function Conversation({ organizationId, topic, members, user, canWrite, canManag
                 + encodeURIComponent(movable.root.id) + "/additions", { method: "POST", body: { message_id: message.id } });
               setMessages(existing => mergeMessages(existing, [{ ...message, addition: added }]));
             } } : undefined}
-          message={message} canEdit={canWrite && message.author_kind !== "assistant" && message.author_kind !== "bot" && message.author_id === user.id}
+          message={message} canEdit={canWrite && message.author_kind !== "assistant" && message.author_kind !== "bot" && message.author_id === user.id
+            && !message.side_chat}
           onEdited={updated => setMessages(existing => mergeMessages(existing, [updated]))}
           onReplyAgain={canReplyAgain ? async () => {
             const { selectedModel, selectedEffort, modelCatalog, onModelAttempt } = replyAgain.current;
@@ -1368,7 +1410,7 @@ function Conversation({ organizationId, topic, members, user, canWrite, canManag
             onForked(id);
           }} onAuthLost={onAuthLost} onMarkUnread={() => markUnread(message)} />
       </article></React.Fragment>; })}</div></> }));
-  }, [messages, reactions, workflowRunKey, topic.kind, topic.id, mentionPeople, tones, members, user.id, organizationId, canWrite, canReplyAgain, onAuthLost, focus, highlighted, unreadFrom, threadKey]);
+  }, [messages, reactions, workflowRunKey, topic.kind, topic.id, mentionPeople, tones, members, user.id, organizationId, canWrite, canReplyAgain, onAuthLost, focus, highlighted, excerpt, unreadFrom, threadKey]);
   // Chosen files wait as chips above the text, each uploading on its own, and are sent with the message.
   const uploading = files.some(file => !file.markdown);
   const freshDraft = () => { if (currentDraft.current.attempted) updateDraft({ ...currentDraft.current, clientId: crypto.randomUUID(), attempted: false }); };
@@ -1397,7 +1439,7 @@ function Conversation({ organizationId, topic, members, user, canWrite, canManag
   // The plus sits under the box beside the model picker in AI chats, and inside the box on its left everywhere else.
   const attach = <span ref={attachmentControl} className="org-composer-attach"><AttachFilesButton
     disabled={!canWrite || sending || (topic.kind === "beta" && !!modelAttempt)} onFiles={attachFiles} /></span>;
-  return <MediaScope.Provider value={{ organizationId, topicId: topic.id, canWrite }}><section className="org-conversation" aria-label="Topic conversation">
+  return <MediaScope.Provider value={{ organizationId, topicId: topic.id, canWrite }}><div className="org-conversation-row"><section className="org-conversation" aria-label="Topic conversation">
     {texOpen && <TexRequestDialog bots={botModels} names={botNames} onClose={() => setTexOpen(false)} onPrepare={(source, bot) => {
       const label = `@${botNames[bot.bot_id] ?? bot.name}`;
       updateDraft({ text: label + " " + texRequest(source), clientId: crypto.randomUUID(), attempted: false,
@@ -1428,7 +1470,7 @@ function Conversation({ organizationId, topic, members, user, canWrite, canManag
         <header>{!index && <strong>{isOwnMessage(message, user.id) ? "You" : authorLabel(message, members)}</strong>}
           <time dateTime={new Date(message.created_at * 1000).toISOString()}>{index ? new Date(message.created_at * 1000).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" })
             : new Date(message.created_at * 1000).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" })}</time></header>
-        <MessageMarkdown markdown={normalizeMathDelimiters(mentionMarkdown(message.content, mentionPeople))} />
+        {messageBody(message)}
         <ReplyFooter message={message} userId={user.id} names={memberNames} /></article>)}</div>} />}
     {topic.kind === "beta" && <ForkOrigin organizationId={organizationId} topicId={topic.id} />}
     {focusMissing && <p role="status" className="org-link-notice">The linked message is unavailable. It may have been removed, or you may not have access to it.
@@ -1563,7 +1605,27 @@ function Conversation({ organizationId, topic, members, user, canWrite, canManag
           aria-selected={index === completionIndex} key={target.kind + ":" + target.id}
           onMouseDown={(event) => event.preventDefault()} onClick={() => chooseReference(target)}>{target.label}<small> · {target.detail}</small></button>)}</div>}
     </form>
-  </section></MediaScope.Provider>;
+  </section>
+  {excerptPost?.side_chat && <BroughtPanel post={{ id: excerptPost.id, created_at: excerptPost.created_at, side_chat: excerptPost.side_chat }}
+    owner={authorLabel(excerptPost, members)} own={isOwnMessage(excerptPost, user.id)} organizationId={organizationId} topicId={topic.id}
+    answers={excerptAnswered && (isOwnMessage(excerptAnswered, user.id) ? "you" : authorLabel(excerptAnswered, members))}
+    tones={tones} canAsk={canWrite} renderMarkdown={renderSideMarkdown} onClose={() => setExcerpt(null)} onShowPost={openPost}
+    onContinue={() => {
+      const last = excerptPost.side_chat!.messages.at(-1);
+      setExcerpt(null); onOpenSideChat?.();
+      if (last) setSideFocus({ id: last.id, nonce: Date.now() });
+    }}
+    onAsk={() => {
+      setExcerpt(null); onOpenSideChat?.();
+      setAskAbout({ message_id: excerptPost.id, author_name: authorLabel(excerptPost, members), title: groupTitle(excerptPost.side_chat!) });
+    }} />}
+  {sideChat && topic.kind === "beta" && onCloseSideChat && <LazyView label="Side chat"><SideChat organizationId={organizationId} topic={topic}
+    userId={user.id} canWrite={canWrite} model={selectedModel} effort={selectedEffort} onClose={onCloseSideChat} onAuthLost={onAuthLost}
+    people={sidePeople} tones={tones} answer={answer} hidden={Boolean(excerptPost)} about={askAbout} onAbout={setAskAbout}
+    focusMessage={sideFocus} onFocused={() => setSideFocus(null)} onShowAbout={showAbout}
+    maxTokens={modelCatalog?.models.find(model => model.id === selectedModel)?.max_completion_tokens ?? null}
+    onBrought={brought} onShowPost={showMessage} renderMarkdown={renderSideMarkdown} /></LazyView>}
+  </div></MediaScope.Provider>;
 }
 
 function Administration({ organization, onClose, onRefresh, onAuthLost }: { organization: Organization; onClose: () => void; onRefresh: () => void; onAuthLost: () => void }) {
@@ -1764,6 +1826,8 @@ export function OrganizationApp({ user, onAccount, onAuthenticated, onSignedOut,
     return () => window.removeEventListener("resize", resize);
   }, []);
   const [presenceOpen, setPresenceOpen] = useState(() => typeof window !== "undefined" && window.innerWidth > 1100);
+  // Your private side chat beside an AI chat; it stays open as you move between AI chats.
+  const [sideChatOpen, setSideChatOpen] = useState(false);
   useEffect(() => {
     const narrow = window.matchMedia("(max-width: 1100px)");
     const closeOnNarrowScreen = () => { if (narrow.matches) setPresenceOpen(false); };
@@ -1946,6 +2010,13 @@ export function OrganizationApp({ user, onAccount, onAuthenticated, onSignedOut,
     if (session.organization_id) setOrganizationId(workspace.organization ?? session.organization_id);
   };
 
+  // Once the conversation has shown a linked message, the address keeps only its topic.
+  const dropMessageLink = (id: string) => {
+    const url = new URL(window.location.href);
+    if (url.searchParams.get("message") !== id) return;
+    url.searchParams.delete("message");
+    window.history.replaceState(window.history.state, "", url);
+  };
   const select = (id: string, anchor: number | null = null, message?: string) => {
     setHelpOpen(false);
     const url = new URL(window.location.href);
@@ -2021,6 +2092,11 @@ export function OrganizationApp({ user, onAccount, onAuthenticated, onSignedOut,
         title={directTotal ? `People · ${directTotal} unread direct messages` : "People"} aria-expanded={presenceOpen}
         onClick={() => setPresenceOpen((value) => !value)}><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" aria-hidden="true"><circle cx="9" cy="7" r="3"/><path d="M3 21v-3a6 6 0 0 1 12 0v3M17 4a3 3 0 0 1 0 6M21 21v-3a6 6 0 0 0-3-5"/></svg>
         {directTotal > 0 && <span className="org-unread org-presence-unread" aria-hidden="true">{directTotal}</span>}</button>}
+      {organization && topic?.kind === "beta" && <button type="button" className="org-icon-button org-side-chat-toggle" aria-label="Side chat"
+        title="Side chat · ask the model privately" aria-expanded={sideChatOpen} onClick={() => setSideChatOpen(value => !value)}>
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" aria-hidden="true">
+          <path d="M3 5.5A2.5 2.5 0 0 1 5.5 3h8A2.5 2.5 0 0 1 16 5.5v5a2.5 2.5 0 0 1-2.5 2.5H9l-3.5 3v-3A2.5 2.5 0 0 1 3 10.5z" />
+          <path d="M19 8.5h.5A1.5 1.5 0 0 1 21 10v5.5a1.5 1.5 0 0 1-1.5 1.5H19v3l-3.5-3H12a1.5 1.5 0 0 1-1.5-1.5V16" /></svg></button>}
       {organization && topic && <TopicCopyButton key={organization.id + "/" + topic.id} organizationId={organization.id} topicId={topic.id} onAuthLost={authLost} />}
       {organization && <KnowledgeLinks organizationId={organization.id} topicId={topic?.id} onOpen={openKnowledge} onIntent={() => void loadKnowledgeWorkspace().catch(() => { /* The workspace view reports load failures. */ })} />}
       <WhatsNew />
@@ -2046,9 +2122,9 @@ export function OrganizationApp({ user, onAccount, onAuthenticated, onSignedOut,
           {organization && <small>{[organization.role, hierarchy.projects.length + (hierarchy.projects.length === 1 ? " project" : " projects"),
             unreadTopics ? unreadTopics + " unread" : ""].filter(Boolean).join(" · ")}</small>}</div>
           <span className="org-sidebar-heading-actions"><span role="status" className={online ? "org-connected" : "org-offline"}>{online ? "" : "Offline"}</span>
-          {canCreate && <button type="button" className="org-tree-add org-sidebar-action" aria-label="New project" title="New project" onClick={() => beginCreation("project")}>+</button>}
+          {canCreate && <button type="button" className="org-tree-add org-sidebar-action" aria-label="New project" title="New project" onClick={() => beginCreation("project")}><HeaderIcon name="plus" /></button>}
           {organization && <button type="button" className="org-sidebar-action" aria-label="Organization information" title="Organization information"
-            onClick={() => setInformation("organization")}>⋯</button>}</span></header>
+            onClick={() => setInformation("organization")}><HeaderIcon name="more" /></button>}</span></header>
         <TopicNavigation key={user.id + "/" + organizationId} hierarchy={hierarchy} organizationId={organizationId ?? undefined} userId={user.id} usage={navigationUsage} selected={direct ? null : selection?.topic ?? null} canCreate={canCreate}
           canManageOrganization={Boolean(organization && ["owner", "admin"].includes(organization.role))} onSelect={(id) => select(id)}
           onCreateChannel={(projectId) => beginCreation("channel", projectId)} onCreateTopic={(channelId) => beginCreation("topic", channelId)}
@@ -2073,7 +2149,7 @@ export function OrganizationApp({ user, onAccount, onAuthenticated, onSignedOut,
           organizationId={organization.id} conversation={directConversation} user={user} members={members} canWrite={canCreate}
           jump={directJump?.conversation === directConversation.id ? directJump : undefined}
           onChanged={preferenceRefresh} onAuthLost={authLost} /></LazyView> : organization && topic ? <Conversation key={organization.id + "/" + topic.id + "/" + selection?.anchor + "/" + (selection?.message ?? "")} organizationId={organization.id} topic={topic} members={members} user={user}
-          focus={selection?.message} referenceTargets={referenceTargets} menuTarget={topicMenuSlot}
+          focus={selection?.message} onLinkSeen={dropMessageLink} referenceTargets={referenceTargets} menuTarget={topicMenuSlot}
           canWrite={canWriteSelected} canManage={["owner", "admin"].includes(organization.role)} draft={draft}
           modelAttempt={modelAttempts[draftKey]} onModelAttempt={(value) => setModelAttempts((existing) => ({ ...existing, [draftKey]: value }))}
           computeAttempt={computeAttempts[draftKey]} onComputeAttempt={(value) => setComputeAttempts((existing) => ({ ...existing, [draftKey]: value }))}
@@ -2084,7 +2160,8 @@ export function OrganizationApp({ user, onAccount, onAuthenticated, onSignedOut,
           changeFiles={change => setComposerFiles(existing => ({ ...existing, [draftKey]: change(existing[draftKey] ?? []) }))} anchor={selection?.anchor ?? null} onPreference={preferenceRefresh}
           onForked={(id) => { void request<Hierarchy>(organizationPath(organization.id) + "/hierarchy").then((tree) => {
             setHierarchy(tree); select(id); preferenceRefresh();
-          }).catch((cause) => setError(errorMessage(cause))); }} onAuthLost={authLost} />
+          }).catch((cause) => setError(errorMessage(cause))); }} onAuthLost={authLost}
+          sideChat={sideChatOpen} onCloseSideChat={() => setSideChatOpen(false)} onOpenSideChat={() => setSideChatOpen(true)} />
           : <section className="org-empty"><h1>{organization ? "A place to reason together" : "Choose or create an organization"}</h1>
             <p>{organization ? "Projects hold channels, and channels hold focused conversations." : "Organizations keep their own conversations, members, and provider keys."}</p>
             {canCreate && <button onClick={() => hierarchy.channels.length ? beginCreation("topic", hierarchy.channels[0].id)

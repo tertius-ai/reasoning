@@ -1,5 +1,6 @@
 // Copyright Benjamin Antieau and Deven Manam. SPDX-License-Identifier: Apache-2.0
 import { DirectConversation, Member, organizationPath } from "./organization-api";
+import { HeaderIcon } from "./HeaderIcon";
 import "./direct-messages.css";
 
 export type { DirectConversation };
@@ -46,7 +47,7 @@ export function DirectMessageMarks({ conversation }: { conversation: DirectConve
 /** The People header control that opens the member picker for messaging anyone, including people not shown. */
 export function NewDirectMessageButton({ open, onToggle }: { open: boolean; onToggle: () => void }) {
   return <button type="button" className="org-direct-new" aria-label="New direct message" title="New direct message"
-    aria-expanded={open} onClick={onToggle}>+</button>;
+    aria-expanded={open} onClick={onToggle}><HeaderIcon name="plus" /></button>;
 }
 
 /** Chooses any other member to start or open a direct conversation with. */

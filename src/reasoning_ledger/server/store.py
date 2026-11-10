@@ -1115,6 +1115,9 @@ class Store:
                                      (organization_id, topic_id, message_id)).fetchone())
             if message["sender_kind"] != "human" or message["author_id"] != user_id:
                 raise StoreError(403, "only the human author can edit this message")
+            # The conversation shows a post brought from a side chat as its group, so its text is not edited.
+            if db.execute("SELECT 1 FROM side_chat_brought WHERE message_id=?", (message_id,)).fetchone():
+                raise StoreError(400, "a post brought from a side chat cannot be edited")
             # Exact retries are safe, but a different stale draft cannot overwrite a newer edit.
             if message["revision"] == revision + 1 and message["content"] == content:
                 return self._message(message)
@@ -1178,6 +1181,11 @@ class Store:
             addition = for_message(db, result["organization_id"], result["id"])
             if addition is not None:
                 result["addition"] = addition
+            from .side_chat import brought_group
+
+            group = brought_group(db, result)
+            if group is not None:
+                result["side_chat"] = group
         name = result.pop("sender_name", None)
         if result["author_kind"] == "bot":
             result["bot_name"] = name
