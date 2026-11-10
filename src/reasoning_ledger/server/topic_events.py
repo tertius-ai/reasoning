@@ -105,7 +105,8 @@ def signature(db, organization_id: str, topic_id: str, beta: bool) -> dict[str, 
                 "(SELECT MAX(ce.sequence) FROM inference_calls c JOIN inference_call_events ce "
                 "ON ce.organization_id=c.organization_id AND ce.call_id=c.id WHERE c.run_id=r.id) "
                 "FROM llm_runs r JOIN llm_requests q ON q.organization_id=r.organization_id AND q.id=r.request_id "
-                "WHERE r.organization_id=? AND q.topic_id=? ORDER BY q.created_at DESC,r.id DESC LIMIT 20",
+                "WHERE r.organization_id=? AND q.topic_id=? AND NOT EXISTS (SELECT 1 FROM side_chat_runs sc WHERE sc.request_id=q.id) "
+                "ORDER BY q.created_at DESC,r.id DESC LIMIT 20",
                 (organization_id, topic_id),
             )
         ]

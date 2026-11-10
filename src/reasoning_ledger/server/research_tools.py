@@ -96,9 +96,11 @@ class ResearchTools:
             # rejected or cancelled one of its computations: a queued job would wait forever, a new one would ask again.
             declined = bool(captured and json.loads(captured[0]).get("compute_declined"))
             self.compute_ready = bool(compute) and not declined and compute.available(db, self.org)
+            self.side = False
             if captured:
                 snapshot = json.loads(captured[0])
                 self.reviewer = bool(snapshot.get("review_id"))
+                self.side = bool(snapshot.get("side_chat"))
                 approved_tools = snapshot.get("tool_groups")
                 if "tool_groups" in snapshot and self.enabled != set(approved_tools if approved_tools is not None else DEFAULT_TOOLS):
                     raise StoreError(409, "topic tool permissions changed since this turn was approved")
@@ -126,6 +128,15 @@ class ResearchTools:
                 if tool.name not in excluded:
                     narrowed.register(tool)
             self.registry = narrowed
+        if self.side:
+            # A private side-chat reply reads and records ledger statements; it writes nothing else others would see.
+            from .side_chat import SIDE_CHAT_TOOLS
+
+            granted = self.registry
+            self.registry = ToolRegistry()
+            for tool in granted.list():
+                if tool.name in SIDE_CHAT_TOOLS:
+                    self.registry.register(tool)
         if self.reviewer:
             from .research_reviews import REVIEW_TOOLS
 
@@ -388,13 +399,15 @@ class ResearchTools:
             def receipt_read(receipt_id, offset=0, length=12000):
                 with self.store.transaction() as db:
                     self.store._topic_access(db, self.user, self.org, self.topic)
+                    # A private side-chat reply's receipts are readable only by later replies in the same side chat.
                     receipt = _row(
                         db.execute(
                             "SELECT r.id,r.run_id,r.name,r.status,r.result_json FROM research_tool_receipts r "
                             "JOIN llm_runs l ON l.organization_id=r.organization_id AND l.id=r.run_id "
                             "JOIN llm_requests q ON q.organization_id=l.organization_id AND q.id=l.request_id "
-                            "WHERE r.organization_id=? AND q.topic_id=? AND r.id=?",
-                            (self.org, self.topic, receipt_id),
+                            "LEFT JOIN side_chat_runs sc ON sc.request_id=q.id "
+                            "WHERE r.organization_id=? AND q.topic_id=? AND r.id=? AND (sc.request_id IS NULL OR (?=1 AND sc.owner_id=?))",
+                            (self.org, self.topic, receipt_id, int(self.side), self.user),
                         ).fetchone()
                     )
                 text = receipt.pop("result_json") or "null"
