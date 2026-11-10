@@ -48,11 +48,24 @@ def test_concurrent_identical_assemblies_publish_one_revision(files):
 
 
 def test_concurrent_conflicting_assemblies_keep_exactly_one_new_revision(files):
-    _, artifacts, scope = files
+    store, artifacts, scope = files
     parts = [{"path": f"part-{index}.tex", "revision": artifacts.write(*scope, f"part-{index}.tex", f"Section {index}.\n")["revision"]}
-             for index in range(8)]
+             for index in range(9)]
     base = artifacts.assemble(*scope, "survey.tex", parts[:1])
-    results = simultaneous(8, lambda index: artifacts.assemble(*scope, "survey.tex", parts[:index + 2], base["sha256"]))
-    saved = [result for result in results if not isinstance(result, StoreError)]
-    assert len(saved) == 1 and saved[0]["revision"] == 2
+    # Each contender joins a different prefix (two to nine sections). Identical assemblies share one revision by design,
+    # so two contenders with the same text would both succeed whenever either of them won.
+    requests = [parts[:index + 2] for index in range(8)]
+    assert len({len(request) for request in requests}) == len(requests)
+    results = simultaneous(8, lambda index: artifacts.assemble(*scope, "survey.tex", requests[index], base["sha256"]))
+    saved = [(index, result) for index, result in enumerate(results) if not isinstance(result, StoreError)]
+    assert len(saved) == 1 and saved[0][1]["revision"] == 2
     assert all(result.status == 409 for result in results if isinstance(result, StoreError))
+    winner, head = saved[0]
+    assert artifacts.content(*scope, "survey.tex", 2)[0] == "".join(f"Section {index}.\n" for index in range(winner + 2)).encode()
+    # Replaying the winner with its stale hash returns the same revision; a loser's replay still conflicts.
+    assert artifacts.assemble(*scope, "survey.tex", requests[winner], base["sha256"]) == head
+    with pytest.raises(StoreError) as conflict:
+        artifacts.assemble(*scope, "survey.tex", requests[(winner + 1) % len(requests)], base["sha256"])
+    assert conflict.value.status == 409
+    with store.transaction() as db:
+        assert db.execute("SELECT COUNT(*) FROM research_artifact_versions WHERE artifact_id=?", (head["id"],)).fetchone()[0] == 2
