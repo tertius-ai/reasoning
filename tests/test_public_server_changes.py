@@ -6,9 +6,10 @@ import io
 import json
 import os
 import shlex
+import sqlite3
 import subprocess
 import sys
-from contextlib import contextmanager, redirect_stdout
+from contextlib import closing, contextmanager, redirect_stdout
 from pathlib import Path
 
 import pytest
@@ -338,6 +339,77 @@ def test_failure_report_reads_only_the_original_bound_phase_and_hides_exception_
         with pytest.raises(ValueError):
             server_changes.reject_failure(report | mutation, request)
     assert not any(row[0:2] == ["systemctl", "start"] for row in operator[2]["calls"])
+
+
+def occupy(engine, *, occupied=True):
+    """An enrolled compute worker that is not draining: migration would refuse it once the server is stopped."""
+    with closing(sqlite3.connect(engine.root / "var/lib/reasoning/server.sqlite3")) as db, db:
+        if occupied:
+            db.execute("INSERT INTO compute_workers(id,organization_id,name,token_hash,image_ids_json,resources_json,created_at) "
+                       "VALUES(?,?,?,?,?,?,?)", ("e" * 32, "f" * 32, "worker", "a" * 64, "[]", "{}", 1))
+        else:
+            db.execute("DELETE FROM compute_workers WHERE id=?", ("e" * 32,))
+
+
+def test_busy_server_is_refused_before_any_journal_and_keeps_serving_until_its_work_is_settled(operator):
+    change, engine, observation, *_ = operator
+    occupy(engine)
+    with pytest.raises(host.InstallError, match="Upgrade refused before stopping the server: a compute worker") as error:
+        change("upgrade-prepare")
+    assert "keeps serving. No upgrade is pending" in str(error.value) and "make upgrade again" in str(error.value)
+    assert observation["active"] is True and observation["probes"] == [True]
+    assert not (engine.root / server_changes.server_upgrade.FENCE).exists() and not engine.active.exists()
+    assert not (engine.directory / "server-upgrades" / OPERATION).exists()
+    assert not any(args[:2] == ["systemctl", "stop"] for args in observation["calls"])
+    occupy(engine, occupied=False)
+    assert change("upgrade-prepare")["phase"] == "prepared"
+    assert observation["probes"] == [True, True, True] and observation["active"] is False
+
+
+def test_work_that_starts_while_the_target_installs_is_refused_before_the_fence_and_resumes(operator):
+    change, engine, observation, *_ = operator
+
+    def start_work(args):
+        if args[8:9] == [server_changes.server_upgrade.BUSY_PROBE] and len(observation["probes"]) == 1:
+            occupy(engine)
+
+    observation["interrupt"] = start_work
+    with pytest.raises(host.InstallError, match="this upgrade is pending but has not fenced or stopped anything") as error:
+        change("upgrade-prepare")
+    assert "make upgrade-resume" in str(error.value)
+    observation["interrupt"] = None
+    assert engine._read(engine.directory / "server-upgrades" / OPERATION / "operation.json")["phase"] == "target_ready"
+    assert observation["active"] is True and not (engine.root / server_changes.server_upgrade.FENCE).exists()
+    occupy(engine, occupied=False)
+    assert change("upgrade-prepare")["phase"] == "prepared"
+
+
+def test_an_unreadable_database_refuses_as_unverified_without_stopping(operator):
+    change, engine, observation, *_ = operator
+    original = engine.command
+
+    def broken(args, **options):
+        if args[8:9] == [server_changes.server_upgrade.BUSY_PROBE]:
+            return subprocess.CompletedProcess(args, 1, stdout=b"SECRET database error")
+        return original(args, **options)
+
+    engine.command = broken
+    with pytest.raises(host.InstallError, match="could not read the server database") as error:
+        change("upgrade-prepare")
+    assert "SECRET" not in str(error.value) and observation["active"] is True
+
+
+@pytest.mark.parametrize("mutation", [
+    {"reason": "SECRET"}, {"reason": "disk_full"}, {"phase": "source_stopped"}, {"phase": "migrating"}, {"format": True},
+    {"operation_id": "0" * 64}, {"mode": "upgrade-activate"}, {"extra": "SECRET"},
+])
+def test_busy_reports_refuse_unrecognized_unbound_or_post_stop_diagnoses(mutation):
+    request = {"mode": "upgrade-prepare", "operation_id": OPERATION, "plan_id": "d" * 64}
+    report = {"format": 1, "kind": "server_busy", **request, "phase": "none", "reason": "compute_jobs"}
+    with pytest.raises(host.InstallError, match="computation is running"):
+        server_changes.reject_failure(report, request)
+    with pytest.raises(ValueError):
+        server_changes.reject_failure(report | mutation, request)
 
 
 @pytest.mark.parametrize("reason", ["disk_full", "inflight_execution"])

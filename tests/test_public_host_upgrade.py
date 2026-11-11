@@ -53,7 +53,7 @@ def prepared_inputs(installed):
     report = inspector.inspect(source_manifest, source_release, source_checksum, ORIGIN)
     plan = server_operations.upgrade_plan(report, source_manifest, target_manifest, target_release, target_checksum)
     assert plan["preflight_checks_passed"], plan
-    observation = {"calls": [], "active": True, "loaded": {}, "interrupt": None, "helpers": []}
+    observation = {"calls": [], "active": True, "loaded": {}, "interrupt": None, "helpers": [], "probes": []}
 
     def command(args, *, check=True):
         observation["calls"].append(args)
@@ -95,6 +95,14 @@ def prepared_inputs(installed):
                         parent.chmod(0o755)
                     path.write_bytes(archive.read(entry))
                     path.chmod(0o644)
+        elif args[:4] == ["runuser", "-u", "reasoning", "--"] and args[8:9] == [upgrade.BUSY_PROBE]:
+            # The check for running work runs for real, read-only, on the live fixture database.
+            assert args[5:8] == ["-I", "-B", "-c"] and args[4].endswith("/releases/" + source_release + "/venv/bin/python")
+            observation["probes"].append(observation["active"])
+            with redirect_stdout(io.StringIO()) as output, pytest.MonkeyPatch.context() as context:
+                context.setattr(sys, "argv", ["-c", *args[9:]])
+                exec(compile(args[8], "<busy-probe>", "exec"), {})
+            return subprocess.CompletedProcess(args, 0, stdout=output.getvalue().encode())
         elif args[:4] == ["runuser", "-u", "reasoning", "--"]:
             python_runner = args[4].endswith("/bin/python")
             arguments = args[9:] if python_runner else args[5:]
@@ -139,6 +147,8 @@ def test_prepare_executes_real_backup_migration_and_seals_recovery_without_activ
     assert result["phase"] == "prepared" and result["upgrade_completed"] is result["activation_performed"] is False
     assert result["server_restart_fenced"] and result["root_private_backup_retained"]
     assert prepared_inputs[-1]["active"] is False
+    # Running work was checked before any journal and again just before the fence, both while the server was serving.
+    assert prepared_inputs[-1]["probes"] == [True, True]
     original = state(prepared_inputs)
     assert original["phase"] == "prepared" and original["migration"]["phase"] == "migrated"
     assert (operation(prepared_inputs) / "backup.key").stat().st_mode & 0o777 == 0o600

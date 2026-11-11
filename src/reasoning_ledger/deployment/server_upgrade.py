@@ -93,6 +93,17 @@ MIGRATION_FAILURE_REASONS = {
     "inflight_compute_jobs": "external computation is running or has an unresolved outcome",
     "inflight_workflow_execution": "a workflow has unresolved non-LLM execution or an unverified model child",
 }
+# Work on the running server that offline migration would refuse once the server is stopped. Checked before the
+# restart fence and the stop, so a busy server keeps serving. Model replies at work do not refuse migration: they are
+# interrupted by the stop and recovered by the target's startup.
+BUSY_REASONS = {
+    "compute_workers": "a compute worker is enrolled and not draining; drain or revoke it first",
+    "compute_jobs": "a computation is running or its outcome is still unknown",
+    "workflow_execution": "a workflow step is still running (a computation, a bot, or a model step that cannot be verified)",
+    "unverified": "the check for running work could not read the server database",
+}
+# Phases in which the source server has not been fenced or stopped.
+BUSY_PHASES = ("none", "preparing", "target_ready")
 
 
 class MigrationFailure(host.InstallError):
@@ -101,6 +112,16 @@ class MigrationFailure(host.InstallError):
             raise host.InstallError("invalid migration failure diagnosis")
         self.reason = reason
         super().__init__("offline migration refused: " + MIGRATION_FAILURE_REASONS[reason])
+
+
+class ServerBusy(host.InstallError):
+    """The running server has work that would refuse offline migration; nothing was fenced or stopped."""
+
+    def __init__(self, reason):
+        if not isinstance(reason, str) or reason not in BUSY_REASONS:
+            raise host.InstallError("invalid busy diagnosis")
+        self.reason = reason
+        super().__init__("upgrade refused before stopping the server: " + BUSY_REASONS[reason])
 
 
 class CommandFailure(host.InstallError):
@@ -189,6 +210,37 @@ STOPPED_WORKER_IDLE = """def _idle(root, *, local_workers_stopped=False):
         for category, query in queries:
             if db.execute(query).fetchone():
                 raise MaintenanceError("offline migration requires drained workers and settled in-flight execution: " + category)
+"""
+
+# Run inside the installed source venv as the service user while the server runs. It opens the live database read-only
+# and asks the same questions as the migration's stopped-worker guard, so a server that would refuse migration is never
+# stopped. Only a category name or null leaves it.
+BUSY_PROBE = """import json, sqlite3, sys, urllib.parse
+from contextlib import contextmanager
+from pathlib import Path
+
+class MaintenanceError(Exception):
+    pass
+
+class snapshots:
+    @staticmethod
+    @contextmanager
+    def _connect(path):
+        db = sqlite3.connect('file:' + urllib.parse.quote(str(path)) + '?mode=ro', uri=True, timeout=10)
+        try:
+            db.execute('PRAGMA query_only=ON')
+            yield db
+        finally:
+            db.close()
+"""
+BUSY_PROBE += STOPPED_WORKER_IDLE
+BUSY_PROBE += """prefix = 'offline migration requires drained workers and settled in-flight execution: '
+try:
+    _idle(Path(sys.argv[1]), local_workers_stopped=True)
+    busy = None
+except MaintenanceError as error:
+    busy = str(error)[len(prefix):] if str(error).startswith(prefix) else 'unverified'
+print(json.dumps({'format': 1, 'kind': 'upgrade_busy_probe', 'busy': busy}, sort_keys=True))
 """
 
 # Run inside the verified target venv as the service user. Compatibility recognizes
@@ -632,6 +684,40 @@ class HostUpgrade:
         if offline:
             args[4:5] = [str(self.root / "opt/reasoning/releases" / release / "venv/bin/python"), "-I", "-B", "-c", MIGRATION_RUNNER]
         return args
+
+    def _require_idle(self, release):
+        """Refuse, with the server still running, when it has work that offline migration would refuse."""
+        args = [
+            "runuser",
+            "-u",
+            "reasoning",
+            "--",
+            str(self.root / "opt/reasoning/releases" / release / "venv/bin/python"),
+            "-I",
+            "-B",
+            "-c",
+            BUSY_PROBE,
+            str(self.root / "var/lib/reasoning"),
+        ]
+        try:
+            response = self.command(args, check=False)
+            if response.returncode != 0 or not isinstance(response.stdout, bytes) or len(response.stdout) > 4096:
+                raise ValueError
+            value = json.loads(response.stdout, object_pairs_hook=_pairs)
+            if (
+                not isinstance(value, dict)
+                or set(value) != {"format", "kind", "busy"}
+                or type(value["format"]) is not int
+                or value["format"] != 1
+                or value["kind"] != "upgrade_busy_probe"
+                or value["busy"] is not None
+                and value["busy"] not in BUSY_REASONS
+            ):
+                raise ValueError
+        except (AttributeError, OSError, TypeError, ValueError, RecursionError, subprocess.SubprocessError, host.InstallError):
+            raise ServerBusy("unverified") from None
+        if value["busy"] is not None:
+            raise ServerBusy(value["busy"])
 
     def _snapshot(self, state, operation, uid):
         key = operation / "backup.key"
@@ -2159,6 +2245,8 @@ class HostUpgrade:
                 or not {"server-maintenance-v1", "server-upgrade-preparation-v1"} <= set(target_manifest.get("installation_features", []))
             ):
                 raise host.InstallError("confirmed upgrade preflight differs or target offline maintenance is unsupported")
+            # Before any journal: a busy server refuses with nothing pending, so make upgrade can simply run again.
+            self._require_idle(source_release)
             metadata = {}
             for name in ("installation.json", "server-mail.json", "server-provisioning.json"):
                 current = self.directory / name
@@ -2228,6 +2316,8 @@ class HostUpgrade:
         self.inspector._payload(target_manifest, target_release)
         self.inspector._python_sources(target_manifest, target_release)
         if state["phase"] == "target_ready":
+            # Again just before the fence: work may have started while the target was installed.
+            self._require_idle(source_release)
             advance("fencing")
         if state["phase"] == "fencing":
             self._fence(state)
