@@ -33,6 +33,21 @@ With no pending upgrade it only synchronizes operator state; another operator's
 operation is refused rather than adopted. After completion, `make upgrade` can
 build the current checkout.
 
+Before the restart fence and the stop, preparation checks the running server for
+work that offline migration would refuse: enrolled compute workers that are not
+draining, computations that are running or whose outcome is unknown, and workflow
+steps still running (computations, bots, or model steps that cannot be verified).
+The check runs as the service user on the live database, read-only, with the same
+queries the migration runs once the server is stopped. If it finds such work, the
+upgrade refuses and the server keeps serving. The first check runs before any
+upgrade journal exists, so run `make upgrade` again once the work has finished or
+been stopped. A second check runs just before the fence; if work started while the
+target was being installed, the upgrade stays pending without having fenced or
+stopped anything, and `make upgrade-resume` retries it. Model replies at work do
+not block an upgrade: the stop interrupts them and the target's startup recovers
+them. Work that starts in the seconds between the last check and the stop is still
+refused by the migration's own check, which then requires `make upgrade-resume`.
+
 `make email-setup` enables Resend invitations and account-verification email on
 an existing managed server. It synchronizes release identity and refuses pending
 upgrades, collects protected sending credentials and typed consent locally,

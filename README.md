@@ -56,9 +56,11 @@ git pull --ff-only
 make upgrade
 ```
 
-Upgrades retain exact releases and a verified encrypted backup. If an upgrade
-is interrupted, use `make upgrade-resume` with its original state; do not rebuild
-the pending target. `make doctor` checks the installed server and HTTPS.
+Upgrades retain exact releases and a verified encrypted backup. Before stopping
+the server, an upgrade checks for running work that would block migration
+(computations, compute workers, workflow steps) and refuses without stopping
+anything if it finds some. If an upgrade is interrupted, use `make upgrade-resume`
+with its original state; do not rebuild the pending target. `make doctor` checks the installed server and HTTPS.
 
 On a new operator computer, `make onboard` prepares a dedicated key and guides
 the existing operator's private handoff. Application ownership and deployment
