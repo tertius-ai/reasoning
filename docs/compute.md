@@ -329,8 +329,12 @@ and a revoked/retired original enrollment cannot be replaced by replay. Token
 rotation preserves this namespace. Requests are limited to 30 attempts per
 grant per rolling minute; failed store-level attempts count. New workers need
 current organization image permission, current image resource maxima, grant
-bounds, and ordinary organization capacity. Revoked workers with running or
-unknown jobs still consume the grant's worker ceiling, regardless of lease expiry.
+bounds, and ordinary organization capacity. Every unrevoked worker, draining ones
+included, consumes the grant's worker ceiling; revoked workers with running or
+unknown jobs still consume it too, regardless of lease expiry. A grant counts as
+organization capacity (models are offered `compute_submit`, and approvals and bot
+requests are accepted) only while it is below its ceiling. A grant whose workers
+have all drained offers nothing until a worker is revoked or retired.
 
 Scaler endpoints cannot access chat, provider keys, worker protocol, or cloud
 APIs. **They delegate trusted execution through enrollment:** new worker tokens

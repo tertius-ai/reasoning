@@ -230,6 +230,41 @@ def test_revoked_still_busy_worker_consumes_grant_ceiling(fixture, busy):
     assert enroll(fixture, scoped["token"], request())["worker"]["id"] != worker["id"]
 
 
+def test_grant_at_its_ceiling_with_only_draining_workers_offers_no_capacity(fixture):
+    # The grant enrolled its full ceiling and every one of those workers drained: nothing claims a job, and the grant
+    # can't enroll a replacement. The organization must not advertise compute or accept a job nothing would run.
+    store, app, owner, _, _ = fixture
+    compute, org, user = app.state.compute, owner["organization_id"], owner["user_id"]
+    scoped = grant(fixture, maximum_workers=2)
+    workers = [enroll(fixture, scoped["token"], request())["worker"] for _ in range(2)]
+    with store.transaction() as db:
+        assert compute.available(db, org)
+    for worker in workers:
+        compute.change_worker(user, org, worker["id"], draining=True)
+    with store.transaction() as db:
+        assert compute.capacity(db, org) == [] and not compute.available(db, org)
+        assert not compute.runnable(db, org, IMAGE["id"], dict(DEFAULT_RESOURCES))
+        with pytest.raises(StoreError, match="no compute worker or scaler"):
+            compute.require_runnable(db, org, IMAGE["id"], dict(DEFAULT_RESOURCES))
+    with pytest.raises(StoreError) as failure:
+        enroll(fixture, scoped["token"], request())
+    assert failure.value.status == 429
+    # Revoking an idle drained worker frees its seat: the grant can enroll again, so it counts as capacity again.
+    compute.change_worker(user, org, workers[0]["id"], revoke=True)
+    with store.transaction() as db:
+        assert compute.available(db, org) and compute.runnable(db, org, IMAGE["id"], dict(DEFAULT_RESOURCES))
+    assert enroll(fixture, scoped["token"], request())["worker"]["id"] not in {worker["id"] for worker in workers}
+
+
+def test_grant_below_its_ceiling_counts_as_capacity_before_any_worker_exists(fixture):
+    store, app, owner, _, _ = fixture
+    grant(fixture, maximum_workers=1)
+    with store.transaction() as db:
+        assert app.state.compute.capacity(db, owner["organization_id"]) == [
+            {"image_ids": [IMAGE["id"]], "resources": dict(DEFAULT_RESOURCES)}
+        ]
+
+
 @pytest.mark.parametrize(
     "field,value",
     [

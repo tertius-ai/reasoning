@@ -33,6 +33,13 @@ ERROR_CODES = {
     "image_verification_failed",
     "worker_stopped",
 }
+# Workers that hold one of a scaler's seats: unrevoked (draining ones too), or revoked with an outcome still unsettled.
+# A scaler at its ceiling can enroll no one, so it adds no capacity beyond its own live workers.
+SCALER_SEATS = (
+    "SELECT COUNT(*) FROM compute_enrollments e JOIN compute_workers w ON w.id=e.worker_id "
+    "WHERE e.scaler_id={scaler} AND (w.revoked_at IS NULL OR EXISTS(SELECT 1 FROM compute_jobs j "
+    "WHERE j.worker_id=w.id AND j.status IN ('running','outcome_unknown')))"
+)
 
 
 def _bounded_int(value: object, low: int, high: int) -> bool:
@@ -67,14 +74,15 @@ class ComputeStore:
 
     @staticmethod
     def capacity(db: sqlite3.Connection, org: str) -> list[dict]:
-        """What can run this organization's jobs now: each live worker, and each enabled scaler that can start one,
-        with the images it serves and the largest job it accepts. A worker claims only jobs that fit its own offer."""
+        """What can run this organization's jobs now: each live worker, and each enabled scaler that can still enroll
+        one (below its worker ceiling), with the images it serves and the largest job it accepts. A worker claims only
+        jobs that fit its own offer."""
         rows = db.execute(
             "SELECT image_ids_json,resources_json FROM compute_workers WHERE organization_id=? AND revoked_at IS NULL "
             "AND draining=0 UNION ALL SELECT s.image_ids_json,s.resources_json FROM compute_scalers s JOIN memberships m "
             "ON m.organization_id=s.organization_id AND m.user_id=s.authorized_by JOIN users u ON u.id=m.user_id "
             "WHERE s.organization_id=? AND s.revoked_at IS NULL AND s.expires_at>? AND m.role IN ('owner','admin') "
-            "AND u.account_kind='human'",
+            "AND u.account_kind='human' AND (" + SCALER_SEATS.format(scaler="s.id") + ")<s.maximum_workers",
             (org, org, int(time.time())),
         ).fetchall()
         offers = []
