@@ -176,12 +176,15 @@ def input_arguments(name: str) -> list[str]:
     ]
 
 
-def verify_daemon(info: dict, limits: dict) -> None:
+def verify_daemon(info: dict, limits: dict, *, swapless: bool = False) -> None:
+    """A daemon that enforces every job limit. `swapless` is only for a host proven to have no swap at all: there a
+    container cannot swap, so the memory limit alone bounds it and the daemon's swap-limit support is not needed."""
+    required = ("MemoryLimit", "CpuCfsQuota", "PidsLimit") if swapless else ("MemoryLimit", "SwapLimit", "CpuCfsQuota", "PidsLimit")
     if (
         info.get("OSType") != "linux"
         or info.get("Architecture") not in {"amd64", "x86_64"}
         or info.get("CgroupVersion") != "2"
-        or any(info.get(key) is not True for key in ("MemoryLimit", "SwapLimit", "CpuCfsQuota", "PidsLimit"))
+        or any(info.get(key) is not True for key in required)
         or not any(item.startswith("name=seccomp,") and "profile=builtin" in item for item in info.get("SecurityOptions", []))
         or info.get("NCPU", 0) < limits["cpu"]
         or info.get("MemTotal", 0) < limits["memory_bytes"] + 256 * 1024**2
@@ -210,7 +213,7 @@ def verify_image(info: dict, image: ComputeImage) -> str:
     return identifier
 
 
-def verify_container(info: dict, identifier: str, worker: str, attempt: str, limits: dict) -> None:
+def verify_container(info: dict, identifier: str, worker: str, attempt: str, limits: dict, *, swapless: bool = False) -> None:
     config, host = info.get("Config", {}), info.get("HostConfig", {})
     expected = {
         "ReadonlyRootfs": True,
@@ -220,7 +223,8 @@ def verify_container(info: dict, identifier: str, worker: str, attempt: str, lim
         "CgroupnsMode": "private",
         "NanoCpus": limits["cpu"] * 10**9,
         "Memory": limits["memory_bytes"],
-        "MemorySwap": limits["memory_bytes"],
+        # Without swap-limit support Docker records -1 ("memory limited without swap"); valid only on a swapless host.
+        "MemorySwap": -1 if swapless else limits["memory_bytes"],
         "PidsLimit": limits["pids"],
         "ShmSize": 1024**2,
         "Init": True,
@@ -297,6 +301,9 @@ def verify_evidence(capabilities: bytes, sbom: bytes, image: ComputeImage, limit
 
 
 class DockerRunner:
+    # Only a runner that has proven its Docker host has no swap may waive swap-limit support (see verify_daemon).
+    swapless = False
+
     def __init__(self, data_dir: Path, worker_id: str, socket_path: Path = Path("/var/run/docker.sock")):
         if not HEX_ID.fullmatch(worker_id) or not socket_path.is_absolute() or any(c in str(socket_path) for c in "\r\n\x00"):
             raise ValueError("worker ID and local Docker socket are required")
@@ -455,7 +462,7 @@ class DockerRunner:
     def preflight(self, image: ComputeImage, limits: dict) -> str:
         try:
             info = json.loads(self._command(["info", "--format", "{{json .}}"], timeout=10))
-            verify_daemon(info, limits)
+            verify_daemon(info, limits, swapless=self.swapless)
             return verify_image(self._inspect("image", image.reference), image)
         except (ValueError, TypeError) as exc:
             raise RuntimeFault("sandbox_unavailable") from exc
@@ -590,7 +597,7 @@ class DockerRunner:
             created = True
             self._command(create_arguments(self.worker_id, job["attempt_id"], image, limits), stopped=stopped)
             info = self._inspect("container", name)
-            verify_container(info, identifier, self.worker_id, job["attempt_id"], limits)
+            verify_container(info, identifier, self.worker_id, job["attempt_id"], limits, swapless=self.swapless)
             self._evidence(name, image, limits, language, stopped)
             self._command(["container", "start", name], stopped=stopped)
             began = time.monotonic()

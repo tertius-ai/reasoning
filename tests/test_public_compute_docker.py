@@ -184,6 +184,17 @@ def test_daemon_capabilities_fail_closed(daemon, key, value):
         verify_daemon(daemon, LIMITS)
 
 
+@pytest.mark.parametrize("key,value", [("MemoryLimit", False), ("CpuCfsQuota", False), ("PidsLimit", False), ("CgroupVersion", "1")])
+def test_a_swapless_host_waives_only_swap_limit_support(daemon, key, value):
+    daemon["SwapLimit"] = False
+    with pytest.raises(RuntimeFault, match="sandbox_unavailable"):
+        verify_daemon(daemon, LIMITS)
+    verify_daemon(daemon, LIMITS, swapless=True)
+    daemon[key] = value
+    with pytest.raises(RuntimeFault, match="sandbox_unavailable"):
+        verify_daemon(daemon, LIMITS, swapless=True)
+
+
 @pytest.mark.parametrize(
     "key,value",
     [("Id", "mutable-tag"), ("Os", "windows"), ("Architecture", "arm64"), ("RepoDigests", []), ("Config", {"Volumes": {"/host": {}}})],
@@ -228,6 +239,17 @@ def test_inspected_sandbox_rejects_weakened_host_policy(container, key, value):
     container["HostConfig"][key] = value
     with pytest.raises(RuntimeFault, match="image_verification_failed"):
         verify_container(container, IMAGE_ID, WORKER, ATTEMPT, LIMITS)
+
+
+def test_a_swapless_host_expects_dockers_memory_only_limit_and_nothing_weaker(container):
+    # Without swap-limit support Docker records MemorySwap -1; that is accepted only on a host proven swapless.
+    container["HostConfig"]["MemorySwap"] = -1
+    with pytest.raises(RuntimeFault, match="image_verification_failed"):
+        verify_container(container, IMAGE_ID, WORKER, ATTEMPT, LIMITS)
+    verify_container(container, IMAGE_ID, WORKER, ATTEMPT, LIMITS, swapless=True)
+    container["HostConfig"]["Memory"] = 0
+    with pytest.raises(RuntimeFault, match="image_verification_failed"):
+        verify_container(container, IMAGE_ID, WORKER, ATTEMPT, LIMITS, swapless=True)
 
 
 @pytest.mark.parametrize(

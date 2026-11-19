@@ -362,7 +362,8 @@ def test_sdk_create_pins_runtime_caps_and_does_not_inject_any_credentials(monkey
     sdk.create(name, DEFAULT_RESOURCES)
     args, options = calls[0]
     assert args[0] == "dockerd" and options["runtime"] == "vm"
-    assert options["cpu"] == (0.5, 0.5) and options["memory"] == (1536, 1536)
+    # One requested CPU unit appears as one CPU to Docker in the VM (a 1-unit VM reported NCPU 1).
+    assert options["cpu"] == (1, 1) and options["memory"] == (1536, 1536)
     assert options["timeout"] == 720 and options["secrets"] == [] and options["include_oidc_identity_token"] is False
     assert options["tags"] == {"reasoning-name": name}
     assert "fixture_secret" not in json.dumps({key: value for key, value in options.items() if key not in {"client", "app"}})
@@ -462,13 +463,40 @@ def test_sdk_bounds_output_and_reacts_while_transport_is_blocked(kind):
         sdk.pump(sandbox, ["docker", "fixture"], **options)
 
 
+SWAPLESS = b"Filename\t\t\t\tType\t\tSize\t\tUsed\t\tPriority\nMemTotal:        2536396 kB\nSwapTotal:             0 kB\n"
+
+
+def vm_pump(proc=SWAPLESS, commands=None):
+    def pump(sandbox, args, **options):
+        if commands is not None:
+            commands.append((args, options))
+        return (0, proc) if args[:1] == ["/bin/cat"] else (0, b"")
+    return SimpleNamespace(pump=pump)
+
+
 def test_remote_docker_has_no_local_docker_or_inherited_provider_environment(tmp_path):
     commands = []
-    sdk = SimpleNamespace(pump=lambda sandbox, args, **options: (commands.append((args, options)) or (0, b"")))
-    instance = RemoteDockerRunner(tmp_path, "a" * 32, sdk, SandboxFixture())
+    instance = RemoteDockerRunner(tmp_path, "a" * 32, vm_pump(commands=commands), SandboxFixture())
     instance._command(["info"])
-    assert commands[1][0][:3] == ["docker", "--config", "/tmp/reasoning-docker-client"]
-    assert set(commands[1][1]["environment"]) == {"PATH", "LANG"}
+    assert commands[2][0][:3] == ["docker", "--config", "/tmp/reasoning-docker-client"]
+    assert set(commands[2][1]["environment"]) == {"PATH", "LANG"}
+
+
+@pytest.mark.parametrize("proc,swapless", [
+    (SWAPLESS, True),
+    (SWAPLESS.replace(b"Priority\n", b"Priority\n/swapfile file 1048572 0 -2\n"), False),
+    (SWAPLESS.replace(b"SwapTotal:             0 kB", b"SwapTotal:       1048572 kB"), False),
+])
+def test_remote_docker_relaxes_swap_limits_only_on_a_vm_proven_to_have_no_swap(tmp_path, proc, swapless):
+    # A Modal VM has no swap device, so its Docker reports no swap-limit support; without swap the memory limit binds.
+    instance = RemoteDockerRunner(tmp_path, "a" * 32, vm_pump(proc), SandboxFixture())
+    assert instance.swapless is swapless
+
+
+@pytest.mark.parametrize("proc", [b"", b"garbage", SWAPLESS.replace(b"SwapTotal:             0 kB\n", b"")])
+def test_remote_docker_refuses_a_vm_whose_swap_cannot_be_read(tmp_path, proc):
+    with pytest.raises(RuntimeFault, match="sandbox_unavailable"):
+        RemoteDockerRunner(tmp_path, "a" * 32, vm_pump(proc), SandboxFixture())
 
 
 def test_cli_requires_profile_and_catalog_before_sdk_or_claim(tmp_path):
