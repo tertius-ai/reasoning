@@ -767,6 +767,33 @@ def test_private_files_refuse_symlinked_parent_paths(tmp_path):
         read_private(link / "secret")
 
 
+RETIRED_UBUNTU = {"id": 247516813, "slug": None, "type": "base", "status": "retired", "distribution": "Ubuntu",
+                  "name": "24.04 (LTS) x64", "public": False}
+
+
+@pytest.mark.parametrize("image,accepted", [
+    (RETIRED_UBUNTU, True),
+    ({**RETIRED_UBUNTU, "status": "available"}, False),
+    ({**RETIRED_UBUNTU, "type": "snapshot"}, False),
+    ({**RETIRED_UBUNTU, "name": "22.04 (LTS) x64"}, False),
+    ({**RETIRED_UBUNTU, "distribution": "Debian"}, False),
+    ({**RETIRED_UBUNTU, "slug": "ubuntu-22-04-x64"}, False),
+    (None, False),
+])
+def test_a_droplet_on_its_retired_original_base_image_is_still_the_owned_droplet(provisioning, image, accepted):
+    # DigitalOcean drops the slug from a replaced public base image; the droplet itself has not changed.
+    remote, *_ = provisioning
+    apply(provisioning)
+    remote.droplets[0]["status"] = "active"
+    assert apply(provisioning)["phase"] == "ssh_verification_required"
+    remote.droplets[0]["image"] = image
+    if accepted:
+        assert apply(provisioning)["phase"] == "ssh_verification_required"
+    else:
+        with pytest.raises(InstallError, match="configuration changed"):
+            apply(provisioning)
+
+
 def test_direct_droplet_inspection_must_match_the_journaled_identity_before_dns_publication(provisioning):
     remote, _saved, _document, _provisioner, _directory = provisioning
     remote.get_id_override = 457

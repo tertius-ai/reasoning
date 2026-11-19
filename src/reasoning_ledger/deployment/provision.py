@@ -137,6 +137,32 @@ def save_plan(path: Path, plan: dict, *, validator=validate_plan) -> dict:
     return {"plan_id": identity, "plan_file": str(path.absolute()), "plan": plan}
 
 
+# The public base image each supported plan image slug names, as DigitalOcean describes it once that image is retired.
+BASE_IMAGES = {"ubuntu-24-04-x64": ("Ubuntu", "24.04 (LTS) x64")}
+
+
+def original_image(image, slug: str) -> bool:
+    """Whether a droplet still runs the base image its plan created it from.
+
+    DigitalOcean replaces its public base images over time. A droplet created from a replaced image keeps that image,
+    but the image record loses its slug and is marked retired. Only that exact retired base image is accepted in place
+    of the slug; any other image, including a snapshot or a different release, is a changed droplet.
+    """
+    if not isinstance(image, dict):
+        return False
+    if image.get("slug") == slug:
+        return True
+    distribution, name = BASE_IMAGES.get(slug, (None, None))
+    return (
+        name is not None
+        and image.get("slug") is None
+        and image.get("type") == "base"
+        and image.get("status") == "retired"
+        and image.get("distribution") == distribution
+        and image.get("name") == name
+    )
+
+
 def ssh_access_cidr(value: str) -> str:
     try:
         network = ipaddress.ip_network(value, strict=True)
@@ -474,8 +500,7 @@ class Provisioner:
                 and row.get("tags") == [self.marker]
                 and isinstance(row.get("region"), dict)
                 and row["region"].get("slug") == self.plan["region"]
-                and isinstance(row.get("image"), dict)
-                and row["image"].get("slug") == self.plan["image"]
+                and original_image(row.get("image"), self.plan["image"])
                 and row.get("size_slug") == self.plan["size"]
                 and all(type(row.get(key)) is int for key in ("memory", "vcpus", "disk"))
                 and row.get("memory") == self.plan["resources"]["memory_mib"]
