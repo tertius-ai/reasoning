@@ -556,6 +556,31 @@ def test_lease_expiry_allows_fenced_delivery_but_occupies_active_capacity(comput
     assert spare.post("/api/worker/claim", json={}).json()["client_id"] == "waiting"
 
 
+def test_deadline_allows_worker_startup_before_the_program_runs(compute, monkeypatch):
+    # A Modal relay starts a VM and downloads the image after claiming, so a heartbeating attempt must outlive the
+    # program's wall time plus delivery. It ends only after the shared startup allowance is spent too.
+    from types import SimpleNamespace
+
+    from reasoning_ledger.server import compute_modal, compute_store
+
+    _, _, _, client, owner, _ = compute
+    job = enqueue(compute, resources={**DEFAULT_RESOURCES, "wall_time_seconds": 30})
+    _, agent = worker(compute)
+    claimed = agent.post("/api/worker/claim", json={}).json()
+    delivery = 120 + 2
+    assert compute_modal.OVERHEAD_SECONDS == compute_store.STARTUP_SECONDS
+    assert claimed["deadline_at"] == claimed["started_at"] + compute_store.STARTUP_SECONDS + 30 + delivery
+    clock = [claimed["started_at"]]
+    monkeypatch.setattr(compute_store, "time", SimpleNamespace(time=lambda: clock[0]))
+    heartbeat = f"/api/worker/jobs/{job['id']}/heartbeat"
+    while clock[0] < claimed["started_at"] + 30 + delivery + 60:
+        clock[0] += 10
+        assert agent.post(heartbeat, json=lease_body(claimed)).json()["stop"] is False
+    assert client.get(job_path(owner, job)).json()["status"] == "running"
+    clock[0] = claimed["deadline_at"]
+    assert client.get(job_path(owner, job)).json()["status"] == "outcome_unknown"
+
+
 def test_partial_and_empty_artifact_uploads_can_resume_across_restart(compute):
     config, _, _, client, owner, _ = compute
     job = enqueue(compute)

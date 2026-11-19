@@ -592,9 +592,12 @@ job. Neither case justifies submitting another computation automatically.
 Workers should heartbeat every ten seconds; leases expire after thirty seconds.
 Heartbeats return `stop: true` for cancellation, changed authority/policy/image,
 or a non-running attempt. Heartbeats and claims update worker last-seen state.
-The delivery deadline is start time plus declared wall time plus
-`120 + 2 * ceil(artifact_bytes / MiB)` seconds for finishing delivery; this
-bounded grace does not increase permitted program runtime.
+The delivery deadline is claim time plus a 600-second startup allowance, the
+declared wall time, and `120 + 2 * ceil(artifact_bytes / MiB)` seconds for
+finishing delivery. The startup allowance covers work before the program starts:
+a Modal relay creates a VM, starts Docker and downloads the image for each job,
+and bounds that VM by the same allowance. Neither grace increases permitted
+program runtime, which the worker enforces from the program's own start.
 Workers must stop containers on lease loss, heartbeat refusal, or a stop response.
 
 PATCH `compute-workers/{worker_id}` with `draining: true` stops fresh claims

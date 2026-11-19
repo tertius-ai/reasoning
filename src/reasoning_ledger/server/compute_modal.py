@@ -17,13 +17,13 @@ from pathlib import Path
 
 from .compute_catalog import REFERENCE, ComputeImage, canonical, fits, resources
 from .compute_docker import HEX_ID, CleanupUncertain, DockerRunner, Outcome, RuntimeFault, container_name
-from .compute_store import ERROR_CODES, ComputeStore
+from .compute_store import ERROR_CODES, STARTUP_SECONDS, ComputeStore
 from .security import private_file
 from .workflow_inputs import input_bytes
 
 # Official Ubuntu 24.04 linux/amd64 base manifest, not a mutable tag.
 SUPERVISOR_IMAGE = "docker.io/library/ubuntu@sha256:496754492fb28b4d3049432f2ca787449331e23fb14f0dd3fffea86bf5a93eb4"
-OVERHEAD_SECONDS = 600
+OVERHEAD_SECONDS = STARTUP_SECONDS
 OVERHEAD_MEMORY = 512 * 1024**2
 DIAGNOSTIC_CODES = ERROR_CODES | {
     "cancelled", "docker_unavailable", "sandbox_unavailable", "modal_unavailable", "output_limit",
