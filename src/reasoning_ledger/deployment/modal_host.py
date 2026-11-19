@@ -15,7 +15,7 @@ from pathlib import Path
 
 from reasoning_ledger.server.compute_catalog import ComputeImage, canonical, fits
 from reasoning_ledger.server.compute_modal import modal_profile
-from reasoning_ledger.server.compute_worker import WorkerClient, WorkerFault, enrollment, verify_identity
+from reasoning_ledger.server.compute_worker import WorkerClient, WorkerFault, drain_status, enrollment, verify_identity
 
 from .host import ENVIRONMENT, MANAGED, HostInstaller, InstallError, atomic_write, install_python_payload, public_origin
 from .private import locked_directory, read_document, read_private, write_document
@@ -55,6 +55,23 @@ def validate_request(value, operation):
         return value
     except (KeyError, TypeError, ValueError, WorkerFault):
         raise InstallError("invalid Modal host request, enrollment, images, or resource profile") from None
+
+
+RELAY_UNIT = re.compile(r"reasoning-modal-([a-f0-9]{32})\.service\Z")
+RELAY_RUNTIME = re.compile(rb"^ExecStart=/opt/reasoning/modal/([a-f0-9]{64})/venv/bin/reasoning-compute-worker \\$", re.MULTILINE)
+
+
+def validate_refresh(value):
+    """Move every installed relay onto the installed release's relay runtime."""
+    try:
+        if (not isinstance(value, dict) or set(value) != {"format", "release_id", "public_url"}
+                or type(value["format"]) is not int or value["format"] != 1
+                or not isinstance(value["release_id"], str) or not re.fullmatch(r"[a-f0-9]{64}", value["release_id"])):
+            raise ValueError
+        public_origin(value["public_url"])
+        return value
+    except (KeyError, TypeError, ValueError):
+        raise InstallError("invalid Modal relay update request") from None
 
 
 def validate_addition(value, operation):
@@ -292,14 +309,24 @@ class ModalHostInstaller:
                       "--shell", "/usr/sbin/nologin", "reasoning-modal"])
             return pwd.getpwnam("reasoning-modal")
 
+    def _probe(self, venv, state):
+        # Read-only provider/configuration probe: no sandbox or program, and no claim on the relay's state lock.
+        self.run(["runuser", "-u", "reasoning-modal", "--", str(venv / "bin/reasoning-compute-worker"),
+                  "--data-dir", str(state), "verify-images", "--backend", "modal", "--modal-profile",
+                  str(state / "modal-profile.json"), "--catalog", str(state / "catalog.json")])
+
+    def _active(self, name):
+        output = self.run(["systemctl", "show", "--property=ActiveState", name], capture=True)
+        try:
+            fields = dict(line.split("=", 1) for line in output.decode().splitlines())
+        except (AttributeError, ValueError, UnicodeError):
+            raise InstallError("invalid Modal service state receipt") from None
+        return fields.get("ActiveState") == "active"
+
     def _start_relays(self, venv, parent, identifiers):
         self.run(["systemctl", "daemon-reload"])
         for identifier in identifiers:
-            state = parent / identifier
-            # Read-only provider/configuration probe: no sandbox or program.
-            self.run(["runuser", "-u", "reasoning-modal", "--", str(venv / "bin/reasoning-compute-worker"),
-                      "--data-dir", str(state), "verify-images", "--backend", "modal", "--modal-profile",
-                      str(state / "modal-profile.json"), "--catalog", str(state / "catalog.json")])
+            self._probe(venv, parent / identifier)
             name = "reasoning-modal-" + identifier
             self.service_identity(name)
             self.run(["systemctl", "enable", "--now", name])
@@ -406,6 +433,94 @@ class ModalHostInstaller:
             self._start_relays(venv, parent, [worker["enrollment"]["id"] for worker in value["workers"]])
             return {"addition_id": value["addition_id"], "relays_active": len(value["workers"]), "live_compute_verified": False}
 
+    def refresh(self, value):
+        validate_refresh(value)
+        return self._locked(lambda: self._refresh(value))
+
+    def _relay_safety(self, parent, identifier, account):
+        state = parent / identifier
+        info = state.lstat()
+        if not stat.S_ISDIR(info.st_mode) or info.st_uid != account.pw_uid or stat.S_IMODE(info.st_mode) != 0o700:
+            raise InstallError("unsafe Modal relay state")
+        return state
+
+    def _refresh(self, value):
+        """Replace only the relay runtime. Enrollments, credentials, catalogs and Modal profiles stay as they are.
+
+        Every relay must be drained with no running or unknown job, and idle locally, so no attempt is cut off. All
+        relays are probed with the new runtime before any is stopped. Only relays that were running are started again.
+        """
+        value = validate_refresh(value)
+        release = value["release_id"]
+        self._installed(value)
+        setup = self.root / "var/lib/reasoning-deploy/modal-setup"
+        if not (setup / "installation.json").is_file():
+            raise InstallError("update relays only on a host with an installed Modal setup")
+        with locked_directory(setup):
+            account = self._relay_account(create=False)
+            parent = self.root / "var/lib/reasoning-modal"
+            units = self.root / "etc/systemd/system"
+            relays = []
+            for path in sorted(units.iterdir()):
+                match = RELAY_UNIT.fullmatch(path.name)
+                if not match:
+                    continue
+                identifier, name = match[1], path.name[:-len(".service")]
+                info = path.lstat()
+                body = path.read_bytes() if stat.S_ISREG(info.st_mode) else b""
+                runtime = RELAY_RUNTIME.search(body)
+                if (not runtime or info.st_uid != os.getuid() or info.st_mode & 0o022 or info.st_nlink != 1
+                        or body != relay_unit(runtime[1].decode(), identifier).encode()):
+                    raise InstallError("Modal service definition changed; do not overwrite it")
+                self.service_identity(name)
+                state = self._relay_safety(parent, identifier, account)
+                sandbox = state / "modal-sandbox.json"
+                if ((sandbox.exists() or sandbox.is_symlink())
+                        and json.loads(self._private_relay_file(sandbox, account)) != {"phase": "idle"}):
+                    raise InstallError("a Modal relay has an unfinished VM attempt; let it settle before updating relays")
+                try:
+                    config = enrollment(value["public_url"], json.loads(self._private_relay_file(state / "enrollment.json", account)))
+                    if config["id"] != identifier:
+                        raise ValueError
+                except (ValueError, TypeError, KeyError, WorkerFault):
+                    raise InstallError("a Modal relay enrollment is missing or does not match its service") from None
+                client = self.identity_client(config)
+                try:
+                    if not verify_identity(config, client)["draining"]:
+                        raise InstallError("drain every Modal relay worker before updating relays; resume claims afterwards")
+                    if not drain_status(config, client.request("GET", "/api/worker/status"))["quiescent"]:
+                        raise InstallError("a Modal relay still has running or unknown jobs; settle them before updating relays")
+                finally:
+                    client.close()
+                relays.append((identifier, name, runtime[1].decode()))
+            if not relays:
+                raise InstallError("no Modal relays are installed on this host")
+            venv = self._relay_venv(release)
+            for identifier, _, _ in relays:
+                self._probe(venv, parent / identifier)
+            # A lost reply after a stop must still start the relays that were running: keep that intent first.
+            journal = setup / f"relay-refresh-{release}.json"
+            restart = read_document(journal)["restart"] if journal.exists() or journal.is_symlink() else []
+            changed = []
+            for identifier, name, current in relays:
+                if current == release:
+                    continue
+                if self._active(name) and identifier not in restart:
+                    restart.append(identifier)
+                    write_document(journal, {"release_id": release, "restart": sorted(restart)})
+                self.run(["systemctl", "stop", name])
+                atomic_write(units / (name + ".service"), relay_unit(release, identifier).encode(), mode=0o644)
+                changed.append(identifier)
+            self.run(["systemctl", "daemon-reload"])
+            for identifier, name, _ in relays:
+                self.service_identity(name)
+                if identifier in restart:
+                    self.run(["systemctl", "start", name])
+                    self.run(["systemctl", "is-active", "--quiet", name])
+                    self.service_identity(name, active=True)
+            return {"release_id": release, "relays": [identifier for identifier, _, _ in relays], "updated": sorted(changed),
+                    "restarted": sorted(restart), "live_compute_verified": False}
+
     def _unit(self, release, identifier):
         unit = self.root / f"etc/systemd/system/reasoning-modal-{identifier}.service"
         body = relay_unit(release, identifier).encode()
@@ -421,13 +536,15 @@ class ModalHostInstaller:
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--input", required=True, type=Path)
-    parser.add_argument("--operation", required=True, choices=("prepare", "activate", "extend", "relays"))
+    parser.add_argument("--operation", required=True, choices=("prepare", "activate", "extend", "relays", "refresh"))
     args = parser.parse_args(argv)
     try:
         if os.geteuid() != 0:
             raise InstallError("Modal host installation requires root on the managed chat host")
         installer, value = ModalHostInstaller(), json.loads(read_private(args.input))
-        if args.operation in {"extend", "relays"}:
+        if args.operation == "refresh":
+            result = installer.refresh(value)
+        elif args.operation in {"extend", "relays"}:
             result = installer.add_images(value, args.operation)
         else:
             result = installer.install(value, args.operation)

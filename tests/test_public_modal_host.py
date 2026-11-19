@@ -317,3 +317,99 @@ def test_image_addition_requires_an_installed_modal_setup(host):
     with pytest.raises(InstallError, match="installed Modal setup"):
         installer.add_images(request, "extend")
     assert calls == []
+
+
+@pytest.fixture
+def refresh(host):
+    """A running original relay, drained and idle, on a host upgraded to a newer release."""
+    root, payload, worker, installer, calls, identity = host
+    installer.install(payload, "prepare")
+    installer.install({**payload, "workers": [worker]}, "activate")
+    upgraded = "8" * 64
+    original = root / "opt/reasoning/releases" / payload["release_id"]
+    target = root / "opt/reasoning/releases" / upgraded
+    (target / "wheel").mkdir(parents=True)
+    for name in ("modal-requirements.txt", "manifest.json", "wheel/reasoning_ledger-0.1.0-py3-none-any.whl"):
+        (target / name).write_bytes((original / name).read_bytes())
+    path = root / "var/lib/reasoning-deploy/installation.json"
+    write_document(path, {**json.loads(path.read_text()), "release_id": upgraded})
+    state = {"draining": 1, "unsettled_jobs": []}
+
+    def client(config):
+        def request(method, endpoint, body=None):
+            view = {**config, "revoked_at": None, "retired_at": None, "draining": state["draining"]}
+            if endpoint == "/api/worker/status":
+                return {**view, "unsettled_jobs": state["unsettled_jobs"], "quiescent": not state["unsettled_jobs"]}
+            return view
+        return SimpleNamespace(request=request, close=lambda: None)
+
+    installer.identity_client = client
+    write_private(root / "var/lib/reasoning-modal" / worker["enrollment"]["id"] / "modal-sandbox.json", b'{"phase":"idle"}')
+    calls.clear()
+    request = {"format": 1, "release_id": upgraded, "public_url": payload["public_url"]}
+    return root, request, worker, installer, calls, identity, state
+
+
+def unit_path(root, worker):
+    return root / "etc/systemd/system" / ("reasoning-modal-" + worker["enrollment"]["id"] + ".service")
+
+
+def test_relay_update_moves_drained_relays_to_the_installed_release_and_keeps_their_state(refresh):
+    root, request, worker, installer, calls, _, _ = refresh
+    identifier = worker["enrollment"]["id"]
+    before = relay_files(root, identifier)
+
+    result = installer.refresh(request)
+
+    assert result == {"release_id": request["release_id"], "relays": [identifier], "updated": [identifier],
+                      "restarted": [identifier], "live_compute_verified": False}
+    assert unit_path(root, worker).read_text() == relay_unit(request["release_id"], identifier)
+    assert relay_files(root, identifier) == before
+    name = "reasoning-modal-" + identifier
+    probes = [index for index, call in enumerate(calls) if "verify-images" in call]
+    stop = calls.index(["systemctl", "stop", name])
+    assert probes and max(probes) < stop
+    assert any(f"/opt/reasoning/modal/{request['release_id']}/venv/bin/reasoning-compute-worker" in " ".join(call)
+               for call in calls if "verify-images" in call)
+    assert calls.index(["systemctl", "daemon-reload"]) < calls.index(["systemctl", "start", name])
+    assert worker["profile"]["token_secret"] not in str(calls) and worker["enrollment"]["token"] not in str(calls)
+
+    calls.clear()
+    again = installer.refresh(request)
+    assert again["updated"] == [] and again["restarted"] == [identifier]
+    assert ["systemctl", "stop", name] not in calls
+
+
+def test_relay_update_leaves_a_stopped_relay_stopped(refresh):
+    root, request, worker, installer, calls, identity, _ = refresh
+    identity["service"] = {"ActiveState": "inactive"}
+    result = installer.refresh(request)
+    assert result["updated"] == [worker["enrollment"]["id"]] and result["restarted"] == []
+    assert not any(call[:2] == ["systemctl", "start"] for call in calls)
+
+
+@pytest.mark.parametrize("change", ["claims", "unsettled", "attempt", "unit", "dropin", "release", "no-setup"])
+def test_relay_update_refuses_before_stopping_anything_when_it_cannot_prove_it_safe(refresh, change):
+    root, request, worker, installer, calls, identity, state = refresh
+    identifier = worker["enrollment"]["id"]
+    if change == "claims":
+        state["draining"] = 0
+    elif change == "unsettled":
+        state["unsettled_jobs"] = [{"id": "e" * 32, "status": "outcome_unknown"}]
+    elif change == "attempt":
+        (root / "var/lib/reasoning-modal" / identifier / "modal-sandbox.json").unlink()
+        write_private(root / "var/lib/reasoning-modal" / identifier / "modal-sandbox.json", b'{"phase":"creating"}')
+    elif change == "unit":
+        unit_path(root, worker).write_text(unit_path(root, worker).read_text() + "Environment=EXTRA=1\n")
+    elif change == "dropin":
+        identity["service"] = {"DropInPaths": "/run/systemd/system/reasoning-modal-" + identifier + ".service.d/90.conf"}
+    elif change == "release":
+        request = {**request, "release_id": "7" * 64}
+    else:
+        (root / "var/lib/reasoning-deploy/modal-setup/installation.json").unlink()
+    original = unit_path(root, worker).read_bytes()
+    with pytest.raises(InstallError):
+        installer.refresh(request)
+    assert unit_path(root, worker).read_bytes() == original
+    assert not any(call[:2] in (["systemctl", "stop"], ["systemctl", "start"]) for call in calls)
+    assert not any("--require-hashes" in call for call in calls)

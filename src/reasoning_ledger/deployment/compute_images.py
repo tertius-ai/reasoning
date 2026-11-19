@@ -183,6 +183,49 @@ def run_add_images(directory: Path, command, *, detect_public_ipv4=None, remote=
             return {**result, "ssh_closed": True}
 
 
+def run_refresh_relays(directory: Path, command, *, detect_public_ipv4=None, remote=owned_modal_remote):
+    """Move the installed Modal relays onto the installed release's relay runtime. The caller synchronizes first."""
+    with locked_directory(directory.absolute()) as state:
+        current = current_binding(state)
+        bundle = archived_release(state, current["release_id"])
+        manifest, release, checksum = inspect_bundle(bundle, current["bundle_sha256"])
+        if release != current["release_id"] or checksum != current["bundle_sha256"]:
+            raise InstallError("synchronize the installed release before updating Modal relays")
+        if "modal-relay-refresh-v1" not in manifest.get("installation_features", []):
+            raise InstallError("upgrade the server to a release that can update Modal relays (make upgrade), then retry")
+        config_path, plan_path, ownership = state / "setup.json", state / "plan.json", state / "ownership"
+        config, document = read_document(config_path), read_document(plan_path)
+        origin = public_origin(operator_origin(config, document, current))
+        print(f"Site: {origin}\nRelease: {release}")
+        print("Every Modal relay on the chat host moves to this release's relay code. Enrollments, Modal credentials,")
+        print("catalogs and limits are unchanged. Drain every relay worker first (Administration → Compute → Drain worker);")
+        print("the update refuses a relay that can still take jobs or has an unsettled one. Resume claims afterwards.")
+        approve("Update the Modal relays?", "update relays " + origin)
+        plan_id = document["plan_id"] if "plan_id" in document else read_document(state / "setup-completion.json")["plan_id"]
+        cidr = temporary_ssh_cidr(detect_public_ipv4)
+        try:
+            config, opened = _ssh_action(
+                command, state, config_path, config, plan_path, plan_id, ownership, ["--open-cidr", cidr, "--wait-seconds", 60]
+            )
+            if opened.get("phase") != "open":
+                raise InstallError("temporary SSH access is unverified")
+            result = remote(config, document, ownership, bundle, {"format": 1, "release_id": release, "public_url": origin},
+                            "refresh")
+            if (not isinstance(result, dict) or result.get("release_id") != release
+                    or result.get("live_compute_verified") is not False):
+                raise InstallError("Modal relay update receipt is invalid")
+        finally:
+            config, closed = close_ssh_with_token_recovery(
+                lambda arguments: _invoke(command, arguments), state, config_path, config, plan_path, ownership, plan_id,
+                document["plan"],
+            )
+            if closed.get("phase") != "closed":
+                raise InstallError("SSH closure is unverified; run make doctor with the same deployment state")
+        print("Relays updated. Resume claims on each relay worker, then run a small job; live execution is not claimed "
+              "until one succeeds.")
+        return {**result, "ssh_closed": True}
+
+
 def _journal(work, target, origin, release, configuration, workers, approved):
     path = work / "addition.json"
     if path.exists() or path.is_symlink():

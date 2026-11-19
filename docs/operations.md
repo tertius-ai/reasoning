@@ -48,6 +48,12 @@ not block an upgrade: the stop interrupts them and the target's startup recovers
 them. Work that starts in the seconds between the last check and the stop is still
 refused by the migration's own check, which then requires `make upgrade-resume`.
 
+Modal relays on the chat host count as enrolled compute workers, so drain them
+before `make upgrade` and resume their claims afterwards. An upgrade does not
+replace their relay code; while they are still drained, run
+`make compute-relays-update` to move them onto the new release's relay code (see
+[Update the Modal relays](compute.md#update-the-modal-relays)).
+
 `make email-setup` enables Resend invitations and account-verification email on
 an existing managed server. It synchronizes release identity and refuses pending
 upgrades, collects protected sending credentials and typed consent locally,

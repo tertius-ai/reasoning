@@ -244,3 +244,56 @@ def test_add_images_refuses_a_release_without_the_host_operation_before_any_prom
     with pytest.raises(InstallError, match="make upgrade"):
         compute_images.run_add_images(state, None)
     assert calls == [] and not (state / "compute-images").exists()
+
+
+@pytest.fixture
+def relays(setup, monkeypatch):
+    from reasoning_ledger.deployment import compute_images
+
+    state, calls, _ = setup
+    current = {"release_id": "a" * 64, "bundle_sha256": "b" * 64, "public_url": "https://chat.example.org"}
+    monkeypatch.setattr(compute_images, "current_binding", lambda _: current)
+    monkeypatch.setattr(compute_images, "archived_release", lambda *_: state / "installed.tar.gz")
+    features = {"installation_features": ["modal-relay-v1", "modal-relay-refresh-v1"]}
+    monkeypatch.setattr(compute_images, "inspect_bundle", lambda *_: (features, "a" * 64, "b" * 64))
+    monkeypatch.setattr(compute_images, "approve", lambda prompt, phrase: calls.append(phrase))
+    monkeypatch.setattr(compute_images, "temporary_ssh_cidr", lambda *_: "203.0.113.1/32")
+    monkeypatch.setattr(compute_images, "_ssh_action", lambda *args: (calls.append("open") or args[3], {"phase": "open"}))
+    monkeypatch.setattr(compute_images, "close_ssh_with_token_recovery",
+                        lambda *args: (calls.append("close") or args[3], {"phase": "closed"}))
+    return compute_images, state, calls, features
+
+
+def test_relay_update_asks_consent_then_runs_the_host_refresh_inside_one_ssh_window(relays):
+    compute_images, state, calls, _ = relays
+    requests = []
+
+    def remote(config, document, ownership, bundle, payload, operation):
+        requests.append((payload, operation))
+        calls.append("remote")
+        return {"release_id": payload["release_id"], "relays": ["c" * 32], "updated": ["c" * 32], "restarted": ["c" * 32],
+                "live_compute_verified": False}
+
+    result = compute_images.run_refresh_relays(state, None, remote=remote)
+    assert calls == ["update relays https://chat.example.org", "open", "remote", "close"]
+    assert requests == [({"format": 1, "release_id": "a" * 64, "public_url": "https://chat.example.org"}, "refresh")]
+    assert result["ssh_closed"] is True and result["updated"] == ["c" * 32]
+
+
+def test_relay_update_refuses_a_release_without_the_host_operation_before_any_prompt(relays):
+    compute_images, state, calls, features = relays
+    features["installation_features"] = ["modal-relay-v1"]
+    with pytest.raises(InstallError, match="make upgrade"):
+        compute_images.run_refresh_relays(state, None, remote=lambda *_: pytest.fail("must not reach the host"))
+    assert calls == []
+
+
+def test_relay_update_closes_ssh_when_the_host_refuses(relays):
+    compute_images, state, calls, _ = relays
+
+    def remote(*_):
+        raise InstallError("drain every Modal relay worker before updating relays")
+
+    with pytest.raises(InstallError, match="drain every"):
+        compute_images.run_refresh_relays(state, None, remote=remote)
+    assert calls[-1] == "close"
