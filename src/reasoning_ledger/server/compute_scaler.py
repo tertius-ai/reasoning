@@ -7,6 +7,7 @@ import re
 import time
 
 from .compute_catalog import canonical, fits
+from .compute_store import SCALER_SEATS
 from .security import digest, token
 from .store import StoreError, _id, _row
 
@@ -189,12 +190,7 @@ class ComputeScalers:
                 raise StoreError(409, "approved image resource limits changed; no worker was enrolled")
             if not set(images) <= set(self.compute._policy(db, org)["allowed_images"]):
                 raise StoreError(409, "organization compute policy does not currently allow these enrollment images")
-            count = db.execute(
-                "SELECT COUNT(*) FROM compute_enrollments e JOIN compute_workers w ON w.id=e.worker_id "
-                "WHERE e.scaler_id=? AND (w.revoked_at IS NULL OR EXISTS(SELECT 1 FROM compute_jobs j "
-                "WHERE j.worker_id=w.id AND j.status IN ('running','outcome_unknown')))",
-                (scaler["id"],),
-            ).fetchone()[0]
+            count = db.execute(SCALER_SEATS.format(scaler="?"), (scaler["id"],)).fetchone()[0]
             if count >= scaler["maximum_workers"]:
                 raise StoreError(429, "scaler already has its maximum unrevoked or still-busy workers")
             worker = self.compute._register_worker(db, scaler["authorized_by"], org, name, sorted(images), limits, worker_token)
