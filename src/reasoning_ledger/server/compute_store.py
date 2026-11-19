@@ -21,6 +21,10 @@ from .workflow_inputs import input_bytes
 
 TERMINAL = {"succeeded", "failed", "cancelled"}
 LEASE_SECONDS = 30
+# Time a worker may spend before the program starts and after it stops: a Modal relay creates a VM, starts Docker and
+# downloads the image for every job. The relay bounds that VM by the same allowance, so the server's deadline never ends
+# an attempt the worker is still allowed to run.
+STARTUP_SECONDS = 600
 CHUNK_BYTES = 32768
 LOG_BYTES = 1024**2
 ARTIFACT_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}\Z")
@@ -706,7 +710,7 @@ class ComputeStore:
                 # Delivery/log/artifact grace does not extend the program's declared wall-time limit.
                 # Large outputs require many bounded, fsynced HTTP chunks.
                 delivery_seconds = 120 + 2 * ((parameters["resources"]["artifact_bytes"] + 1024**2 - 1) // 1024**2)
-                deadline = now + parameters["resources"]["wall_time_seconds"] + delivery_seconds
+                deadline = now + STARTUP_SECONDS + parameters["resources"]["wall_time_seconds"] + delivery_seconds
                 db.execute(
                     "UPDATE compute_jobs SET status='running',worker_id=?,attempt_id=?,lease_hash=?,lease_expires_at=?,"
                     "deadline_at=?,started_at=?,claim_id=? WHERE id=?",
