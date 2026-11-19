@@ -260,11 +260,15 @@ remote supervisor receives Docker argv and source/input bytes over stdin.
 Modal receives the programs and their outputs as the compute provider;
 organization administrators must choose it with that data boundary in mind.
 
-The SDK uses physical CPU cores and MiB; the adapter converts requested logical
-CPUs to half as many physical cores and applies equal request/upper CPU and
-memory limits. It reserves an additional 512 MiB for the remote supervisor and
+The adapter requests one VM CPU per logical CPU of the job, since a VM sandbox
+reports one CPU to Docker per requested unit, and applies equal request/upper CPU
+and memory limits. It reserves an additional 512 MiB for the remote supervisor and
 sets a VM lifetime of job wall time plus 600 seconds (job wall time at most
-85800 seconds). Startup/image-pull operations are bounded separately. Successful
+85800 seconds). The VM has no swap device, so its Docker reports no swap-limit
+support. The relay reads `/proc/swaps` and `/proc/meminfo` in the VM and, only
+when it finds no swap at all, accepts the daemon without swap limits and the
+container's memory-only limit (`MemorySwap: -1`); an unprivileged container
+cannot add swap. Every other daemon and container requirement still applies. Startup/image-pull operations are bounded separately. Successful
 jobs settle ordinary measured program usage; failed or cancelled paid starts
 consume the full reserved application CPU-time allocation. Provider-side VM
 startup, image builds, extra memory, cleanup, and egress can be billed outside

@@ -91,8 +91,8 @@ class ModalSDK:
     def create(self, name, limits):
         client = self.connect()
         app = self.modal.App.lookup(self.profile["app"], environment_name=self.profile["environment"], client=client)
-        # Modal uses physical cores (two vCPUs/core). Docker uses logical CPUs.
-        cores = limits["cpu"] / 2
+        # A VM sandbox reports one CPU to Docker per requested unit, so request the job's logical CPUs directly.
+        cores = limits["cpu"]
         memory = math.ceil((limits["memory_bytes"] + OVERHEAD_MEMORY) / 1024**2)
         return self.modal.Sandbox.create(
             "dockerd", "--host=unix:///var/run/docker.sock", "--log-level=error", "--bridge=none", "--iptables=false",
@@ -187,6 +187,22 @@ class RemoteDockerRunner(DockerRunner):
                                  'printf \'{"auths":{}}\' > /tmp/reasoning-docker-client/config.json'], maximum=4096)
         if code:
             raise RuntimeFault("sandbox_unavailable")
+        # The VM has no swap device, so its Docker cannot report swap-limit support. Prove there is no swap before
+        # relying on the memory limit alone; the container is unprivileged and cannot add swap.
+        self.swapless = self._swapless()
+
+    def _swapless(self):
+        code, body = self.sdk.pump(self.sandbox, ["/bin/cat", "/proc/swaps", "/proc/meminfo"], maximum=65536)
+        if code:
+            raise RuntimeFault("sandbox_unavailable")
+        try:
+            lines = body.decode("ascii").splitlines()
+            header = lines.index(next(line for line in lines if line.startswith("Filename")))
+            devices = lines[header + 1:lines.index(next(line for line in lines if line.startswith("MemTotal:")))]
+            total = next(line for line in lines if line.startswith("SwapTotal:")).split()
+        except (StopIteration, UnicodeError, ValueError):
+            raise RuntimeFault("sandbox_unavailable") from None
+        return not any(line.strip() for line in devices) and total[1:] == ["0", "kB"]
 
     def _pump(self, args, **options):
         return self.sdk.pump(self.sandbox, [*self.prefix, *args], environment=self.environment, **options)
