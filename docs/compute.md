@@ -59,6 +59,29 @@ journal in `DEPLOY_STATE/compute-images`; rerun the same command to resume after
 a failure. A completed addition means the relays are active, **not that a live
 computation has succeeded**; run a small job on each added image.
 
+## Update the Modal relays
+
+Each relay runs the relay code of the release that installed it, from
+`/opt/reasoning/modal/<release>/venv`, and a server upgrade leaves that code as it
+is. `make compute-relays-update` moves every relay on the chat host onto the relay
+code of the installed release. Run `make upgrade` first if it asks for it.
+
+1. In Administration → Compute, drain every relay worker. The update refuses a
+   relay that can still take jobs, has a running or unknown job, or has an
+   unfinished VM attempt in its local journal.
+2. Run `make compute-relays-update` and type the confirmation. It refuses a relay
+   whose service definition was changed or has drop-ins.
+3. It installs the release's hash-locked relay runtime, checks every relay with the
+   read-only `verify-images` probe, then points each relay's service at the new
+   runtime. Relays that were running are restarted; stopped relays stay stopped.
+   Enrollments, Modal credentials, catalogs and limits are unchanged.
+4. Resume claims on each relay worker and run a small job.
+
+The host records the relays it will restart in
+`/var/lib/reasoning-deploy/modal-setup/relay-refresh-<release>.json` before it
+stops any of them, so rerunning the same command after a lost reply finishes the
+update.
+
 For owned hardware or dedicated DigitalOcean workers, use the separate-worker
 installation/provisioning commands linked below. Those workers need Docker on
 their execution host, not on the operator computer. Local personal CLI bots can
@@ -267,10 +290,14 @@ verified. The receipt survives ordinary job settlement; the next attempt replace
 it. Stages distinguish VM creation, Docker client setup/readiness, image download,
 and execution/result collection. Startup failures also produce one short line in
 the job output, without provider error bodies, credentials, or submitted source.
-Image downloads use Docker's quiet mode and retain their bounded transport and
-timeout. An execution outcome alone does not establish successful VM cleanup.
-These diagnostics require the updated relay runtime; upgrading the website alone
-does not replace the separately installed Modal relay code.
+Image downloads use Docker's quiet mode and a bounded transport. A fresh VM
+downloads the whole image, several GB for the research images, so the download may
+use what is left of the 600-second startup allowance after VM creation and Docker
+readiness, less 120 seconds kept for cleanup and delivery, and never less than 60
+seconds. An execution outcome alone does not establish successful VM cleanup.
+Relays run their own copy of the relay code under `/opt/reasoning/modal/<release>`;
+upgrading the server does not replace it. Use
+[`make compute-relays-update`](#update-the-modal-relays) after an upgrade.
 
 For a first DigitalOcean organization, use
 [interactive Modal setup](deployment.md#modal-in-interactive-setup). On owned

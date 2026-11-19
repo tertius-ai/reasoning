@@ -540,6 +540,9 @@ def main(argv: list[str] | None = None, *, raise_errors: bool = False) -> int:
     compute_images = commands.add_parser(
         "compute-add-images", help="add approved images and their own relays to an existing Modal installation")
     compute_images.add_argument("--state-dir", type=Path, default=Path.home() / ".reasoning-deploy")
+    compute_relays = commands.add_parser(
+        "compute-relays-update", help="move the installed Modal relays onto the installed release's relay code")
+    compute_relays.add_argument("--state-dir", type=Path, default=Path.home() / ".reasoning-deploy")
     mail_setup = commands.add_parser("email-setup", help="enable Resend mail on an existing synchronized managed deployment")
     mail_setup.add_argument("--state-dir", type=Path, default=Path.home() / ".reasoning-deploy")
     upgrade_stage = commands.add_parser("upgrade-stage", help="retain the currently installed release before building its replacement")
@@ -962,6 +965,15 @@ def main(argv: list[str] | None = None, *, raise_errors: bool = False) -> int:
                 result = run_add_images(args.state_dir, lambda arguments: main(arguments, raise_errors=True))
             except (EOFError, KeyboardInterrupt):
                 raise InstallError("adding images stopped; preserve its private directory and resume the same command") from None
+        elif args.command == "compute-relays-update":
+            from .compute_images import run_refresh_relays
+
+            if not sys.stdin.isatty():
+                raise InstallError("update Modal relays in your terminal; the typed consent belongs in the CLI")
+            try:
+                result = run_refresh_relays(args.state_dir, lambda arguments: main(arguments, raise_errors=True))
+            except (EOFError, KeyboardInterrupt):
+                raise InstallError("the relay update stopped; drain the relays and run the same command again") from None
         elif args.command == "email-setup":
             from .mail_setup import run_mail_setup
 

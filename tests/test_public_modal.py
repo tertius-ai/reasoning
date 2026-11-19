@@ -102,6 +102,8 @@ def test_run_uses_one_ephemeral_vm_and_existing_digest_pinned_docker_boundary(tm
                                         ("image_pull", "output_limit"), ("image_pull", "wall_time_limit"),
                                         ("execution", "image_verification_failed")])
 def test_failed_stage_survives_cleanup_with_safe_code_and_one_startup_message(tmp_path, monkeypatch, stage, code):
+    from reasoning_ledger.server import compute_modal
+
     instance, sdk = runner(tmp_path)
 
     class FailedDocker(DockerFixture):
@@ -115,7 +117,8 @@ def test_failed_stage_survives_cleanup_with_safe_code_and_one_startup_message(tm
                 raise RuntimeFault(code)
 
         def _command(self, command, **options):
-            assert "--quiet" in command and options["maximum"] == 65536 and options["timeout"] == 180
+            assert "--quiet" in command and options["maximum"] == 65536
+            assert 180 < options["timeout"] <= compute_modal.OVERHEAD_SECONDS - compute_modal.CLEANUP_SECONDS
             if stage == "image_pull":
                 raise RuntimeFault(code)
 
@@ -123,7 +126,7 @@ def test_failed_stage_survives_cleanup_with_safe_code_and_one_startup_message(tm
             raise RuntimeFault(code)
 
     if stage == "docker_ready":
-        clock = iter((0, 181))
+        clock = iter((0, 0, 181))
         monkeypatch.setattr("reasoning_ledger.server.compute_modal.time", SimpleNamespace(
             monotonic=lambda: next(clock), time=time.time, sleep=lambda _: None))
     instance.docker_factory = FailedDocker
@@ -137,6 +140,31 @@ def test_failed_stage_survives_cleanup_with_safe_code_and_one_startup_message(tm
     assert sdk.terminations == ["sb-fixture"] and instance.state() == {"phase": "idle"}
     if stage != "execution":
         assert len(logs) == 1 and code.encode() in logs[0]
+
+
+def test_image_download_gets_the_startup_allowance_left_after_vm_and_docker_start(tmp_path, monkeypatch):
+    # A research image is several GB; a fixed three-minute download limit failed every job on a fresh VM.
+    from reasoning_ledger.server import compute_modal
+
+    clock = [1000.0]
+    monkeypatch.setattr("reasoning_ledger.server.compute_modal.time", SimpleNamespace(
+        monotonic=lambda: clock[0], time=time.time, sleep=lambda _: None))
+    timeouts = []
+
+    class SlowStart(DockerFixture):
+        def verify_runtime_identity(self):
+            clock[0] += 45  # VM creation and Docker readiness
+
+        def _command(self, command, **options):
+            timeouts.append(options["timeout"])
+            super()._command(command, **options)
+
+    instance, _ = runner(tmp_path)
+    instance.docker_factory = SlowStart
+    assert instance.run(job(), tmp_path, [].append, lambda: False).status == "succeeded"
+    assert timeouts == [compute_modal.OVERHEAD_SECONDS - compute_modal.CLEANUP_SECONDS - 45] and timeouts[0] > 180
+    assert compute_modal.pull_seconds(0) == compute_modal.OVERHEAD_SECONDS - compute_modal.CLEANUP_SECONDS
+    assert compute_modal.pull_seconds(10**6) == compute_modal.MINIMUM_PULL_SECONDS
 
 
 @pytest.mark.parametrize("error", [OSError("private provider body as_secret sk-secret"), RuntimeFault("as_secret sk-secret")])

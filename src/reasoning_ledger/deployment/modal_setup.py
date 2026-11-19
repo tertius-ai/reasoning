@@ -226,14 +226,19 @@ def owned_modal_remote(config, document, directory, bundle, value, operation, *,
 
     from .cli import STAGE_SCRIPT, ssh_arguments
     from .digitalocean import DigitalOcean
-    from .modal_host import validate_addition, validate_request
+    from .modal_host import validate_addition, validate_refresh, validate_request
     from .private import write_private
     from .release_state import operator_origin
     from .server_install import ServerInstaller
     from .ssh_host import server_trust
 
-    addition = operation in {"extend", "relays"}
-    validate_addition(value, operation) if addition else validate_request(value, operation)
+    addition, refresh = operation in {"extend", "relays"}, operation == "refresh"
+    if refresh:
+        validate_refresh(value)
+    elif addition:
+        validate_addition(value, operation)
+    else:
+        validate_request(value, operation)
     if value["public_url"] != operator_origin(config, document):
         raise InstallError("Modal host request must use the originally confirmed organization URL")
     provider = DigitalOcean(read_private(Path(config["token_file"]), 4096).decode().strip())
@@ -244,6 +249,8 @@ def owned_modal_remote(config, document, directory, bundle, value, operation, *,
             raise InstallError("build a current Modal-enabled release before enabling compute")
         if addition and "modal-add-images-v1" not in features:
             raise InstallError("upgrade the server to a release that can add Modal images before adding them")
+        if refresh and "modal-relay-refresh-v1" not in features:
+            raise InstallError("upgrade the server to a release that can update Modal relays before updating them")
         with locked_directory(directory):
             installer.state = read_document(directory / "digitalocean.json")
             installer._validate_state()

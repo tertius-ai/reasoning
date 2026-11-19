@@ -24,6 +24,10 @@ from .workflow_inputs import input_bytes
 # Official Ubuntu 24.04 linux/amd64 base manifest, not a mutable tag.
 SUPERVISOR_IMAGE = "docker.io/library/ubuntu@sha256:496754492fb28b4d3049432f2ca787449331e23fb14f0dd3fffea86bf5a93eb4"
 OVERHEAD_SECONDS = STARTUP_SECONDS
+# Kept back from the startup allowance for terminating the VM and delivering the result after the program stops.
+CLEANUP_SECONDS = 120
+# The image download always gets at least this long, even after a slow VM or Docker start.
+MINIMUM_PULL_SECONDS = 60
 OVERHEAD_MEMORY = 512 * 1024**2
 DIAGNOSTIC_CODES = ERROR_CODES | {
     "cancelled", "docker_unavailable", "sandbox_unavailable", "modal_unavailable", "output_limit",
@@ -33,6 +37,11 @@ STAGE_NAMES = {
     "sandbox_create": "Modal VM creation", "docker_setup": "Docker client setup",
     "docker_ready": "Docker readiness", "image_pull": "image download", "execution": "execution and result collection",
 }
+
+
+def pull_seconds(elapsed):
+    """The image download's share of the startup allowance once VM creation and Docker readiness took `elapsed`."""
+    return max(MINIMUM_PULL_SECONDS, OVERHEAD_SECONDS - CLEANUP_SECONDS - math.ceil(elapsed))
 
 
 def sandbox_name(worker, attempt):
@@ -304,6 +313,7 @@ class ModalRunner:
                 log(f"Compute failed during {STAGE_NAMES[diagnostic['stage']]} ({safe_code}).\n".encode())
 
         record()
+        began = time.monotonic()
         intent = {"phase": "creating", "name": name, "sandbox_id": None, "attempt_id": job["attempt_id"]}
         # A lost creation response is reconciled by name, never by creating again.
         self.write_state(self.journal, intent)
@@ -329,8 +339,10 @@ class ModalRunner:
                             raise
                         time.sleep(0.1)
                 record(stage="image_pull")
+                # A fresh VM downloads the whole image (several GB for research images). It may use what is left of
+                # the startup allowance after VM creation and Docker readiness, which the server's deadline also grants.
                 runner._command(["image", "pull", "--quiet", "--platform", "linux/amd64", image.reference],
-                                timeout=180, maximum=65536, stopped=stopped)
+                                timeout=pull_seconds(time.monotonic() - began), maximum=65536, stopped=stopped)
                 record(stage="execution")
                 outcome = runner.run(job, spool, log, stopped)
                 record(execution_status=outcome.status, error_code=outcome.error_code)
