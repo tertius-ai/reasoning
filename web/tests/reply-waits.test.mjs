@@ -69,3 +69,14 @@ test("a computation no worker accepts says so instead of offering approval or wa
   assert.doesNotMatch(render(run({ status: "waiting", waits: [{ ...job, status: "running" }], compute_available: true })),
     /too large/);
 });
+
+test("a proposed computation lists the exact input files it would read", () => {
+  const sha = "f".repeat(64);
+  const pinned = { ...proposal, compute: { ...proposal.compute, attachments: [
+    { name: "values.csv", size_bytes: 6, sha256: sha, path: "01-values.csv" }] } };
+  const markup = render(run({ status: "waiting", waits: [pinned], compute_available: true }));
+  assert.match(markup, /texlive · python · 1 CPU · up to 2 min · 1 input file/);
+  assert.match(markup, /values\.csv · 6 bytes · read-only at <code>\/work\/in\/01-values\.csv<\/code>/);
+  assert.match(markup, new RegExp(`SHA-256 ${sha}`));
+  assert.doesNotMatch(render(run({ status: "waiting", waits: [proposal], compute_available: true })), /Input files|input file/);
+});

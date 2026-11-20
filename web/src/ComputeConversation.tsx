@@ -4,7 +4,7 @@ import { publishComputeActivity, useTopicCommand } from "./TopicCommands";
 import { ActivityCard, ActivityDialog, CardStop, TopicActivity } from "./TopicActivity";
 import { ApiError, aborted, errorMessage, organizationPath, request, sharedRequest, topicPath } from "./organization-api";
 import {
-  ComputeArtifact, ComputeAttempt, ComputeConfiguration, ComputeEvent, ComputeJob, ComputeResources as Limits,
+  ComputeArtifact, ComputeAttempt, ComputeConfiguration, ComputeEvent, ComputeInputFile, ComputeJob, ComputeResources as Limits,
   DEFAULT_COMPUTE_RESOURCES, activeCompute, appendComputeEvents, canCancelCompute, captureComputeAttempt, computeJobPath,
   deliverComputeAttempt, initialComputeResources, matchesComputeAttempt,
 } from "./compute-api";
@@ -72,6 +72,14 @@ function ComputeProgress({ job }: { job: ComputeJob }) {
   </p>;
 }
 
+/** Topic files a job pinned as inputs, as the program sees them. */
+export function ComputeInputFiles({ files }: { files?: ComputeInputFile[] }) {
+  if (!files?.length) return null;
+  return <><h4>Input files</h4><p className="org-help">Read-only in the sandbox at /work/in.</p>
+    <ul>{files.map((file) => <li key={file.path}>/work/in/{file.path} · {file.name} · {file.size_bytes} bytes
+      <small>SHA-256 {file.sha256}</small></li>)}</ul></>;
+}
+
 export function ComputeJobDetail({ organizationId, jobId, userId, canWrite, canManage, onClose, onAuthLost, embedded = false }: {
   organizationId: string; jobId: string; userId: string; canWrite: boolean; canManage: boolean; onClose: () => void; onAuthLost: () => void; embedded?: boolean;
 }) {
@@ -127,6 +135,7 @@ export function ComputeJobDetail({ organizationId, jobId, userId, canWrite, canM
           <dt>Image</dt><dd>{job.image.reference}</dd><dt>Source revision</dt><dd>{job.image.source_revision}</dd>
           <dt>Program SHA-256</dt><dd>{job.program_digest}</dd><dt>Capabilities SHA-256</dt><dd>{job.image.capabilities_digest}</dd>
           <dt>SBOM SHA-256</dt><dd>{job.image.sbom_digest}</dd></dl>
+        <ComputeInputFiles files={job.parameters.attachments} />
         <h4>Resource limits</h4>
         <pre>{JSON.stringify(job.parameters.resources, null, 2)}</pre>
         {!!artifacts.length && <><h4>File checksums</h4><p className="org-help">Files download in your browser; desktop downloads are unavailable.</p>

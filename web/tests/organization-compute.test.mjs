@@ -210,3 +210,14 @@ test("compute administration distinguishes enrollment from hardware and credenti
   assert.match(markup, /Compute administration/); assert.match(markup, /does not provision a machine/); assert.match(markup, /separate Linux\/Docker hosts/);
   assert.doesNotMatch(markup, /token_hash|Authorization: Bearer/);
 });
+
+test("a job's pinned input files show their sandbox path, size and checksum", () => {
+  const sha = "e".repeat(64);
+  const markup = renderToStaticMarkup(React.createElement(components.ComputeInputFiles, { files: [
+    { identity: "d".repeat(32), sha256: sha, topic_id: topic, name: "data set.bin", mime: "application/octet-stream",
+      size_bytes: 12, path: "01-data_set.bin" }] }));
+  assert.match(markup, /Input files/);
+  assert.match(markup, /\/work\/in\/01-data_set\.bin · data set\.bin · 12 bytes/);
+  assert.match(markup, new RegExp(`SHA-256 ${sha}`));
+  assert.equal(renderToStaticMarkup(React.createElement(components.ComputeInputFiles, {})), "");
+});

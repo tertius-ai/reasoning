@@ -1009,6 +1009,8 @@ a.org-reference:hover, a.org-reference:focus-visible { text-decoration: underlin
 .org-reply-wait small { color: var(--muted); }
 .org-reply-wait pre { max-height: 16rem; overflow: auto; }
 .org-reply-wait-actions { display: flex; flex-wrap: wrap; gap: 6px; }
+.org-reply-wait-files { display: grid; gap: 4px; margin: 0; padding-left: 18px; }
+.org-reply-wait-files small { display: block; font: 11px var(--font-mono); overflow-wrap: anywhere; }
 .org-run-refusal-actions .org-run-send-with { background: color-mix(in srgb, var(--teal) 18%, transparent);
   color: color-mix(in srgb, var(--teal) 80%, var(--foreground)); border-color: transparent; }
 /* The topic's reply model is no longer allowed. */

@@ -13,10 +13,12 @@ export type ComputePolicy = { allowed_images: string[]; monthly_cpu_seconds: num
 export type ComputeConfiguration = { policy: ComputePolicy; images: ComputeImage[];
   balance: { monthly_cpu_seconds: number; used_cpu_seconds: number; held_cpu_seconds: number; available_cpu_seconds: number } };
 export type ComputeAttempt = { client_id: string; image_id: string; language: string; program: string; resources: ComputeResources };
+/** A topic file pinned by identity and SHA-256 as a job input, read-only in the sandbox at /work/in/<path>. */
+export type ComputeInputFile = { identity: string; sha256: string; topic_id: string; name: string; mime: string; size_bytes: number; path: string };
 export type ComputeJob = {
   sequence?: number;
   id: string; organization_id: string; topic_id: string | null; project_id?: string; requested_by: string; client_id: string;
-  parameters: Omit<ComputeAttempt, "client_id">; image: ComputeImage; program_digest: string;
+  parameters: Omit<ComputeAttempt, "client_id"> & { attachments?: ComputeInputFile[] }; image: ComputeImage; program_digest: string;
   status: "queued" | "running" | "succeeded" | "failed" | "cancelled" | "outcome_unknown";
   cancel_requested: number; error_code: string | null; exit_code: number | null; elapsed_ms: number | null;
   created_at: number; started_at: number | null; finished_at: number | null; worker_id: string | null;
