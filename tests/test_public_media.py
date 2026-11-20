@@ -330,6 +330,65 @@ def test_tex_upload_is_its_own_source_for_reading_and_models(installation):
             upload(media, owner, topic, body, "application/x-tex", "bad.tex")
 
 
+# A Git bundle header followed by bytes that are neither UTF-8 nor any recognised format.
+DATA = b"# v2 git bundle\n" + bytes(range(256)) * 300 + b"\x00\xff\xfe"
+
+
+def test_data_file_is_checksum_verified_and_never_previewed_extracted_or_decoded(installation, monkeypatch):
+    _, store, client, owner = installation
+    org, user = owner["organization_id"], owner["user_id"]
+    topic = structure(client, org)[2][0]["id"]
+    media = ResearchMedia(store)
+
+    def refused(*_):
+        raise AssertionError("a data file is never extracted")
+
+    monkeypatch.setattr("reasoning_ledger.server.pdf_extract.extract_pdf", refused)
+    result = upload(media, owner, topic, DATA, "application/octet-stream", "work.bundle", preview_text="An uploader's summary.")
+    assert result["mime"] == "application/octet-stream" and result["size_bytes"] == len(DATA)
+    assert result["markdown"] == f"[work.bundle]({result['url']})" and "extraction" not in result
+    assert media.finish(user, org, topic, result["id"], preview_text="An uploader's summary.") == result
+    read = media.read(user, org, topic, result["id"], result["sha256"])
+    assert read["text"] == "" and read["total_characters"] == 0 and read["next_offset"] == 0
+    assert read["inspection"] == "binary data file; no text is read. Download it or pass it to a computation."
+    with store.transaction() as db:
+        assert db.execute("SELECT preview_text FROM research_media WHERE id=?", (result["id"],)).fetchone()[0] == ""
+        messages, references, _ = attachment_context(store, db, user, org, [{"content": result["markdown"]}], QUOTES[:1], 100000)
+    assert references[0]["sha256"] == result["sha256"] and references[0]["inspection"] == read["inspection"]
+    assert "uploader's summary" not in messages[0]["content"] and "git bundle" not in messages[0]["content"]
+    _, narrowed = narrow_attachment_snapshot({"attachments": references, "messages": []}, [{"content": result["markdown"]}])
+    assert narrowed[0]["inspection"] == read["inspection"]
+    blob = client.get(result["url"])
+    assert blob.status_code == 200 and blob.content == DATA
+    assert blob.headers["content-type"] == "application/octet-stream"
+    assert blob.headers["content-disposition"] == "attachment; filename*=UTF-8''work.bundle"
+    assert blob.headers["x-content-type-options"] == "nosniff"
+    assert blob.headers["content-security-policy"] == "default-src 'none'; sandbox; frame-ancestors 'none'"
+    spaced = upload(media, owner, topic, b"\x00", "application/octet-stream", "data set é.bin")
+    assert client.get(spaced["url"]).headers["content-disposition"] == "attachment; filename*=UTF-8''data%20set%20%C3%A9.bin"
+    # Other kinds keep their inline disposition.
+    png = upload(media, owner, topic)
+    assert client.get(png["url"]).headers["content-disposition"] == "inline; filename*=UTF-8''picture.png"
+    with pytest.raises(StoreError, match="only image attachments"):
+        upload(media, owner, topic, DATA, "application/octet-stream", "seen.bin", vision_base64=base64.b64encode(JPEG_HEADER).decode())
+    start = media.begin(user, org, topic, "wrong.bin", "application/octet-stream", len(DATA[:100]), "0" * 64)
+    media.chunk(user, org, topic, start["id"], 0, base64.b64encode(DATA[:100]).decode())
+    with pytest.raises(StoreError, match="checksum"):
+        media.finish(user, org, topic, start["id"])
+    with pytest.raises(StoreError, match="or any data file of at most 8 MiB"):
+        media.begin(user, org, topic, "page.html", "text/html", 1, "0" * 64)
+    with pytest.raises(StoreError, match="at most 8 MiB"):
+        media.begin(user, org, topic, "huge.bin", "application/octet-stream", 8 * 1024 * 1024 + 1, "0" * 64)
+
+
+def test_media_begin_tool_lists_every_accepted_kind():
+    from reasoning_ledger.server.research_media import MIMES, media_tools
+
+    begin = next(item for item in media_tools() if item[0] == "media_begin")
+    assert begin[2]["mime"]["enum"] == sorted(MIMES) and "application/octet-stream" in MIMES
+    assert "octet-stream" in begin[1]
+
+
 def test_bad_formats_hashes_oversized_images_and_paths_are_refused(installation):
     _, store, client, owner = installation
     org, user = owner["organization_id"], owner["user_id"]

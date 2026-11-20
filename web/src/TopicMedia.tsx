@@ -16,12 +16,19 @@ const PdfViewer = lazy(() => import("./PdfViewer").then(module => ({ default: mo
 const IMAGE_TYPES = new Set(["image/png", "image/jpeg", "image/webp"]);
 export const MARKDOWN_TYPE = "text/markdown";
 export const TEX_TYPE = "application/x-tex";
-/** The file chooser's filter; browsers often report no type for Markdown or TeX files, so their extensions are listed too. */
+/** A topic file the server keeps without reading: only its size and checksum are verified, and it is only ever downloaded. */
+export const DATA_FILE_TYPE = "application/octet-stream";
+const FORMAT_TYPES = new Set([...IMAGE_TYPES, "application/pdf", MARKDOWN_TYPE, TEX_TYPE]);
+/** The file chooser's filter where data files are not accepted (direct messages); browsers often report no type for
+ * Markdown or TeX files, so their extensions are listed too. A topic's chooser accepts any file. */
 export const ATTACHMENT_ACCEPT = "image/png,image/jpeg,image/webp,application/pdf,text/markdown,.md,.markdown,application/x-tex,text/x-tex,.tex";
 /** What the attach button offers, said once for its tooltip and refusals. */
 export const ATTACHMENT_KINDS = "pictures, PDFs, Markdown or TeX";
+/** What a topic's attach button offers: those, and any other file as a data file. */
+export const TOPIC_ATTACHMENT_KINDS = "pictures, PDFs, Markdown, TeX or any other file";
 /** The short badge a file without a thumbnail shows, and the colour family it uses. */
-export const fileBadge = (mime: string) => mime.startsWith("image/") ? "IMG" : mime === MARKDOWN_TYPE ? "MD" : mime === TEX_TYPE ? "TEX" : "PDF";
+export const fileBadge = (mime: string) => mime.startsWith("image/") ? "IMG" : mime === MARKDOWN_TYPE ? "MD" : mime === TEX_TYPE ? "TEX"
+  : mime === DATA_FILE_TYPE ? "FILE" : "PDF";
 const REF = /^\/api\/organizations\/([a-f0-9]{32})\/topics\/([a-f0-9]{32})\/media\/([a-f0-9]{32})\/([a-f0-9]{64})\/content$/;
 export function mediaReference(url: string | undefined, organizationId?: string) {
   const match = REF.exec(url ?? "");
@@ -41,6 +48,7 @@ function EmbeddedMedia({ src, alt }: { src: string; alt: string }) {
     return () => controller.abort();
   }, [src]);
   if (failed) return <span className="org-help">Attachment unavailable</span>;
+  if (mime === DATA_FILE_TYPE) return <DownloadChip src={src} name={alt} size={size} />;
   if (IMAGE_TYPES.has(mime)) return <img className="topic-image" src={src} alt={alt} loading="lazy" referrerPolicy="no-referrer" />;
   if (mime === "application/pdf") return <div className="topic-pdf"><p role="status">{extractionLabel(extraction)}
     {scope?.canWrite && extraction?.status !== "ready" && <button type="button" disabled={busy} onClick={() => {
@@ -125,6 +133,37 @@ export function MarkdownMedia({ src, alt }: { src?: string; alt?: string }) {
   return <EmbeddedMedia key={src} src={src!} alt={alt ?? ""} />;
 }
 
+/** A file offered only for download, by name and size; it is never shown in the page. */
+export function DownloadChip({ src, name, size }: { src: string; name: string; size?: number }) {
+  return <a className="topic-file-chip" href={src} download={name || true} title={"Download " + (name || "file")}>
+    <span className="direct-file-icon" data-kind="FILE" aria-hidden="true">FILE</span>
+    <span className="topic-file-chip-text"><strong>{name || "Data file"}</strong>{size ? <small>{kilobytes(size)} · Download</small> : <small>Download</small>}</span>
+  </a>;
+}
+
+function LinkedMedia({ src, name }: { src: string; name: string }) {
+  const [file, setFile] = useState<{ name: string; size_bytes: number } | null>(null), [failed, setFailed] = useState(false);
+  React.useEffect(() => {
+    const controller = new AbortController();
+    void request<{ name: string; size_bytes: number }>(src.replace(/^\/api/, "").replace(/\/content$/, "/read"), { signal: controller.signal })
+      .then(setFile).catch(cause => { if (cause?.name !== "AbortError") setFailed(true); });
+    return () => controller.abort();
+  }, [src]);
+  if (failed) return <span className="org-help">Attachment unavailable</span>;
+  return <DownloadChip src={src} name={file?.name ?? name} size={file?.size_bytes} />;
+}
+
+const plainText = (children: React.ReactNode): string => typeof children === "string" || typeof children === "number" ? String(children)
+  : Array.isArray(children) ? children.map(plainText).join("") : "";
+
+/** A Markdown link to one of this organization's topic files, which a data file's reference is: a download chip, never a preview.
+ * Any other link is left to `fallback`. */
+export function MarkdownMediaLink({ href, children, fallback }: { href?: string; children?: React.ReactNode; fallback: React.ReactNode }) {
+  const scope = useContext(MediaScope);
+  if (!scope || !mediaReference(href, scope.organizationId)) return <>{fallback}</>;
+  return <LinkedMedia key={href} src={href!} name={plainText(children)} />;
+}
+
 function base64(bytes: Uint8Array) {
   let binary = "";
   for (const byte of bytes) binary += String.fromCharCode(byte);
@@ -157,15 +196,21 @@ export function extractionLabel(value?: Extraction | null): string {
   return "PDF uploaded, but readable text is unavailable. Retry extraction or provide OCR, TeX, or text source.";
 }
 
-export const attachmentMime = (file: File) => /\.(md|markdown)$/i.test(file.name) ? MARKDOWN_TYPE
-  : /\.tex$/i.test(file.name) || file.type === "text/x-tex" ? TEX_TYPE
-    : file.type || (file.name.toLowerCase().endsWith(".pdf") ? "application/pdf" : "");
+/** The type a file is uploaded as; with `dataFiles`, a file of any other type is sent as a data file. */
+export const attachmentMime = (file: File, dataFiles = false) => {
+  const mime = /\.(md|markdown)$/i.test(file.name) ? MARKDOWN_TYPE
+    : /\.tex$/i.test(file.name) || file.type === "text/x-tex" ? TEX_TYPE
+      : file.type || (file.name.toLowerCase().endsWith(".pdf") ? "application/pdf" : "");
+  return dataFiles && !FORMAT_TYPES.has(mime) ? DATA_FILE_TYPE : mime;
+};
 
-/** Chunked upload to a media collection (`root` ends in `/media`); `finish` supplies the body that completes it. */
-export async function uploadAttachment<T>(file: File, root: string, finish: (mime: string) => Promise<object> = async () => ({})): Promise<T> {
-  const mime = attachmentMime(file);
-  if ((!IMAGE_TYPES.has(mime) && mime !== "application/pdf" && mime !== MARKDOWN_TYPE && mime !== TEX_TYPE) || file.size < 1 || file.size > 8 * 1024 * 1024) {
-    throw new Error("Choose a PNG, JPEG, WebP, PDF, Markdown or TeX file of at most 8 MiB.");
+/** Chunked upload to a media collection (`root` ends in `/media`); `finish` supplies the body that completes it.
+ * Only a topic collection takes `dataFiles`. */
+export async function uploadAttachment<T>(file: File, root: string, finish: (mime: string) => Promise<object> = async () => ({}),
+  dataFiles = false): Promise<T> {
+  const mime = attachmentMime(file, dataFiles);
+  if (!(FORMAT_TYPES.has(mime) || (dataFiles && mime === DATA_FILE_TYPE)) || file.size < 1 || file.size > 8 * 1024 * 1024) {
+    throw new Error(dataFiles ? "Choose a non-empty file of at most 8 MiB." : "Choose a PNG, JPEG, WebP, PDF, Markdown or TeX file of at most 8 MiB.");
   }
   const bytes = new Uint8Array(await file.arrayBuffer());
   const sha256 = Array.from(new Uint8Array(await crypto.subtle.digest("SHA-256", bytes)), byte => byte.toString(16).padStart(2, "0")).join("");
@@ -182,7 +227,7 @@ export function uploadMedia(file: File, organizationId: string, topicId: string)
   return uploadAttachment<MediaFile>(file, topicPath(organizationId, topicId) + "/media", async mime => ({
     preview_text: "", // The server extracts bounded text from the exact private PDF bytes.
     vision_base64: IMAGE_TYPES.has(mime) ? await imagePreview(file).catch(() => "") : "",
-  }));
+  }), true);
 }
 
 export function AttachmentButton({ organizationId, topicId, onInsert, onError, disabled = false }: {
@@ -190,8 +235,8 @@ export function AttachmentButton({ organizationId, topicId, onInsert, onError, d
 }) {
   const input = useRef<HTMLInputElement>(null), [busy, setBusy] = useState(false), [error, setError] = useState("");
   return <span className="topic-attachment-control"><button type="button" className="org-upload-plus" disabled={disabled || busy} aria-label="Attach a file"
-    title="Attach a picture, PDF, Markdown or TeX file" onClick={() => input.current?.click()}>{busy ? <span aria-hidden="true">…</span> : <PlusIcon />}</button>
-    <input hidden ref={input} type="file" accept={ATTACHMENT_ACCEPT} onChange={event => {
+    title={"Attach " + TOPIC_ATTACHMENT_KINDS} onClick={() => input.current?.click()}>{busy ? <span aria-hidden="true">…</span> : <PlusIcon />}</button>
+    <input hidden ref={input} type="file" onChange={event => {
       const file = event.target.files?.[0]; event.target.value = ""; if (!file) return;
       setBusy(true); setError(""); void uploadMedia(file, organizationId, topicId).then(value => {
         onInsert(value.markdown);

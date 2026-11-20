@@ -19,7 +19,16 @@ from pydantic import Field
 
 from .direct_messages import DirectMessages
 from .request_input import RequestInput
-from .research_media import CHUNK_BYTES, MAX_BYTES, bounded_image, check_chunk, check_upload, valid_signature
+from .research_media import (
+    CHUNK_BYTES,
+    FORMAT_KINDS,
+    FORMAT_MIMES,
+    MAX_BYTES,
+    bounded_image,
+    check_chunk,
+    check_upload,
+    valid_signature,
+)
 from .store import StoreError, _id, _row
 
 MAX_ORGANIZATION_BYTES = 256 * 1024 * 1024
@@ -58,7 +67,7 @@ class DirectMedia:
         return row, conversation
 
     def begin(self, user, org, conversation_id, name, mime, size_bytes, sha256):
-        check_upload(name, mime, size_bytes, sha256)
+        check_upload(name, mime, size_bytes, sha256, mimes=FORMAT_MIMES, kinds=FORMAT_KINDS)
         with self.store.transaction(write=True) as db:
             _, conversation = DirectMessages.access(db, user, org, conversation_id, write=True)
             DirectMessages(self.store)._deliverable(db, org, user, conversation["other_user_id"])

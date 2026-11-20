@@ -88,12 +88,15 @@ class StoreTransport:
             elif path == "/api/worker/retirement":
                 value = state.worker_retirement(token) if request.method == "GET" else state.retire_worker(token, body["cleanup_confirmed"])
             elif path == "/api/worker/claim":
-                value = state.claim(token, body.get("claim_id"), supports_workflow_inputs=body.get("supports_workflow_inputs", False))
+                value = state.claim(token, body.get("claim_id"), supports_workflow_inputs=body.get("supports_workflow_inputs", False),
+                                    supports_attachments=body.get("supports_attachments", False))
             else:
                 parts = path.split("/")
                 job, verb = parts[4], parts[5]
                 args = (token, job, body["attempt_id"], body["lease"])
-                if verb == "heartbeat":
+                if verb == "attachments" and len(parts) == 9 and parts[7] == "chunks":
+                    value = state.attachment_chunk(*args, parts[6], int(parts[8]))
+                elif verb == "heartbeat":
                     value = state.heartbeat(*args)
                 elif verb == "logs":
                     state.append_log(*args, body["chunk_index"], body["text"])
@@ -500,3 +503,76 @@ def test_heartbeat_local_deadline_cannot_be_extended_by_blocked_network_thread(f
     assert not guard.stopped()
     now[0] = 120.0
     assert guard.stopped() and guard.reason == "lease_lost"
+
+
+def data_file(fixture, body, name="values.bin"):
+    import base64
+
+    from reasoning_ledger.server.research_media import CHUNK_BYTES, DATA_FILE, ResearchMedia
+
+    media = ResearchMedia(fixture.state.store)
+    start = media.begin(fixture.user, fixture.org, fixture.topic, name, DATA_FILE, len(body), hashlib.sha256(body).hexdigest())
+    for offset in range(0, len(body), CHUNK_BYTES):
+        encoded = base64.b64encode(body[offset : offset + CHUNK_BYTES]).decode()
+        media.chunk(fixture.user, fixture.org, fixture.topic, start["id"], offset // CHUNK_BYTES, encoded)
+    return media.finish(fixture.user, fixture.org, fixture.topic, start["id"])
+
+
+def enqueue_with(fixture, *files):
+    params = fixture.state.parameters("fixture", "python", "print(open('/work/in/01-values.bin').read())", DEFAULT_RESOURCES,
+                                      [{"identity": file["id"], "sha256": file["sha256"]} for file in files])
+    return fixture.state.enqueue(fixture.user, fixture.org, fixture.topic, "inputs", params)
+
+
+class InputRunner(FixtureRunner):
+    def run(self, job, spool, log, stopped):
+        self.received = []
+        for item, path in zip(job["parameters"]["attachments"], job["attachment_files"], strict=True):
+            with open(path, "rb") as stream:
+                self.received.append((item["path"], stream.read()))
+        return super().run(job, spool, log, stopped)
+
+
+def test_worker_downloads_and_verifies_pinned_inputs_before_running(fixture, tmp_path):
+    first, second = bytes(range(256)) * 160, b"second file"
+    files = [data_file(fixture, first), data_file(fixture, second, "notes.txt")]
+    job = enqueue_with(fixture, *files)
+    agent, runner, wire = worker(tmp_path, fixture, runner=InputRunner())
+    agent.run(once=True)
+    assert runner.received == [("01-values.bin", first), ("02-notes.txt", second)]
+    claim = next(body for _, path, body in wire.calls if path == "/api/worker/claim")
+    assert claim["supports_attachments"] is True and claim["supports_workflow_inputs"] is True
+    chunks = [path for _, path, _ in wire.calls if "/attachments/" in path]
+    assert chunks == [f"/api/worker/jobs/{job['id']}/attachments/{files[0]['id']}/chunks/{index}" for index in range(2)] + [
+        f"/api/worker/jobs/{job['id']}/attachments/{files[1]['id']}/chunks/0"]
+    assert fixture.state.job(fixture.user, fixture.org, job["id"])["status"] == "succeeded"
+    assert list(agent.attempts.iterdir()) == [] and agent.state() == {"phase": "idle"}
+
+
+def test_worker_fails_without_running_when_input_bytes_differ_from_their_checksum(fixture, tmp_path):
+    import base64
+
+    file = data_file(fixture, b"pinned bytes")
+    job = enqueue_with(fixture, file)
+    with fixture.state.store.transaction(write=True) as db:
+        changed = base64.b64encode(b"PINNED BYTES").decode()
+        db.execute("UPDATE research_media_chunks SET data_base64=? WHERE media_id=?", (changed, file["id"]))
+    agent, runner, _ = worker(tmp_path, fixture)
+    agent.run(once=True)
+    result = fixture.state.job(fixture.user, fixture.org, job["id"])
+    assert runner.calls == 0
+    assert result["status"] == "failed" and result["error_code"] == "input_verification_failed" and result["used_cpu_seconds"] == 0
+    assert list(agent.attempts.iterdir()) == [] and agent.state() == {"phase": "idle"}
+
+
+def test_worker_refuses_a_claim_whose_pinned_inputs_exceed_its_bounds(fixture, tmp_path):
+    job = enqueue_with(fixture, data_file(fixture, b"bounded"))
+    claimed = fixture.state.claim(fixture.registration["token"], supports_attachments=True)
+    agent, _, _ = worker(tmp_path, fixture)
+    agent.validate_job(claimed)
+    pinned = claimed["parameters"]["attachments"][0]
+    for change in ({"path": "../escape"}, {"size_bytes": 0}, {"sha256": "x"}, {"extra": 1}):
+        altered = {**claimed, "parameters": {**claimed["parameters"], "attachments": [{**pinned, **change}]}}
+        with pytest.raises(WorkerFault, match="invalid_server_job"):
+            agent.validate_job(altered)
+    assert job["id"] == claimed["id"]

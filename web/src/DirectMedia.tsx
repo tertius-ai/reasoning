@@ -2,8 +2,8 @@
 import React, { lazy, Suspense, useEffect, useRef, useState } from "react";
 import { request } from "./organization-api";
 import { PlusIcon } from "./ComposerIcons";
-import { ATTACHMENT_ACCEPT, ATTACHMENT_KINDS, MARKDOWN_TYPE, MarkdownPreview, TEX_TYPE, TexPreview, attachmentMime, fileBadge,
-  uploadAttachment } from "./TopicMedia";
+import { ATTACHMENT_ACCEPT, ATTACHMENT_KINDS, MARKDOWN_TYPE, MarkdownPreview, TEX_TYPE, TOPIC_ATTACHMENT_KINDS, TexPreview, attachmentMime,
+  fileBadge, uploadAttachment } from "./TopicMedia";
 import "./topic-media.css";
 
 const PdfViewer = lazy(() => import("./PdfViewer").then(module => ({ default: module.PdfViewer })));
@@ -134,17 +134,17 @@ export function PendingFiles({ files, onRemove }: { files: PendingFile[]; onRemo
   </li>)}</ul>;
 }
 
-/** The composer's attach control: several pictures, PDFs, Markdown and TeX files at once. */
-export function AttachFilesButton({ disabled, onFiles }: { disabled: boolean; onFiles: (files: File[]) => void }) {
+/** The composer's attach control: several pictures, PDFs, Markdown and TeX files at once; with `dataFiles` (a topic), any file. */
+export function AttachFilesButton({ disabled, onFiles, dataFiles = false }: { disabled: boolean; onFiles: (files: File[]) => void; dataFiles?: boolean }) {
   const input = useRef<HTMLInputElement>(null);
   return <><button type="button" className="org-upload-plus" disabled={disabled} aria-label="Attach files"
-    title={"Attach " + ATTACHMENT_KINDS} onClick={() => input.current?.click()}><PlusIcon /></button>
-    <input hidden ref={input} type="file" multiple accept={ATTACHMENT_ACCEPT} onChange={event => {
+    title={"Attach " + (dataFiles ? TOPIC_ATTACHMENT_KINDS : ATTACHMENT_KINDS)} onClick={() => input.current?.click()}><PlusIcon /></button>
+    <input hidden ref={input} type="file" multiple accept={dataFiles ? undefined : ATTACHMENT_ACCEPT} onChange={event => {
       const files = Array.from(event.target.files ?? []); event.target.value = ""; if (files.length) onFiles(files);
     }} /></>;
 }
 
-export const pendingFile = (file: File): PendingFile => {
-  const mime = attachmentMime(file);
+export const pendingFile = (file: File, dataFiles = false): PendingFile => {
+  const mime = attachmentMime(file, dataFiles);
   return { key: crypto.randomUUID(), name: file.name, mime, preview: isImage(mime) ? URL.createObjectURL(file) : undefined };
 };

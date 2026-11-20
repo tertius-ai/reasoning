@@ -51,6 +51,8 @@ def waits(db, row):
                     "image_id": parameters["image_id"], "language": parameters["language"], "resources": parameters["resources"],
                     "program": parameters["program"][:PROGRAM_PREVIEW],
                     "program_truncated": len(parameters["program"]) > PROGRAM_PREVIEW,
+                    **({"attachments": [{key: item[key] for key in ("name", "size_bytes", "sha256", "path")}
+                                        for item in parameters["attachments"]]} if parameters.get("attachments") else {}),
                 }
                 item["runnable"] = ComputeStore.runnable(db, row["organization_id"], parameters["image_id"], parameters["resources"])
         elif view["kind"] == "compute":

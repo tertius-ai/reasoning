@@ -20,9 +20,21 @@ export function waitingLabel(waits: ReplyWait[]): string {
 
 const minutes = (seconds?: number) => seconds == null ? "" : seconds < 60 ? `${seconds} s` : `${Math.round(seconds / 60)} min`;
 
-function computeSummary(compute: NonNullable<Extract<ReplyWait, { kind: "proposal" }>["compute"]>) {
+type ProposedCompute = NonNullable<Extract<ReplyWait, { kind: "proposal" }>["compute"]>;
+
+function computeSummary(compute: ProposedCompute) {
   const { cpu, wall_time_seconds: wall } = compute.resources;
-  return [compute.image_id, compute.language, cpu ? `${cpu} CPU` : "", wall ? `up to ${minutes(wall)}` : ""].filter(Boolean).join(" · ");
+  const files = compute.attachments?.length ?? 0;
+  return [compute.image_id, compute.language, cpu ? `${cpu} CPU` : "", wall ? `up to ${minutes(wall)}` : "",
+    files ? `${files} input ${files === 1 ? "file" : "files"}` : ""].filter(Boolean).join(" · ");
+}
+
+/** The exact topic files a proposed computation would read, by name, size and checksum. */
+function InputFiles({ files }: { files: NonNullable<ProposedCompute["attachments"]> }) {
+  return <ul className="org-reply-wait-files" aria-label="Input files">{files.map(file => <li key={file.path}>
+    <span>{file.name} · {file.size_bytes} bytes · read-only at <code>/work/in/{file.path}</code></span>
+    <small>SHA-256 {file.sha256}</small>
+  </li>)}</ul>;
 }
 
 /**
@@ -56,6 +68,7 @@ export function ReplyWaits({ organizationId, topicId, run, canWrite, online, onU
           <strong>{wait.compute ? "Approve this computation?" : `Approve the proposed ${wait.action}?`}</strong>
           {wait.compute && <>
             <small>{computeSummary(wait.compute)}</small>
+            {!!wait.compute.attachments?.length && <InputFiles files={wait.compute.attachments} />}
             <details><summary>Program</summary><pre>{wait.compute.program}{wait.compute.program_truncated ? "\n…" : ""}</pre></details>
             {!computeAvailable ? unavailable : !runs(wait) && tooLarge}
           </>}

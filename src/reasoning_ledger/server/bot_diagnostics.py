@@ -21,6 +21,7 @@ STATES = (
 ERRORS = (
     "cli_failed", "runner_lost", "access_changed", "agent_incomplete", "execution_failed",
     "resource_limit", "wall_time_limit", "log_limit", "artifact_limit", "image_verification_failed",
+    "input_verification_failed",
     "worker_stopped", "provider_timeout", "provider_unavailable", "provider_rate_limit",
     "provider_insufficient_credit", "provider_authentication", "provider_permission",
     "provider_request_rejected", "provider_model_unavailable", "provider_context_limit",

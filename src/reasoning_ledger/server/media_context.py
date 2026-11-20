@@ -5,7 +5,7 @@ import binascii
 import hashlib
 import json
 
-from .research_media import REFERENCE, ResearchMedia, view
+from .research_media import DATA_FILE, DATA_FILE_INSPECTION, REFERENCE, ResearchMedia, view
 from .store import StoreError
 
 
@@ -58,7 +58,9 @@ def narrow_attachment_snapshot(snapshot, messages):
             pictures.append(message)
             supplied.update(hashes)
     for reference in references:
-        if not reference.get("preview_sha256") or reference["preview_sha256"] not in supplied:
+        if reference.get("mime") == DATA_FILE:
+            reference["inspection"] = DATA_FILE_INSPECTION
+        elif not reference.get("preview_sha256") or reference["preview_sha256"] not in supplied:
             reference.pop("preview_sha256", None)
             reference["inspection"] = "explicit reference only; image pixels and extracted text have not been supplied"
     receipt = (
@@ -141,7 +143,7 @@ def attachment_context(store, db, user, org, source_messages, quotes, allowance,
                 continue
             if project is not None and row["project_id"] != project:
                 continue
-            reference = {
+            reference = {**view(row), "text": "", "inspection": DATA_FILE_INSPECTION} if row["mime"] == DATA_FILE else {
                 **view(row),
                 "text": row["preview_text"][:6000],
                 "text_source": "extracted reference text; transcription and mathematical content remain unverified",

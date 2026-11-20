@@ -9,7 +9,7 @@ import { GraphView } from "./Graph";
 import type { ClaimDetail, ClaimSummary, GraphPayload, ReferenceSummary } from "./api";
 import { RichTextPolicy } from "./RichTextPolicy";
 import { LedgerHumanChecks } from "./LedgerHumanChecks";
-import { MarkdownMedia } from "./TopicMedia";
+import { MarkdownMedia, MarkdownMediaLink } from "./TopicMedia";
 import { MarkdownReferenceAnchor, remarkReferences } from "./references";
 
 const loadLedger = () => import("./Ledger");
@@ -23,7 +23,8 @@ type Detail = ClaimDetail;
 const label = (claim: Claim) => claim.authority === "review" ? "LLM-reviewed" : claim.kind === "definition" ? "Definition" : claim.status;
 export function ResearchMarkdown({ children }: { children: string }) {
   return <ReactMarkdown remarkPlugins={[remarkGfm, remarkMath, remarkReferences]} rehypePlugins={[rehypeMath]} components={{ img: MarkdownMedia,
-    a: MarkdownReferenceAnchor,
+    a: ({ href, title, children }) => <MarkdownMediaLink href={href}
+      fallback={<MarkdownReferenceAnchor href={href} title={title}>{children}</MarkdownReferenceAnchor>}>{children}</MarkdownMediaLink>,
     p: ({ node, children }) => node?.children.some(child => child.type === "element" && child.tagName === "img")
       ? <div className="topic-media-paragraph">{children}</div> : <p>{children}</p>,
   }} skipHtml>{normalizeMathDelimiters(children)}</ReactMarkdown>;

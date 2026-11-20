@@ -866,3 +866,142 @@ def test_artifact_count_and_cross_job_binding(compute):
         state.begin_artifact(first_worker["token"], first["id"], first_claim["attempt_id"], first_claim["lease"], "extra", 0, checksum)
     with pytest.raises(StoreError, match="not found"):
         state.commit_artifact(second_worker["token"], second["id"], second_claim["attempt_id"], second_claim["lease"], artifact["id"])
+
+
+def data_file(compute, topic, body, name="input.bin", *, finish=True):
+    from reasoning_ledger.server.research_media import DATA_FILE, ResearchMedia
+
+    _, store, _, _, owner, _ = compute
+    media, user, org = ResearchMedia(store), owner["user_id"], owner["organization_id"]
+    start = media.begin(user, org, topic, name, DATA_FILE, len(body), hashlib.sha256(body).hexdigest())
+    for offset in range(0, len(body), CHUNK_BYTES):
+        media.chunk(user, org, topic, start["id"], offset // CHUNK_BYTES, base64.b64encode(body[offset : offset + CHUNK_BYTES]).decode())
+    if not finish:
+        return {"id": start["id"], "sha256": hashlib.sha256(body).hexdigest()}
+    return media.finish(user, org, topic, start["id"])
+
+
+def pin(file):
+    return {"identity": file["id"], "sha256": file["sha256"]}
+
+
+def test_attachments_pin_same_topic_and_same_project_files_and_leave_plain_jobs_unchanged(compute):
+    _, _, state, _, _, topics = compute
+    own = data_file(compute, topics[2]["id"], b"\x00\x01 own topic bytes", "data set (v1).bin")
+    sibling = data_file(compute, topics[1]["id"], b"x" * (CHUNK_BYTES + 5), "sibling.csv")
+    job = enqueue(compute, "pinned", attachments=[pin(own), pin(sibling)])
+    assert job["parameters"]["attachments"] == [
+        {"identity": own["id"], "sha256": own["sha256"], "topic_id": topics[2]["id"], "name": "data set (v1).bin",
+         "mime": "application/octet-stream", "size_bytes": 18, "path": "01-data_set__v1_.bin"},
+        {"identity": sibling["id"], "sha256": sibling["sha256"], "topic_id": topics[1]["id"], "name": "sibling.csv",
+         "mime": "application/octet-stream", "size_bytes": CHUNK_BYTES + 5, "path": "02-sibling.csv"},
+    ]
+    assert enqueue(compute, "pinned", attachments=[pin(own), pin(sibling)])["id"] == job["id"]
+    plain = enqueue(compute, "plain")
+    assert set(plain["parameters"]) == {"image_id", "language", "program", "resources"}
+    assert enqueue(compute, "empty", attachments=[])["parameters"].keys() == plain["parameters"].keys()
+    unpinned = state.parameters(IMAGE["id"], "sage", "1", DEFAULT_RESOURCES)
+    assert unpinned == state.parameters(IMAGE["id"], "sage", "1", DEFAULT_RESOURCES, [])
+    long = state.parameters(IMAGE["id"], "sage", "1", DEFAULT_RESOURCES, [pin(own)])
+    assert long["attachments"] == [pin(own)]
+
+
+def test_attachments_refuse_unverifiable_foreign_duplicate_excess_and_oversize_files(compute):
+    _, store, state, client, owner, topics = compute
+    user, org, topic = owner["user_id"], owner["organization_id"], topics[2]["id"]
+    good = data_file(compute, topic, b"good")
+    pending = data_file(compute, topic, b"pending", finish=False)
+    elsewhere = structure(client, org)[2][2]["id"]
+    foreign = data_file(compute, elsewhere, b"foreign")
+    deleted_topic = topics[0]["id"]
+    removed = data_file(compute, deleted_topic, b"in a deleted topic")
+    with store.transaction(write=True) as db:
+        db.execute("UPDATE topics SET deleted_at=? WHERE id=?", (int(time.time()), deleted_topic))
+
+    def refused(items, status, **limits):
+        parameters = state.parameters(IMAGE["id"], "sage", "print(1)", {**DEFAULT_RESOURCES, **limits}, items)
+        with pytest.raises(StoreError) as error:
+            state.enqueue(user, org, topic, "refused", parameters)
+        assert error.value.status == status, str(error.value)
+
+    refused([{**pin(good), "sha256": "0" * 64}], 404)
+    refused([pin(pending)], 404)
+    refused([pin(foreign)], 404)
+    refused([pin(removed)], 404)
+    with pytest.raises(StoreError) as duplicate:
+        state.parameters(IMAGE["id"], "sage", "print(1)", DEFAULT_RESOURCES, [pin(good), pin(good)])
+    assert duplicate.value.status == 400
+    with pytest.raises(StoreError) as excess:
+        state.parameters(IMAGE["id"], "sage", "print(1)", DEFAULT_RESOURCES, [pin({"id": f"{n:032x}", "sha256": "a" * 64})
+                                                                              for n in range(5)])
+    assert excess.value.status == 400
+    root = f"/api/organizations/{org}/topics/{topic}/compute-jobs"
+    five = [{"identity": f"{n:032x}", "sha256": "a" * 64} for n in range(5)]
+    assert client.post(root, json=submission("five", attachments=five)).status_code == 422
+    assert client.post(root, json=submission("extra", attachments=[{**pin(good), "path": "x"}])).status_code == 422
+    # Inputs share /work with outputs: an 8 MiB disk with 1 MiB of artifacts leaves 2.5 MiB for inputs.
+    large = data_file(compute, topic, b"z" * (3 * 1024**2), "large.bin")
+    refused([pin(large)], 400, disk_bytes=8 * 1024**2)
+    from reasoning_ledger.server.compute_store import attachment_allowance
+
+    assert attachment_allowance({**DEFAULT_RESOURCES, "disk_bytes": 8 * 1024**2}) == 5 * 1024**2 // 2
+    assert attachment_allowance({**DEFAULT_RESOURCES, "disk_bytes": 1024**3}) == 32 * 1024**2
+    assert attachment_allowance({**DEFAULT_RESOURCES, "artifact_bytes": 128 * 1024**2}) == 0
+    assert state.jobs(user, org, topic) == []
+
+
+def test_claim_requires_attachment_support_and_rechecks_pinned_files(compute):
+    _, store, state, client, owner, topics = compute
+    sibling = data_file(compute, topics[1]["id"], b"sibling bytes")
+    pinned = enqueue(compute, "pinned", attachments=[pin(sibling)])
+    plain = enqueue(compute, "plain")
+    _, old = worker(compute)
+    claim_id = "e" * 32
+    first = old.post("/api/worker/claim", json={"claim_id": claim_id, "supports_workflow_inputs": True}).json()
+    assert first["id"] == plain["id"]
+    _, new = worker(compute, name="New")
+    claimed = new.post("/api/worker/claim", json={"claim_id": claim_id, "supports_attachments": True}).json()
+    assert claimed["id"] == pinned["id"]
+    assert new.post("/api/worker/claim", json={"claim_id": claim_id}).status_code == 409
+    assert new.post("/api/worker/claim", json={"claim_id": claim_id, "supports_attachments": True}).json()["id"] == pinned["id"]
+    assert new.post("/api/worker/claim", json={"supports_attachments": "yes"}).status_code == 422
+    # A pinned file whose topic is gone no longer runs; a queued job fails before any worker claims it.
+    again = enqueue(compute, "again", attachments=[pin(sibling)])
+    with store.transaction(write=True) as db:
+        db.execute("UPDATE topics SET deleted_at=? WHERE id=?", (int(time.time()), topics[1]["id"]))
+    assert new.post(f"/api/worker/jobs/{pinned['id']}/heartbeat", json=lease_body(claimed)).json()["stop"] is True
+    assert finish(new, claimed).json()["status"] == "cancelled"
+    assert finish(old, first).json()["status"] == "succeeded"
+    _, third = worker(compute, name="Third")
+    assert third.post("/api/worker/claim", json={"supports_attachments": True}).json() is None
+    result = client.get(job_path(owner, again)).json()
+    assert result["status"] == "failed" and result["error_code"] == "policy_changed"
+
+
+def test_attachment_chunks_reach_only_the_running_attempt_for_pinned_files(compute):
+    _, _, state, _, _, topics = compute
+    body = bytes(range(256)) * 200
+    file = data_file(compute, topics[2]["id"], body, "table.bin")
+    other = data_file(compute, topics[2]["id"], b"not pinned")
+    job = enqueue(compute, "pinned", attachments=[pin(file)])
+    _, agent = worker(compute)
+    claimed = agent.post("/api/worker/claim", json={"supports_attachments": True}).json()
+    path = f"/api/worker/jobs/{job['id']}/attachments/{file['id']}/chunks/"
+    first = agent.post(path + "0", json=lease_body(claimed))
+    assert first.status_code == 200, first.text
+    second = agent.post(path + "1", json=lease_body(claimed)).json()
+    assert first.json()["next_index"] == 1 and second["next_index"] is None
+    assert (second["index"], second["size_bytes"], second["sha256"]) == (1, len(body), file["sha256"])
+    assert base64.b64decode(first.json()["data_base64"]) + base64.b64decode(second["data_base64"]) == body
+    assert agent.post(path + "2", json=lease_body(claimed)).status_code == 416
+    assert agent.post(path + "-1", json=lease_body(claimed)).status_code == 400
+    assert agent.post(path + "0", json={**lease_body(claimed), "lease": "wrong"}).status_code == 409
+    assert agent.post(path + "0", json={**lease_body(claimed), "attempt_id": "f" * 32}).status_code == 409
+    unpinned = f"/api/worker/jobs/{job['id']}/attachments/{other['id']}/chunks/0"
+    assert agent.post(unpinned, json=lease_body(claimed)).status_code == 404
+    _, stranger = worker(compute, name="Stranger")
+    assert stranger.post(path + "0", json=lease_body(claimed)).status_code == 409
+    assert finish(agent, claimed).json()["status"] == "succeeded"
+    assert agent.post(path + "0", json=lease_body(claimed)).status_code == 409
+    assert agent.post(f"/api/worker/jobs/{job['id']}/finish", json={**lease_body(claimed), "status": "failed", "elapsed_ms": 1,
+                                                                    "error_code": "input_verification_failed"}).status_code == 200

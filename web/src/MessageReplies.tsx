@@ -4,6 +4,7 @@ import { ApiError, Message, errorMessage, request } from "./organization-api";
 import { ReturnIcon } from "./ComposerIcons";
 import { AttachFilesButton, MAX_DIRECT_ATTACHMENTS, PendingFile, PendingFiles, joinAttachments, pendingFile } from "./DirectMedia";
 import { withoutSummaryLabel } from "./replySummary";
+import { mediaReference } from "./TopicMedia";
 import "./direct-messages.css";
 
 export type MessageThread = { root_id: string; message_id: string; messages: Message[]; truncated: boolean };
@@ -12,7 +13,8 @@ export type MessageThread = { root_id: string; message_id: string; messages: Mes
 export function replyExcerpt(content: string, limit = 90): string {
   // A model reply starts with its summary line; quote the summary without its label.
   const text = withoutSummaryLabel(content)
-    .replace(/!\[([^\]\n]*)\]\([^)\s]*\)/g, (_, name: string) => "📎 " + (name || "attachment"))
+    .replace(/(!?)\[([^\]\n]*)\]\(([^)\s]*)\)/g, (link: string, image: string, name: string, url: string) =>
+      image || mediaReference(url) ? "📎 " + (name || "attachment") : link)
     .replace(/@\[[a-f0-9]{32}(?::([^\]]+))?\]/g, (_, name?: string) => "@" + (name ?? "member"))
     .replace(/#\[(topic|project):[a-f0-9]{32}\]/g, (_, kind: string) => "#" + kind)
     .replace(/[*_`>#~[\]()$\\]/g, "").replace(/\s+/g, " ").trim();
@@ -107,7 +109,8 @@ export function threadGroups(messages: Message[]): Message[][] {
  * The whole thread over a dimmed conversation: the root, then every reply in order, with a box to reply in the thread.
  * A reply written here answers the thread's root. Escape or a click outside closes it.
  */
-export function ThreadDialog({ messagesPath, messageId, canWrite, renderGroup, onPosted, onClose, onAuthLost, live, working, attach, addTo, onStopAdding }: {
+export function ThreadDialog({ messagesPath, messageId, canWrite, renderGroup, onPosted, onClose, onAuthLost, live, working, attach, dataFiles = false,
+  addTo, onStopAdding }: {
   /** The conversation's messages endpoint: a topic's or a direct conversation's. */
   messagesPath: string; messageId: string; canWrite: boolean;
   /** One run of the thread (see `threadGroups`) as a speaker group. */
@@ -119,6 +122,8 @@ export function ThreadDialog({ messagesPath, messageId, canWrite, renderGroup, o
   working?: (messages: Message[]) => React.ReactNode;
   /** Uploads a chosen file; its Markdown reference is sent with the reply. */
   attach?: (file: File) => Promise<{ markdown: string }>;
+  /** Whether `attach` takes any file as a data file, as a topic's does. */
+  dataFiles?: boolean;
   /** A running reply the next message joins instead of starting its own, named for the box. */
   addTo?: { id: string; label: string };
   onStopAdding?: () => void;
@@ -151,7 +156,7 @@ export function ThreadDialog({ messagesPath, messageId, canWrite, renderGroup, o
     if (!attach) return;
     const room = MAX_DIRECT_ATTACHMENTS - files.length;
     setError(chosen.length > room ? `A message can carry at most ${MAX_DIRECT_ATTACHMENTS} files.` : "");
-    const pending = chosen.slice(0, Math.max(0, room)).map(file => ({ file, item: pendingFile(file) }));
+    const pending = chosen.slice(0, Math.max(0, room)).map(file => ({ file, item: pendingFile(file, dataFiles) }));
     setFiles(current => [...current, ...pending.map(({ item }) => item)]);
     const settle = (key: string, value: Partial<PendingFile>) => setFiles(current => current.map(file => file.key === key ? { ...file, ...value } : file));
     for (const { file, item } of pending) {
@@ -212,7 +217,7 @@ export function ThreadDialog({ messagesPath, messageId, canWrite, renderGroup, o
       {addTo && <span className="org-visually-hidden" role="status">Adding to {addTo.label}'s reply. Escape sends a new question instead.</span>}
       {attach && <PendingFiles files={files} onRemove={key => { removeFile(key); setClientId(""); }} />}
       <div className="org-thread-composer-row">
-        {attach && <AttachFilesButton disabled={sending} onFiles={addFiles} />}
+        {attach && <AttachFilesButton disabled={sending} onFiles={addFiles} dataFiles={dataFiles} />}
         <label className="org-visually-hidden" htmlFor="org-thread-reply">Reply in thread</label>
         <textarea id="org-thread-reply" ref={box} rows={1} maxLength={16000} placeholder={addTo ? `Add to ${addTo.label}'s reply…` : "Reply in thread…"}
           value={text} disabled={sending} onChange={event => { setText(event.target.value); setClientId(""); }}

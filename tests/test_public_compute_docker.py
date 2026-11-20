@@ -544,3 +544,65 @@ def test_unsafe_evidence_archive_fails_image_verification_before_execution(tmp_p
     monkeypatch.setattr(runner, "_archive", fail)
     with pytest.raises(RuntimeFault, match="image_verification_failed"):
         runner._evidence("fixture", image, LIMITS, "python", lambda: False)
+
+
+def pinned_input(job, tmp_path, body=b"pinned \x00 input bytes", path="01-values.bin"):
+    from reasoning_ledger.server.security import private_file
+
+    local = tmp_path / "inputs" / "0"
+    local.parent.mkdir(mode=0o700)
+    private_file(local, body)
+    job["parameters"]["attachments"] = [{
+        "identity": "f" * 32, "sha256": hashlib.sha256(body).hexdigest(), "topic_id": "e" * 32, "name": "values.bin",
+        "mime": "application/octet-stream", "size_bytes": len(body), "path": path,
+    }]
+    job["attachment_files"] = [str(local)]
+    return body
+
+
+def test_pinned_inputs_are_written_read_only_before_the_program_with_the_name_as_an_argument(container, job, tmp_path):
+    from reasoning_ledger.server.compute_docker import attachment_arguments, seal_arguments
+
+    body = pinned_input(job, tmp_path)
+    runner = FixtureRunner(container)
+    original, captured = runner._command, []
+
+    def command(args, **options):
+        captured.append((args, options))
+        result = original(args, **options)
+        if args[:2] == ["container", "exec"]:
+            runner.calls.append(args[-1])
+        return result
+
+    runner._command = command
+    outcome = runner.run(job, tmp_path / "spool", lambda _: None, lambda: False)
+    assert outcome.status == "succeeded"
+    name = container_name(WORKER, ATTEMPT)
+    write = next(options for args, options in captured if args == attachment_arguments(name, "01-values.bin"))
+    assert write["input_bytes"] == body and write["timeout"] <= LIMITS["wall_time_seconds"]
+    args = attachment_arguments(name, "01-values.bin")
+    assert args[-3:] == ['set -eu; umask 077; mkdir -p /work/in; cat > "/work/in/$1"', "sh", "01-values.bin"]
+    assert args[args.index("--user") + 1] == PROGRAM_USER
+    assert seal_arguments(name, ["01-values.bin"])[-3:] == ['set -eu; chmod 0444 -- "$@"; chmod 0555 /work/in', "sh", "01-values.bin"]
+    start = runner.calls.index(["container", "start"])
+    assert runner.calls[start + 1:start + 6] == [
+        ["container", "exec"], "01-values.bin", ["container", "exec"], "01-values.bin", ["container", "exec"]
+    ]
+    assert runner.calls[start + 6] == "harvest_while_alive"
+    with pytest.raises(RuntimeFault, match="invalid_job"):
+        attachment_arguments(name, "../escape")
+
+
+@pytest.mark.parametrize("change", ["checksum", "size", "missing"])
+def test_inputs_that_differ_from_their_pins_refuse_before_container_creation(container, job, tmp_path, change):
+    pinned_input(job, tmp_path)
+    if change == "checksum":
+        job["parameters"]["attachments"][0]["sha256"] = "0" * 64
+    elif change == "size":
+        job["parameters"]["attachments"][0]["size_bytes"] += 1
+    else:
+        job["attachment_files"] = []
+    runner = FixtureRunner(container)
+    with pytest.raises(RuntimeFault, match="invalid_job"):
+        runner.run(job, tmp_path / "spool", lambda _: None, lambda: False)
+    assert runner.calls == []

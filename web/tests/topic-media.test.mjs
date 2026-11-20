@@ -34,8 +34,43 @@ test("attachment control offers bounded supported media without native HTML uplo
   assert.match(html, /Attach a file/);
   assert.match(html, /class="org-upload-plus"/); assert.match(html, /<svg width="18"/);
   assert.match(html, /<path d="M12 4.5v15M4.5 12h15"/, "the drawn plus shared by every upload button");
-  assert.match(html, /accept="image\/png,image\/jpeg,image\/webp,application\/pdf,text\/markdown,\.md,\.markdown,application\/x-tex,text\/x-tex,\.tex"/);
+  // A topic takes any file: a type the server does not read is sent as a data file.
+  assert.doesNotMatch(html, /accept=/);
+  assert.match(html, /title="Attach pictures, PDFs, Markdown, TeX or any other file"/);
   assert.doesNotMatch(html, /image\/svg|iframe/);
+});
+test("direct messages keep their chooser filter while a topic composer takes any file", async () => {
+  const direct = await server.ssrLoadModule("/src/DirectMedia.tsx");
+  const button = dataFiles => renderToStaticMarkup(React.createElement(direct.AttachFilesButton, { disabled: false, onFiles() {}, dataFiles }));
+  assert.match(button(false), /accept="image\/png,image\/jpeg,image\/webp,application\/pdf,text\/markdown,\.md,\.markdown,application\/x-tex,text\/x-tex,\.tex"/);
+  assert.match(button(false), /title="Attach pictures, PDFs, Markdown or TeX"/);
+  assert.doesNotMatch(button(true), /accept=/);
+  const bundle = new File(["# v2 git bundle\n"], "work.bundle");
+  assert.equal(direct.pendingFile(bundle, true).mime, "application/octet-stream");
+  assert.equal(direct.pendingFile(bundle).mime, "");
+});
+test("any other file is a topic data file, offered only as a download chip", async () => {
+  const file = (name, type = "", body = "x") => new File([body], name, { type });
+  for (const [name, type] of [["work.bundle", ""], ["notes.txt", "text/plain"], ["page.html", "text/html"], ["vector.svg", "image/svg+xml"]]) {
+    assert.equal(media.attachmentMime(file(name, type), true), "application/octet-stream", name);
+    assert.notEqual(media.attachmentMime(file(name, type)), "application/octet-stream", name);
+  }
+  for (const [name, type, mime] of [["plot.png", "image/png", "image/png"], ["paper.pdf", "", "application/pdf"], ["notes.md", "", "text/markdown"],
+    ["draft.tex", "", "application/x-tex"]]) assert.equal(media.attachmentMime(file(name, type), true), mime, name);
+  await assert.rejects(media.uploadAttachment(file("empty.bin", "", ""), "/unused", undefined, true), /Choose a non-empty file of at most 8 MiB\./);
+  await assert.rejects(media.uploadAttachment(file("work.bundle"), "/unused"), /Choose a PNG, JPEG, WebP, PDF, Markdown or TeX file/);
+  assert.equal(media.fileBadge("application/octet-stream"), "FILE");
+  const render = (text, scope) => renderToStaticMarkup(React.createElement(media.MediaScope.Provider, { value: scope },
+    React.createElement(markdown.ResearchMarkdown, null, text)));
+  const chip = render(`[work.bundle](${url})`, { organizationId: org });
+  assert.match(chip, /class="topic-file-chip"/);
+  assert.match(chip, new RegExp(`href="${url}" download="work.bundle"`));
+  assert.match(chip, /<strong>work.bundle<\/strong>/);
+  assert.doesNotMatch(chip, /<img|<iframe|canvas|Loading PDF/);
+  const plain = render(`[work.bundle](${url})`, { organizationId: "e".repeat(32) });
+  assert.doesNotMatch(plain, /topic-file-chip/);
+  const replies = await server.ssrLoadModule("/src/MessageReplies.tsx");
+  assert.equal(replies.replyExcerpt(`Here [work.bundle](${url}) and ![plot](${url})`), "Here 📎 work.bundle and 📎 plot");
 });
 test("Markdown and TeX files are recognised by extension and described by their size", async () => {
   const file = (name, type = "") => new File(["# Notes"], name, { type });
@@ -49,7 +84,8 @@ test("Markdown and TeX files are recognised by extension and described by their 
   assert.equal(media.texLabel(18 * 1024, { status: "ready", method: "text", truncated: false }), "TeX source available for research · 18 KB.");
   assert.deepEqual(media.texTokens("\\section{A} $x$ % note\n50\\%").map(token => token.kind + ":" + token.text),
     ["command:\\section", "text:{A} ", "math:$x$", "text: ", "comment:% note", "text:\n50", "command:\\%"]);
-  assert.deepEqual(["image/png", "text/markdown", "application/x-tex", "application/pdf"].map(media.fileBadge), ["IMG", "MD", "TEX", "PDF"]);
+  assert.deepEqual(["image/png", "text/markdown", "application/x-tex", "application/pdf", "application/octet-stream"].map(media.fileBadge),
+    ["IMG", "MD", "TEX", "PDF", "FILE"]);
   assert.equal(media.markdownLabel(3 * 1024, { status: "ready", method: "text", truncated: false }), "Text available for research · 3 KB.");
   assert.equal(media.markdownLabel(3 * 1024 * 1024, { status: "ready", method: "text", truncated: true }),
     "Text available for research up to its first 2 MiB · 3.0 MB.");

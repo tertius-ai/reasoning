@@ -7,7 +7,7 @@ from fastapi import Depends, Response
 from pydantic import Field
 
 from .request_input import RequestInput
-from .research_media import ResearchMedia
+from .research_media import DATA_FILE, ResearchMedia
 
 
 class MediaBegin(RequestInput):
@@ -65,7 +65,9 @@ def install_routes(app, store, authenticated):
             headers={
                 "Cache-Control": "no-store",
                 "X-Content-Type-Options": "nosniff",
-                "Content-Disposition": "inline; filename*=UTF-8''" + quote(metadata["name"], safe=""),
+                # A data file is never displayed in the browser, only saved.
+                "Content-Disposition": ("attachment" if mime == DATA_FILE else "inline")
+                + "; filename*=UTF-8''" + quote(metadata["name"], safe=""),
                 "Content-Security-Policy": "default-src 'none'; sandbox; frame-ancestors 'none'",
             },
         )

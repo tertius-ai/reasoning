@@ -12,7 +12,7 @@ from .store import StoreError
 def register_actions(research):
     if not research.enabled:
         return
-    from .research_tools import schema, string
+    from .research_tools import attachments_schema, schema, string
 
     register = research.registry.tool
 
@@ -262,16 +262,19 @@ def register_actions(research):
             description=(
                 "Submit bounded code to an approved sandbox. Uses the topic CPU allowance or proposes exact-action approval. "
                 "Sage/Python/GAP/PARI/Julia/Lean require advertised image support. Read compute_catalog first: an image has "
-                "only what it lists, jobs have no network, and resources must fit one of the image's runs_here limits."
+                "only what it lists, jobs have no network, and resources must fit one of the image's runs_here limits. "
+                "Optional attachments pin topic files (identity and sha256 from media_list); they appear read-only at "
+                "/work/in/<path>."
             ),
             risk="external",
             input_schema=schema(
-                {"image_id": string(64), "language": string(32), "program": string(16000), "resources": {"type": "object"}},
+                {"image_id": string(64), "language": string(32), "program": string(16000), "resources": {"type": "object"},
+                 "attachments": attachments_schema()},
                 ["image_id", "language", "program", "resources"],
             ),
         )
-        def compute_submit(image_id, language, program, resources):
-            parameters = research.compute.parameters(image_id, language, program, resources)
+        def compute_submit(image_id, language, program, resources, attachments=None):
+            parameters = research.compute.parameters(image_id, language, program, resources, attachments)
             with research.store.transaction(write=True) as db:
                 research.store._topic_access(db, research.user, research.org, research.topic, write=True)
                 research.compute.require_runnable(db, research.org, image_id, parameters["resources"])
@@ -297,6 +300,8 @@ def register_actions(research):
                         "agent-" + research.row["id"] + "-" + str(research.sequence),
                         parameters,
                     )
+                # The approver sees exactly which files the job would read.
+                parameters = research.compute.pin_attachments(db, research.user, research.org, research.topic, parameters)
             return research._proposal({"action": "compute", "topic_id": research.topic, "parameters": parameters})
 
         from .noether_compute import register_jobs

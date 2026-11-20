@@ -23,7 +23,20 @@ import httpx
 
 from .compute_catalog import DIGEST, ComputeImage, canonical, fits, load_catalog, resources
 from .compute_docker import HEX_ID, CleanupUncertain, DockerRunner, Outcome, RuntimeFault
-from .compute_store import ARTIFACT_NAME, CHUNK_BYTES, ERROR_CODES, LOG_BYTES, TERMINAL, ComputeStore
+from .compute_store import (
+    ARTIFACT_NAME,
+    ATTACHMENT_FIELDS,
+    ATTACHMENT_PATH,
+    CHUNK_BYTES,
+    ERROR_CODES,
+    HEX64,
+    LOG_BYTES,
+    MAX_ATTACHMENT_BYTES,
+    MAX_ATTACHMENTS,
+    TERMINAL,
+    ComputeStore,
+    attachment_allowance,
+)
 from .security import private_file
 from .workflow_inputs import input_bytes
 
@@ -32,6 +45,10 @@ JOURNAL_BYTES = 256 * 1024
 
 class WorkerFault(Exception):
     """Fixed, secret-free diagnostics; remote bodies are never printed."""
+
+
+class InputsStopped(Exception):
+    """The attempt stopped while its input files were downloading."""
 
 
 def read_private(path: Path, maximum: int) -> bytes:
@@ -500,6 +517,27 @@ class ComputeWorker:
                 or not fits(limits, image.maximum_resources)
             ):
                 raise ValueError
+            if "attachments" in params:
+                pinned, total = params["attachments"], 0
+                if not isinstance(pinned, list) or not 1 <= len(pinned) <= MAX_ATTACHMENTS:
+                    raise ValueError
+                for item in pinned:
+                    if (
+                        not isinstance(item, dict)
+                        or set(item) != ATTACHMENT_FIELDS
+                        or not HEX_ID.fullmatch(item["identity"])
+                        or not HEX_ID.fullmatch(item["topic_id"])
+                        or not HEX64.fullmatch(item["sha256"])
+                        or not ATTACHMENT_PATH.fullmatch(item["path"])
+                        or type(item["size_bytes"]) is not int
+                        or not 1 <= item["size_bytes"] <= MAX_ATTACHMENT_BYTES
+                    ):
+                        raise ValueError
+                    total += item["size_bytes"]
+                if len({item["path"] for item in pinned}) != len(pinned) or len({item["identity"] for item in pinned}) != len(pinned):
+                    raise ValueError
+                if total > attachment_allowance(limits):
+                    raise ValueError
             program = params["program"]
             if "inputs" in params and params.get("inputs_digest") != "sha256:" + hashlib.sha256(input_bytes(params["inputs"])).hexdigest():
                 raise ValueError
@@ -535,8 +573,9 @@ class ComputeWorker:
         for path in paths:
             inspect_private(path, 1024**3)
         for path in directory.iterdir():
-            if path.name not in {"artifacts", "log.bin"}:
+            if path.name not in {"artifacts", "log.bin", "inputs"}:
                 raise WorkerFault("invalid_private_state")
+        self._clear_inputs(directory / "inputs")
         if (directory / "log.bin").exists() or (directory / "log.bin").is_symlink():
             read_private(directory / "log.bin", LOG_BYTES)
         for path in paths:
@@ -569,7 +608,10 @@ class ComputeWorker:
             self._save({"phase": "claiming", "claim_id": os.urandom(16).hex()})
             state = self.state()
         if state["phase"] == "claiming":
-            job = self.client.request("POST", "/api/worker/claim", {"claim_id": state["claim_id"], "supports_workflow_inputs": True})
+            job = self.client.request(
+                "POST", "/api/worker/claim",
+                {"claim_id": state["claim_id"], "supports_workflow_inputs": True, "supports_attachments": True},
+            )
             if job is None:
                 self._save({"phase": "idle"})
                 return False
@@ -593,16 +635,88 @@ class ComputeWorker:
             self._forget(state)
         return True
 
+    @staticmethod
+    def _clear_inputs(directory: Path):
+        # Only files this worker named by position; nothing program-controlled.
+        if not directory.exists() and not directory.is_symlink():
+            return
+        ComputeStore._directory(directory, create=False)
+        paths = list(directory.iterdir())
+        if any(not re.fullmatch(r"[0-3]", path.name) for path in paths):
+            raise WorkerFault("invalid_private_state")
+        for path in paths:
+            inspect_private(path, MAX_ATTACHMENT_BYTES)
+            path.unlink()
+        directory.rmdir()
+
+    def _download(self, job: dict, spool: Path, stopped) -> list[Path] | None:
+        """Fetch each pinned input file into private spool files; None when one differs from its pinned size or SHA-256."""
+        pinned = job["parameters"].get("attachments", [])
+        directory = spool / "inputs"
+        self._clear_inputs(directory)
+        if not pinned:
+            return []
+        ComputeStore._directory(directory)
+        files = []
+        for number, item in enumerate(pinned):
+            target, hasher, size, index = directory / str(number), hashlib.sha256(), 0, 0
+            fd = os.open(target, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+            with os.fdopen(fd, "wb") as stream:
+                while index is not None:
+                    if stopped():
+                        raise InputsStopped
+                    body = self.client.request(
+                        "POST", f"/api/worker/jobs/{job['id']}/attachments/{item['identity']}/chunks/{index}", lease_body(job)
+                    )
+                    expected = min(CHUNK_BYTES, item["size_bytes"] - size)
+                    try:
+                        if (
+                            not isinstance(body, dict)
+                            or body.get("index") != index
+                            or body.get("size_bytes") != item["size_bytes"]
+                            or body.get("sha256") != item["sha256"]
+                            or not isinstance(body.get("data_base64"), str)
+                            or len(body["data_base64"]) > 4 * ((CHUNK_BYTES + 2) // 3)
+                        ):
+                            raise ValueError
+                        data = base64.b64decode(body["data_base64"], validate=True)
+                    except ValueError:
+                        return None
+                    size += len(data)
+                    if len(data) != expected or body.get("next_index") != (index + 1 if size < item["size_bytes"] else None):
+                        return None
+                    stream.write(data)
+                    hasher.update(data)
+                    index = body["next_index"]
+                stream.flush()
+                os.fsync(stream.fileno())
+            if size != item["size_bytes"] or hasher.hexdigest() != item["sha256"]:
+                return None
+            files.append(target)
+        return files
+
     def _execute(self, state: dict):
         job = state["job"]
         guard = Heartbeat(self.client, job, self.stopping)
         spool = self._spool(job)
         guard.start()
         try:
-            self._save({"phase": "executing", "job": job})
-            if guard.stopped():
+            # Input files are fetched and verified before the attempt counts as executing: a crash here never ran code.
+            outcome, files = None, []
+            try:
+                files = self._download(job, spool, guard.stopped)
+            except InputsStopped:
                 outcome = Outcome("cancelled", 0, None, None)
-            else:
+            except WorkerFault as exc:
+                if str(exc) != "attempt_rejected":
+                    raise
+                files = None
+            if files is None:
+                outcome = Outcome("failed", 0, None, "input_verification_failed")
+            self._save({"phase": "executing", "job": job})
+            if outcome is None and guard.stopped():
+                outcome = Outcome("cancelled", 0, None, None)
+            if outcome is None:
                 fd = os.open(spool / "log.bin", os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
                 with os.fdopen(fd, "wb", buffering=0) as log:
 
@@ -611,7 +725,8 @@ class ComputeWorker:
                             raise OSError("incomplete private log write")
 
                     try:
-                        outcome = self.runner.run(job, spool / "artifacts", capture, guard.stopped)
+                        given = {**job, "attachment_files": [str(path) for path in files]} if files else job
+                        outcome = self.runner.run(given, spool / "artifacts", capture, guard.stopped)
                     except CleanupUncertain:
                         raise
                     except RuntimeFault as exc:

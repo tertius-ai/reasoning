@@ -20,7 +20,14 @@ MARKDOWN = "text/markdown"
 TEX = "application/x-tex"
 # Text attachments are read as their own UTF-8 source, bounded like extracted PDF text.
 TEXT_TYPES = {MARKDOWN: "Markdown", TEX: "TeX"}
-MIMES = {"image/png", "image/jpeg", "image/webp", "application/pdf", *TEXT_TYPES}
+# Formats whose bytes are verified, previewed or read; direct messages accept only these.
+FORMAT_MIMES = {"image/png", "image/jpeg", "image/webp", "application/pdf", *TEXT_TYPES}
+FORMAT_KINDS = "PNG, JPEG, WebP, PDF, Markdown or TeX file"
+# A data file claims nothing about its content: only its size and SHA-256 are verified, and it is
+# never rendered, extracted or decoded.
+DATA_FILE = "application/octet-stream"
+DATA_FILE_INSPECTION = "binary data file; no text is read. Download it or pass it to a computation."
+MIMES = FORMAT_MIMES | {DATA_FILE}
 MAX_TEXT_BYTES = 2 * 1024 * 1024
 REFERENCE = re.compile(r"/api/organizations/([a-f0-9]{32})/topics/([a-f0-9]{32})/media/([a-f0-9]{32})/([a-f0-9]{64})/content")
 # Native models read extracted PDF text; CLI bots can also download exact bytes.
@@ -43,7 +50,7 @@ def content_path(row):
 def view(row):
     value = {key: row[key] for key in ("id", "name", "mime", "sha256", "size_bytes", "topic_id", "created_at")}
     value["url"] = content_path(row)
-    value["markdown"] = f"![{row['name']}]({value['url']})"
+    value["markdown"] = f"{'' if row['mime'] == DATA_FILE else '!'}[{row['name']}]({value['url']})"
     if row["mime"] == "application/pdf" or row["mime"] in TEXT_TYPES:
         metadata = json.loads(dict(row).get("extraction_json", "{}"))
         value["extraction"] = {key: metadata[key] for key in (
@@ -108,14 +115,14 @@ def bounded_image(body, mime):
     return valid_signature(body, mime) and 1 <= width <= 8192 and 1 <= height <= 8192 and width * height <= 32_000_000
 
 
-def check_upload(name, mime, size_bytes, sha256):
+def check_upload(name, mime, size_bytes, sha256, *, mimes=MIMES, kinds=FORMAT_KINDS + " or any data file"):
     try:
         if isinstance(name, str):
             name.encode("utf8")
     except UnicodeError:
         raise StoreError(400, "attachment filename requires valid UTF-8") from None
     if (
-        mime not in MIMES
+        mime not in mimes
         or not isinstance(name, str)
         or not 1 <= len(name) <= 200
         or any(char in name for char in "/\\[]\r\n\0")
@@ -126,7 +133,7 @@ def check_upload(name, mime, size_bytes, sha256):
         or not isinstance(sha256, str)
         or not re.fullmatch(r"[a-f0-9]{64}", sha256)
     ):
-        raise StoreError(400, "attach a named PNG, JPEG, WebP, PDF, Markdown or TeX file of at most 8 MiB with an exact SHA-256")
+        raise StoreError(400, f"attach a named {kinds} of at most 8 MiB with an exact SHA-256")
 
 
 def check_chunk(index, data_base64):
@@ -265,7 +272,10 @@ class ResearchMedia:
             if row["complete"]:
                 return completed(row)
             body = self._bytes(db, row)
-            valid = bounded_image(body, row["mime"]) if row["mime"].startswith("image/") else valid_signature(body, row["mime"])
+            if row["mime"] == DATA_FILE:
+                valid = True  # only its size and SHA-256, checked above, are claimed
+            else:
+                valid = bounded_image(body, row["mime"]) if row["mime"].startswith("image/") else valid_signature(body, row["mime"])
             if not valid:
                 raise StoreError(400, "attachment content does not match its declared image, PDF, Markdown or TeX format")
             if vision and not row["mime"].startswith("image/"):
@@ -275,6 +285,8 @@ class ResearchMedia:
         if row["mime"] == "application/pdf":
             text, extraction = self._extract(body, preview_text)
             metadata.update(extraction)
+        elif row["mime"] == DATA_FILE:
+            text = ""
         elif row["mime"] in TEXT_TYPES:
             # The uploaded bytes are the text; an uploader preview is never substituted for them.
             source = source_text(body)
@@ -337,6 +349,9 @@ class ResearchMedia:
                 return row["mime"], self._bytes(db, row)
             if not isinstance(offset, int) or not isinstance(length, int) or offset < 0 or not 1 <= length <= 12000:
                 raise StoreError(400, "read a bounded extracted-text range")
+            if row["mime"] == DATA_FILE:
+                return {**view(row), "text": "", "offset": 0, "total_characters": 0, "next_offset": 0,
+                        "inspection": DATA_FILE_INSPECTION}
             text = row["preview_text"]
             result = {
                 **view(row),
@@ -442,7 +457,8 @@ def media_tools():
         ("media_list", "List complete attachments in this topic only; no organization-wide file dump.", {}, [], "list"),
         (
             "media_read",
-            "Read an exact SHA-256 attachment's bounded extracted text and metadata. Image metadata is not pixel inspection.",
+            "Read an exact SHA-256 attachment's bounded extracted text and metadata. Image metadata is not pixel inspection; "
+            "a data file (application/octet-stream) returns metadata only.",
             {
                 "identity": identity,
                 "sha256": sha,
@@ -463,7 +479,8 @@ def media_tools():
         ),
         (
             "media_begin",
-            "Begin an 8 MiB maximum PNG/JPEG/WebP/PDF upload in this topic; bytes remain private until checksum verification.",
+            "Begin an 8 MiB maximum PNG/JPEG/WebP/PDF/Markdown/TeX upload, or an application/octet-stream data file "
+            "whose content is never checked or read, in this topic; bytes remain private until checksum verification.",
             {
                 "name": string(200),
                 "mime": {"enum": sorted(MIMES)},
@@ -483,7 +500,7 @@ def media_tools():
         (
             "media_finish",
             "Verify an upload's hash and format and publish its immutable private Markdown reference. "
-            "Optional extracted text is untrusted reference data.",
+            "Optional extracted text is untrusted reference data; data files keep none.",
             {"identity": identity, "preview_text": {"type": "string", "maxLength": 24000}, "vision_base64": string(43692)},
             ["identity"],
             "finish",

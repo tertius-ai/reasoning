@@ -185,7 +185,8 @@ export type PendingModelAttempt = ModelAttempt & { unconfirmed?: { reason: strin
 /** Something a paused reply waits on: a proposal to decide, a computation, a review, a workflow, or delegated agents. */
 export type ReplyWait =
   | { kind: "proposal"; id: string; status: string; action: string; runnable?: boolean;
-      compute?: { image_id: string; language: string; resources: Record<string, number>; program: string; program_truncated: boolean } }
+      compute?: { image_id: string; language: string; resources: Record<string, number>; program: string; program_truncated: boolean;
+        attachments?: { name: string; size_bytes: number; sha256: string; path: string }[] } }
   | { kind: "compute"; id: string; status: string; created_at: number; runnable?: boolean }
   | { kind: "review" | "workflow"; id: string; status: string }
   | { kind: "agents"; count: number };
