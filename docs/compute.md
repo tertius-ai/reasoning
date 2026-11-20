@@ -224,6 +224,8 @@ The separate [workflow run API](server.md#durable-workflow-runs) dispatches read
 compute/LLM children and records approvals with restart-safe attempt linkage.
 Compute dependency data is bounded inert JSON at `/work/inputs.json`, not source
 substitution. Workers must advertise input support to claim those jobs.
+A job can also read topic files pinned by identity and SHA-256 at
+`/work/in/<path>`; see [input files](#input-files).
 Registering a worker does not launch hardware. Real-container algebra execution
 and operating-system resource enforcement are not verified on the current
 development host; fixture tests do not establish them. Do not treat this API
@@ -496,7 +498,8 @@ does not verify actual algebra, kernel/container isolation, TLS, or cloud provis
 ### HTTP request contract
 
 `POST /api/organizations/{organization_id}/topics/{topic_id}/compute-jobs`
-accepts `client_id`, `image_id`, `language`, `program`, and optional `resources`.
+accepts `client_id`, `image_id`, `language`, `program`, optional `resources`,
+and optional `attachments` ([input files](#input-files)).
 The program is nonempty UTF-8 text up to 16000 characters without NUL bytes.
 Resources, when supplied, require exactly all six fields:
 
@@ -547,6 +550,49 @@ intent, and committed artifacts. All current organization members can read
 jobs, source programs, evidence metadata, and committed artifacts. Worker tokens,
 attempt credentials, and lease hashes are not in human-facing responses.
 
+### Input files
+
+`attachments` is a list of at most 4 items, each exactly
+`{"identity": <32 hex>, "sha256": <64 hex>}`: a topic attachment's ID and its
+SHA-256, as `media_list` and the media routes report them. Admission runs as the
+requester and accepts a file only when it is complete, belongs to the job's
+organization, has exactly that SHA-256, and sits in the job's topic or another
+topic of the same project that the requester can read (for a project job, any
+readable topic of the project). Each identity may appear once. Any attachment
+kind can be pinned; [data files](media.md#data-files) are the usual choice.
+
+The files together may hold at most 32 MiB, and at most
+`(disk_bytes - 1 MiB) / 2 - artifact_bytes` bytes. Inputs and outputs share the
+job's `/work` scratch, which is `(disk_bytes - 1 MiB) / 2 + 1 MiB`; the last MiB
+stays free for the program source, `/work/inputs.json` and filesystem metadata.
+A job whose `artifact_bytes` is already half of `disk_bytes` can pin no files.
+
+The job's parameters then record each resolved file in request order:
+`identity`, `sha256`, `topic_id`, `name`, `mime`, `size_bytes` and `path`.
+`path` is `NN-<name>`, where `NN` is the file's 1-based position in two digits
+and `<name>` is its name with every character outside `[A-Za-z0-9._-]` replaced
+by `_`, cut to 100 characters. The program reads the file at `/work/in/<path>`.
+The files and `/work/in` are read-only (modes 0444 and 0555) and owned by the
+program user; they are written before the program starts and that time counts
+against its wall time. Replaying the same `client_id` requires the same files.
+A job without `attachments`, or with an empty list, has no `attachments`
+parameter.
+
+Claims re-run admission, so a job whose requester can no longer read a pinned
+file, or whose file's topic was deleted, fails before it starts as any job with
+changed authority does, and heartbeats stop a running one. Workers that do not
+send `supports_attachments` never claim jobs with input files. The worker
+downloads each file before the attempt starts executing and checks its size and
+SHA-256 against the pin; a mismatch fails the job with
+`input_verification_failed` without running the program.
+
+Research replies pin files with the optional `attachments` argument of
+`compute_submit` or `compute_propose`. A proposal shows the approver each file's
+name, size, SHA-256 and sandbox path, and approval admits the job again as the
+approving person.
+
+### Cancelling jobs
+
 The requester or an administrator can POST an empty JSON object to the job's
 `cancel` route. A queued job becomes cancelled with zero usage immediately.
 Cancellation of a running or uncertain job records intent; it does not claim
@@ -592,7 +638,8 @@ by the server's 64 KiB request-body limit.
 | `/api/worker/drain` | POST | Empty object; block fresh claims without interrupting active work |
 | `/api/worker/retirement` | GET | None; fixed enrollment retirement receipt/status |
 | `/api/worker/retirement` | POST | `cleanup_confirmed: true`; irreversible seal only when drained and no unsettled assigned jobs |
-| `/api/worker/claim` | POST | Optional `claim_id`: 32 lowercase hexadecimal characters |
+| `/api/worker/claim` | POST | Optional `claim_id`: 32 lowercase hexadecimal characters; optional booleans `supports_workflow_inputs`, `supports_attachments` |
+| `/api/worker/jobs/{job_id}/attachments/{identity}/chunks/{index}` | POST | `attempt_id`, `lease`; returns one pinned input file chunk |
 | `/api/worker/jobs/{job_id}/heartbeat` | POST | `attempt_id`, `lease` |
 | `/api/worker/jobs/{job_id}/logs` | POST | Lease fields, `chunk_index`, `text` |
 | `/api/worker/jobs/{job_id}/finish` | POST | Lease fields, `status`, `elapsed_ms`, optional `exit_code`, `error_code` |
@@ -619,6 +666,20 @@ does not extend the lease, re-admit the job, or permit execution after a stop
 response. The command durably saves the ID before claiming. An empty-object
 claim has no replay identifier; losing that response can leave a held uncertain
 job. Neither case justifies submitting another computation automatically.
+
+A worker that omits `supports_workflow_inputs` never claims a job with workflow
+inputs, and one that omits `supports_attachments` never claims a job with input
+files; it claims the next eligible job instead. Replaying a `claim_id` without
+the support its job needs returns 409.
+
+The attachment chunk route returns `{index, data_base64, next_index, size_bytes,
+sha256}`: one base64 chunk of at most 32768 decoded bytes, the next index or
+null after the last chunk, and the pinned file's size and SHA-256. It answers
+only for an identity pinned in that job's parameters (otherwise 404), only to the
+worker holding the job's current running attempt and lease, and only while
+current admission still accepts the job (otherwise 409). An index past the
+file's end returns 416. Workers verify every file against its pinned size and
+SHA-256 before running the program.
 
 Workers should heartbeat every ten seconds; leases expire after thirty seconds.
 Heartbeats return `stop: true` for cancellation, changed authority/policy/image,
@@ -793,6 +854,13 @@ these users without a writable home directory. Cache directories are redirected
 under `/tmp`; the image's `HOME` is not replaced. Python uses the image's
 `python3`; GAP disables its break loop; Lean checks the submitted source file.
 These are fixed interpreter commands, not arbitrary host commands.
+
+Pinned input files are downloaded into private 0600 files in the attempt's
+spool before the attempt is journaled as executing, verified against their
+pinned size and SHA-256, and written into the container as the program user
+with `container exec`: the bytes go on stdin and the sanitized file name is a
+positional argument, never shell source. The Modal relay streams the same bytes
+into its VM in 1 MiB slices.
 
 Write flat regular output files in `REASONING_OUTPUT_DIR` (`/work/out`). The
 host enforces the program deadline and cancellation independently of a protected

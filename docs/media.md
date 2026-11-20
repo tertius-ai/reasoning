@@ -33,6 +33,10 @@ displaying it. `media_read` and model context give its metadata only, with empty
 exact bytes with `media_download_chunk` or `workspace_fetch_media`. The size and storage limits below apply
 unchanged. Direct messages accept only the formats above, not data files.
 
+Any complete topic attachment, a data file or one of the formats above, can be pinned by its ID and SHA-256 as
+an input of a compute job in the same project; the program reads it at `/work/in/<path>`. See
+[input files](compute.md#input-files).
+
 ## Agent context
 
 Only same-project attachments explicitly referenced by selected source messages are considered
