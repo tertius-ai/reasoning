@@ -15,6 +15,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from .compute_catalog import DIGEST, LANGUAGES, ComputeImage, canonical, fits, resources
+from .research_media import MAX_BYTES as MAX_ATTACHMENT_BYTES
 from .security import digest, private_file, token
 from .store import Store, StoreError, _id, _row
 from .workflow_inputs import input_bytes
@@ -28,6 +29,13 @@ STARTUP_SECONDS = 600
 CHUNK_BYTES = 32768
 LOG_BYTES = 1024**2
 ARTIFACT_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}\Z")
+# Topic files pinned as read-only job inputs at /work/in/<path>.
+MAX_ATTACHMENTS = 4
+MAX_ATTACHMENTS_TOTAL = 32 * 1024**2
+ATTACHMENT_FIELDS = {"identity", "sha256", "topic_id", "name", "mime", "size_bytes", "path"}
+ATTACHMENT_PATH = re.compile(r"[0-9]{2}-[A-Za-z0-9._-]{1,100}\Z")
+HEX32 = re.compile(r"[a-f0-9]{32}\Z")
+HEX64 = re.compile(r"[a-f0-9]{64}\Z")
 ERROR_CODES = {
     "execution_failed",
     "resource_limit",
@@ -35,6 +43,7 @@ ERROR_CODES = {
     "log_limit",
     "artifact_limit",
     "image_verification_failed",
+    "input_verification_failed",
     "worker_stopped",
 }
 # Workers that hold one of a scaler's seats: unrevoked (draining ones too), or revoked with an outcome still unsettled.
@@ -48,6 +57,42 @@ SCALER_SEATS = (
 
 def _bounded_int(value: object, low: int, high: int) -> bool:
     return type(value) is int and low <= value <= high
+
+
+def attachment_allowance(limits: dict) -> int:
+    """Input bytes a job may pin. Inputs and outputs share the /work tmpfs, which compute_docker.mounts sizes to
+    (disk_bytes - 1 MiB) // 2 + 1 MiB; the final MiB stays free for the program source, inputs.json and filesystem
+    metadata, so the pinned files and the whole artifact allowance always fit together."""
+    return max(0, min(MAX_ATTACHMENTS_TOTAL, (limits["disk_bytes"] - 1024**2) // 2 - limits["artifact_bytes"]))
+
+
+def attachment_path(index: int, name: str) -> str:
+    """A deterministic sandbox file name, unique by its position and safe as one path component."""
+    return f"{index + 1:02d}-" + re.sub(r"[^A-Za-z0-9._-]", "_", name)[:100]
+
+
+def requested_attachments(value: object) -> list[dict]:
+    """The identity and exact SHA-256 of each requested topic file; resolved records reduce to the same request."""
+    if value is None:
+        return []
+    if not isinstance(value, list) or len(value) > MAX_ATTACHMENTS:
+        raise StoreError(400, f"attach at most {MAX_ATTACHMENTS} topic files to a compute job")
+    requested = []
+    for item in value:
+        if (
+            not isinstance(item, dict)
+            or not {"identity", "sha256"} <= item.keys()
+            or not item.keys() <= ATTACHMENT_FIELDS
+            or not isinstance(item["identity"], str)
+            or not HEX32.fullmatch(item["identity"])
+            or not isinstance(item["sha256"], str)
+            or not HEX64.fullmatch(item["sha256"])
+        ):
+            raise StoreError(400, "each compute attachment needs a topic file identity and its exact SHA-256")
+        requested.append({"identity": item["identity"], "sha256": item["sha256"]})
+    if len({item["identity"] for item in requested}) != len(requested):
+        raise StoreError(400, "attach each topic file to a compute job at most once")
+    return requested
 
 
 class ComputeStore:
@@ -119,7 +164,7 @@ class ComputeStore:
                               f"The largest it can run here: {largest}. Request resources within one of these limits")
 
     @staticmethod
-    def parameters(image_id: str, language: str, program: str, limits: dict) -> dict:
+    def parameters(image_id: str, language: str, program: str, limits: dict, attachments: list | None = None) -> dict:
         if not isinstance(image_id, str) or not 1 <= len(image_id) <= 64 or not isinstance(language, str) or language not in LANGUAGES:
             raise StoreError(400, "select an approved image and supported language")
         if not isinstance(program, str) or not program.strip() or len(program) > 16000 or "\x00" in program:
@@ -132,7 +177,48 @@ class ComputeStore:
             validated = resources(limits)
         except ValueError as exc:
             raise StoreError(400, str(exc)) from exc
-        return {"image_id": image_id, "language": language, "program": program, "resources": validated}
+        requested = requested_attachments(attachments)
+        return {
+            "image_id": image_id, "language": language, "program": program, "resources": validated,
+            **({"attachments": requested} if requested else {}),
+        }
+
+    def _attachments(self, db: sqlite3.Connection, user: str, org: str, topic: str | None, project: str,
+                     requested: list[dict], limits: dict) -> list[dict]:
+        """Resolve requested topic files as the requester: complete, exact SHA-256, and in the job's topic or another
+        topic of the same project the requester can read."""
+        resolved, total = [], 0
+        for index, item in enumerate(requested_attachments(requested)):
+            row = db.execute(
+                "SELECT * FROM research_media WHERE organization_id=? AND id=? AND complete=1", (org, item["identity"])
+            ).fetchone()
+            readable = row is not None and row["sha256"] == item["sha256"]
+            if readable and row["topic_id"] != topic:
+                try:
+                    readable = self.store._topic_access(db, user, org, row["topic_id"])[1]["id"] == project
+                except StoreError:
+                    readable = False
+            if not readable:
+                raise StoreError(404, f"attachment {item['identity']} is not a complete file with that SHA-256 "
+                                      "in a topic of this project you can read")
+            total += row["size_bytes"]
+            resolved.append({
+                "identity": row["id"], "sha256": row["sha256"], "topic_id": row["topic_id"], "name": row["name"],
+                "mime": row["mime"], "size_bytes": row["size_bytes"], "path": attachment_path(index, row["name"]),
+            })
+        allowance = attachment_allowance(limits)
+        if total > allowance:
+            raise StoreError(400, f"attached files total {total} bytes; this job allows {allowance}: at most 32 MiB, and "
+                                  "together with artifact_bytes at most half of disk_bytes less 1 MiB")
+        return resolved
+
+    def pin_attachments(self, db: sqlite3.Connection, user: str, org: str, topic: str, parameters: dict) -> dict:
+        """Parameters with their requested files resolved for review, as the job's requester would see them."""
+        if "attachments" not in parameters:
+            return parameters
+        project = self.store._topic_access(db, user, org, topic)[1]["id"]
+        return {**parameters, "attachments": self._attachments(
+            db, user, org, topic, project, parameters["attachments"], parameters["resources"])}
 
     @staticmethod
     def _event(db: sqlite3.Connection, org: str, job: str, event: dict) -> None:
@@ -241,15 +327,21 @@ class ComputeStore:
         if topic is None:
             self.store._project_access(db, user, org, project, write=True)
         else:
-            target = self.store._topic_access(db, user, org, topic, write=True)[4]
-            if target["kind"] not in {"beta", "gamma"}:
+            access = self.store._topic_access(db, user, org, topic, write=True)
+            if access[4]["kind"] not in {"beta", "gamma"}:
                 raise StoreError(400, "compute jobs require a beta or gamma topic")
+            project = access[1]["id"]
         image = self.images.get(parameters["image_id"])
         policy = self._policy(db, org)
         if not image or image.id not in policy["allowed_images"] or policy["monthly_cpu_seconds"] <= 0:
             raise StoreError(409, "an administrator must enable an approved image and a positive compute quota")
         if parameters["language"] not in image.languages or not fits(parameters["resources"], image.maximum_resources):
             raise StoreError(400, "language or resource request exceeds the approved image profile")
+        if "attachments" in parameters:
+            pinned = parameters["attachments"]
+            # Still readable by the requester, unchanged, and within the job's allowance.
+            if self._attachments(db, user, org, topic, project, pinned, parameters["resources"]) != pinned:
+                raise StoreError(409, "pinned compute input files changed")
         return image
 
     def enqueue(self, user: str, org: str, topic: str, client: str, parameters: dict) -> dict:
@@ -264,18 +356,24 @@ class ComputeStore:
         """Transaction-scoped admission; workflow callers atomically link the child."""
         if not isinstance(client, str) or not 1 <= len(client) <= 128:
             raise StoreError(400, "invalid compute client identifier")
-        parameters = self.parameters(parameters["image_id"], parameters["language"], parameters["program"], parameters["resources"])
+        parameters = self.parameters(
+            parameters["image_id"], parameters["language"], parameters["program"], parameters["resources"], parameters.get("attachments")
+        )
         if inputs is not None:
             try:
                 encoded_inputs = input_bytes(inputs)
             except (ValueError, TypeError, RecursionError) as exc:
                 raise StoreError(400, "invalid or excessive workflow inputs") from exc
             parameters.update(inputs=json.loads(encoded_inputs), inputs_digest="sha256:" + hashlib.sha256(encoded_inputs).hexdigest())
-        encoded = canonical(parameters)
         if topic is None:
             self.store._project_access(db, user, org, project, write=True)
         else:
             project = self.store._topic_access(db, user, org, topic, write=True)[1]["id"]
+        if "attachments" in parameters:
+            parameters["attachments"] = self._attachments(
+                db, user, org, topic, project, parameters["attachments"], parameters["resources"]
+            )
+        encoded = canonical(parameters)
         existing = db.execute(
             "SELECT * FROM compute_jobs WHERE organization_id=? AND requested_by=? AND client_id=?", (org, user, client)
         ).fetchone()
@@ -663,9 +761,18 @@ class ComputeStore:
             "lease_seconds": LEASE_SECONDS,
         }
 
-    def claim(self, credential: str, claim_id: str | None = None, *, supports_workflow_inputs: bool = False) -> dict | None:
-        if type(supports_workflow_inputs) is not bool:
-            raise StoreError(400, "workflow input support must be boolean")
+    @staticmethod
+    def _unsupported(parameters: dict, workflow_inputs: bool, attachments: bool) -> str | None:
+        if "inputs" in parameters and not workflow_inputs:
+            return "workflow input"
+        if "attachments" in parameters and not attachments:
+            return "input file"
+        return None
+
+    def claim(self, credential: str, claim_id: str | None = None, *, supports_workflow_inputs: bool = False,
+              supports_attachments: bool = False) -> dict | None:
+        if type(supports_workflow_inputs) is not bool or type(supports_attachments) is not bool:
+            raise StoreError(400, "workflow input and input file support must be boolean")
         if claim_id is not None and (not isinstance(claim_id, str) or not re.fullmatch(r"[a-f0-9]{32}", claim_id)):
             raise StoreError(400, "claim ID must be 32 lowercase hexadecimal characters")
         with self.store.transaction(write=True) as db:
@@ -676,8 +783,9 @@ class ComputeStore:
             if claim_id is not None:
                 old = db.execute("SELECT * FROM compute_jobs WHERE worker_id=? AND claim_id=?", (worker["id"], claim_id)).fetchone()
                 if old is not None:
-                    if "inputs" in json.loads(old["parameters_json"]) and not supports_workflow_inputs:
-                        raise StoreError(409, "this claim requires workflow input support")
+                    missing = self._unsupported(json.loads(old["parameters_json"]), supports_workflow_inputs, supports_attachments)
+                    if missing:
+                        raise StoreError(409, f"this claim requires {missing} support")
                     return self._claim_view(dict(old), self._claim_lease(credential, worker["id"], old["attempt_id"]))
             if (
                 worker["draining"]
@@ -697,7 +805,7 @@ class ComputeStore:
                 "WHERE organization_id=? AND status='queued' ORDER BY created_at,s.sequence", (org,)
             ):
                 row, parameters = dict(entry), json.loads(entry["parameters_json"])
-                if "inputs" in parameters and not supports_workflow_inputs:
+                if self._unsupported(parameters, supports_workflow_inputs, supports_attachments):
                     continue
                 if not self._may_run(db, row):
                     self._settle(db, row, "failed", 0, "policy_changed", None)
@@ -752,6 +860,41 @@ class ComputeStore:
             if row["status"] == "running":
                 db.execute("UPDATE compute_jobs SET lease_expires_at=? WHERE id=?", (min(now + LEASE_SECONDS, row["deadline_at"]), job))
             return {"stop": stop, "status": row["status"], "deadline_at": row["deadline_at"], "lease_seconds": LEASE_SECONDS}
+
+    def attachment_chunk(self, credential: str, job: str, attempt: str, lease: str, identity: str, index: int) -> dict:
+        """One chunk of a file the job pinned, only to the worker running its current attempt."""
+        if (
+            not isinstance(identity, str)
+            or not HEX32.fullmatch(identity)
+            or not _bounded_int(index, 0, MAX_ATTACHMENT_BYTES // CHUNK_BYTES - 1)
+        ):
+            raise StoreError(400, "request one numbered chunk of a pinned input file")
+        with self.store.transaction(write=True) as db:
+            _, row = self._lease(db, credential, job, attempt, lease)
+            pinned = next(
+                (item for item in json.loads(row["parameters_json"]).get("attachments", []) if item["identity"] == identity), None
+            )
+            if pinned is None:
+                raise StoreError(404, "input file is not pinned by this compute job")
+            if row["cancel_requested"] or not self._may_run(db, row):
+                raise StoreError(409, "compute attempt is no longer authorized")
+            if index * CHUNK_BYTES >= pinned["size_bytes"]:
+                raise StoreError(416, "input file chunk is outside its byte range")
+            chunk = db.execute(
+                "SELECT c.data_base64,c.size_bytes FROM research_media_chunks c JOIN research_media m ON m.id=c.media_id "
+                "WHERE m.organization_id=? AND m.id=? AND m.sha256=? AND m.complete=1 AND c.chunk_index=?",
+                (row["organization_id"], identity, pinned["sha256"], index),
+            ).fetchone()
+            expected = min(CHUNK_BYTES, pinned["size_bytes"] - index * CHUNK_BYTES)
+            if chunk is None or chunk["size_bytes"] != expected or len(base64.b64decode(chunk["data_base64"], validate=True)) != expected:
+                raise StoreError(409, "input file chunk integrity differs")
+            return {
+                "index": index,
+                "data_base64": chunk["data_base64"],
+                "next_index": index + 1 if (index + 1) * CHUNK_BYTES < pinned["size_bytes"] else None,
+                "size_bytes": pinned["size_bytes"],
+                "sha256": pinned["sha256"],
+            }
 
     def append_log(self, credential: str, job: str, attempt: str, lease: str, index: int, text: str) -> None:
         try:

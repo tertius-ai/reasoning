@@ -9,7 +9,7 @@ from pydantic import Field, SecretStr
 
 from .compute_catalog import DEFAULT_RESOURCES
 from .compute_scaler import ComputeScalers
-from .compute_store import ComputeStore
+from .compute_store import MAX_ATTACHMENTS, ComputeStore
 from .request_input import RequestInput as Input
 from .store import StoreError
 
@@ -23,12 +23,22 @@ class Resources(Input):
     artifact_bytes: Annotated[int, Field(ge=1, le=1024**3, strict=True)]
 
 
+class Attachment(Input):
+    identity: Annotated[str, Field(pattern=r"^[a-f0-9]{32}$", min_length=32, max_length=32)]
+    sha256: Annotated[str, Field(pattern=r"^[a-f0-9]{64}$", min_length=64, max_length=64)]
+
+
 class Job(Input):
     client_id: Annotated[str, Field(min_length=1, max_length=128)]
     image_id: Annotated[str, Field(min_length=1, max_length=64)]
     language: Literal["sage", "python", "julia", "gap", "pari", "lean"]
     program: Annotated[str, Field(min_length=1, max_length=16000)]
     resources: Resources = Field(default_factory=lambda: Resources(**DEFAULT_RESOURCES))
+    attachments: Annotated[list[Attachment], Field(max_length=MAX_ATTACHMENTS)] | None = None
+
+    def parameters(self, state: ComputeStore) -> dict:
+        attachments = None if self.attachments is None else [item.model_dump() for item in self.attachments]
+        return state.parameters(self.image_id, self.language, self.program, self.resources.model_dump(), attachments)
 
 
 class Policy(Input):
@@ -80,6 +90,7 @@ class Lease(Input):
 class Claim(Input):
     claim_id: Annotated[str | None, Field(min_length=32, max_length=32, pattern=r"^[a-f0-9]{32}$")] = None
     supports_workflow_inputs: Annotated[bool, Field(strict=True)] = False
+    supports_attachments: Annotated[bool, Field(strict=True)] = False
 
 
 class Log(Lease):
@@ -99,6 +110,7 @@ class Outcome(Lease):
             "log_limit",
             "artifact_limit",
             "image_verification_failed",
+            "input_verification_failed",
             "worker_stopped",
         ]
         | None
@@ -173,8 +185,7 @@ def install_routes(app: FastAPI, state: ComputeStore, authenticated: Callable) -
 
     @app.post("/api/organizations/{organization_id}/topics/{topic_id}/compute-jobs", status_code=202)
     def submit(organization_id: str, topic_id: str, body: Job, user: User):
-        parameters = state.parameters(body.image_id, body.language, body.program, body.resources.model_dump())
-        return state.enqueue(user, organization_id, topic_id, body.client_id, parameters)
+        return state.enqueue(user, organization_id, topic_id, body.client_id, body.parameters(state))
 
     @app.get("/api/organizations/{organization_id}/topics/{topic_id}/compute-jobs")
     def jobs(organization_id: str, topic_id: str, user: User, limit: Annotated[int, Query(ge=1, le=50)] = 20,
@@ -183,10 +194,7 @@ def install_routes(app: FastAPI, state: ComputeStore, authenticated: Callable) -
 
     @app.post("/api/organizations/{organization_id}/projects/{project_id}/compute-jobs", status_code=202)
     def project_submit(organization_id: str, project_id: str, body: Job, user: User):
-        return state.enqueue_project(
-            user, organization_id, project_id, body.client_id,
-            state.parameters(body.image_id, body.language, body.program, body.resources.model_dump()),
-        )
+        return state.enqueue_project(user, organization_id, project_id, body.client_id, body.parameters(state))
 
     @app.get("/api/organizations/{organization_id}/projects/{project_id}/compute-jobs")
     def project_jobs(organization_id: str, project_id: str, user: User,
@@ -265,11 +273,18 @@ def install_routes(app: FastAPI, state: ComputeStore, authenticated: Callable) -
 
     @app.post("/api/worker/claim")
     def claim(body: Claim, credential: Credential):
-        return state.claim(credential, body.claim_id, supports_workflow_inputs=body.supports_workflow_inputs)
+        return state.claim(
+            credential, body.claim_id,
+            supports_workflow_inputs=body.supports_workflow_inputs, supports_attachments=body.supports_attachments,
+        )
 
     @app.post("/api/worker/jobs/{job_id}/heartbeat")
     def heartbeat(job_id: str, body: Lease, credential: Credential):
         return state.heartbeat(credential, job_id, body.attempt_id, body.lease.get_secret_value())
+
+    @app.post("/api/worker/jobs/{job_id}/attachments/{identity}/chunks/{index}")
+    def attachment_chunk(job_id: str, identity: str, index: int, body: Lease, credential: Credential):
+        return state.attachment_chunk(credential, job_id, body.attempt_id, body.lease.get_secret_value(), identity, index)
 
     @app.post("/api/worker/jobs/{job_id}/logs", status_code=204)
     def log(job_id: str, body: Log, credential: Credential):
