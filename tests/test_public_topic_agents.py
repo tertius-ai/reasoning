@@ -701,3 +701,42 @@ def test_coordinator_waiting_for_delegates_settles_once_its_work_continues(insta
     view = state.run(owner["user_id"], owner["organization_id"], parent["id"])
     assert view["answer_state"]["status"] == "continued" and view["answer_state"]["next_run"] == continuation["id"]
     assert state.run(owner["user_id"], owner["organization_id"], continuation["id"])["answer_state"]["status"] == "response_ready"
+
+
+def test_proposed_computation_pins_topic_files_for_review_and_approval(installation, tmp_path):
+    import base64
+    import hashlib
+
+    from reasoning_ledger.server.compute_catalog import DEFAULT_RESOURCES
+    from reasoning_ledger.server.research_media import DATA_FILE, ResearchMedia
+    from reasoning_ledger.server.research_tools import ResearchProposals
+
+    state, _, owner, topics, parent, _ = root(installation)
+    user, org = owner["user_id"], owner["organization_id"]
+    compute, image = sandbox(state, owner, tmp_path)
+    compute.register_worker(user, org, "Fixture", [image["id"]], image["maximum_resources"])
+    media, body = ResearchMedia(state.store), b"1,2,3\n"
+    sha = hashlib.sha256(body).hexdigest()
+    started = media.begin(user, org, topics[2]["id"], "values.csv", DATA_FILE, len(body), sha)
+    media.chunk(user, org, topics[2]["id"], started["id"], 0, base64.b64encode(body).decode())
+    media.finish(user, org, topics[2]["id"], started["id"])
+    tools = ResearchTools(state, parent, compute=compute)
+    schema = next(tool for tool in tools.registry.list() if tool.name == "compute_submit").input_schema
+    assert "/work/in/<path>" in schema["properties"]["attachments"]["description"]
+    assert "/work/in/<path>" in tools.invoke("compute_catalog", {})["result"]["note"]
+    with pytest.raises(ValueError, match="was not found"):
+        tools.invoke("compute_submit", {
+            "image_id": image["id"], "language": "python", "program": "print(1)", "resources": DEFAULT_RESOURCES,
+            "attachments": [{"identity": started["id"], "sha256": "0" * 64}],
+        })
+    proposal = tools.invoke("compute_submit", {
+        "image_id": image["id"], "language": "python", "program": "print(open('/work/in/01-values.csv').read())",
+        "resources": DEFAULT_RESOURCES, "attachments": [{"identity": started["id"], "sha256": sha}],
+    })["result"]["proposal_id"]
+    waiting(state, parent, "Waiting for the computation.")
+    [wait] = state.run(user, org, parent["id"])["answer_state"]["waits"]
+    assert wait["compute"]["attachments"] == [{"name": "values.csv", "size_bytes": len(body), "sha256": sha, "path": "01-values.csv"}]
+    approved = ResearchProposals(state, compute, None).review(user, org, topics[1]["id"], proposal, True)
+    assert approved["status"] == "approved"
+    [pinned] = approved["result"]["parameters"]["attachments"]
+    assert (pinned["identity"], pinned["topic_id"], pinned["path"]) == (started["id"], topics[2]["id"], "01-values.csv")

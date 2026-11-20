@@ -41,6 +41,19 @@ def string(maximum=200):
     return {"type": "string", "minLength": 1, "maxLength": maximum}
 
 
+def attachments_schema():
+    pattern = {32: "^[a-f0-9]{32}$", 64: "^[a-f0-9]{64}$"}
+    return {
+        "type": "array",
+        "maxItems": 4,
+        "description": "Topic files to pin as inputs; each appears read-only at /work/in/<path>, with the path returned in "
+        "the job's parameters. Take identity (id) and sha256 from media_list. Files come from this topic or another "
+        "topic of this project; together at most 32 MiB.",
+        "items": schema({"identity": {"type": "string", "pattern": pattern[32]}, "sha256": {"type": "string", "pattern": pattern[64]}},
+                        ["identity", "sha256"]),
+    }
+
+
 def text_page(text, offset, length):
     """Keep JSON escaping inside the MCP result ceiling while preserving an exact next offset."""
     piece = text[offset:offset + length]
@@ -58,8 +71,8 @@ def text_page(text, offset, length):
 CATALOG_NOTE = (
     "Each image has only its listed languages and, where installed is given, exactly those runtimes and tools; assume "
     "nothing else (for example no TeX). Jobs have no network. Write output files to the image's output path "
-    "(REASONING_OUTPUT_DIR). A job runs only if it fits one of runs_here for its image; empty runs_here means nothing here "
-    "runs that image."
+    "(REASONING_OUTPUT_DIR). Topic files pinned with compute_submit's attachments are read-only at /work/in/<path>. A job "
+    "runs only if it fits one of runs_here for its image; empty runs_here means nothing here runs that image."
 )
 
 
@@ -609,16 +622,18 @@ class ResearchTools:
                             "language": string(32),
                             "program": string(16000),
                             "resources": {"type": "object"},
+                            "attachments": attachments_schema(),
                         },
                         ["topic_id", "image_id", "language", "program", "resources"],
                     ),
                 )
-                def compute_propose(topic_id, image_id, language, program, resources):
+                def compute_propose(topic_id, image_id, language, program, resources, attachments=None):
                     if self._target(topic_id)["kind"] != "gamma":
                         raise StoreError(400, "computation jobs belong to gamma topics")
-                    parameters = self.compute.parameters(image_id, language, program, resources)
+                    parameters = self.compute.parameters(image_id, language, program, resources, attachments)
                     with self.store.transaction() as db:
                         self.compute.require_runnable(db, self.org, image_id, parameters["resources"])
+                        parameters = self.compute.pin_attachments(db, self.user, self.org, topic_id, parameters)
                     return self._proposal({"action": "compute", "topic_id": topic_id, "parameters": parameters})
 
             @register(
