@@ -21,3 +21,12 @@
 .topic-tex-command { color: var(--blue); }
 .topic-tex-math { color: var(--amber); }
 .topic-tex-comment { color: var(--muted); font-style: italic; }
+/* A data file is offered only for download: a chip with its badge, name and size, never a preview. */
+.topic-file-chip { display: inline-flex; align-items: center; gap: .6rem; max-width: min(100%, 26rem); margin: .35rem 0; padding: .4rem .75rem .4rem .5rem;
+  border: 1px solid var(--border); border-radius: 12px; background: var(--surface); color: inherit; text-decoration: none; vertical-align: middle; }
+.topic-file-chip:hover { background: var(--surface-raised); }
+.topic-file-chip .direct-file-icon { display: grid; place-items: center; flex: none; width: 28px; height: 34px; border-radius: 4px;
+  background: var(--surface-raised); color: var(--muted); font: 600 9px/1 var(--font-mono); }
+.topic-file-chip-text { display: flex; flex-direction: column; min-width: 0; }
+.topic-file-chip-text strong { font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.topic-file-chip-text small { color: var(--muted); }

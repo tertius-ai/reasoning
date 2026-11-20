@@ -1,13 +1,14 @@
-# Pictures, PDFs, Markdown and TeX
+# Pictures, PDFs, Markdown, TeX and data files
 
 Attach a PNG, JPEG, WebP, PDF, Markdown (`.md`, `.markdown`) or TeX (`.tex`) file in an alpha, beta or gamma topic
-or a direct message. The attachment control takes up to ten files at once and uploads each privately. Each waits as a
+or a direct message. In a topic, any other file can be attached as a data file (see [Data files](#data-files)). The attachment control takes up to ten files at once and uploads each privately. Each waits as a
 chip above the message text, showing its upload, with × to remove it; send waits until every upload has finished, and
 a failed upload must be removed first. Sending adds each file to the message as a Markdown reference after the text,
 which makes the attachment part of the conversation. The `/attach` command opens the same file chooser in every topic
 kind. Pictures display inline; PDFs expand into the local PDF.js canvas reader; Markdown files expand into the same
 Markdown and KaTeX rendering as messages, without raw HTML or images; TeX files expand into their source, with
-commands, math and comments lightly coloured. TeX is never compiled. Raw
+commands, math and comments lightly coloured. TeX is never compiled. A data file shows as a download chip with its
+name and size. Raw
 HTML, SVG, remote images, tracking pixels and remote PDF embedding are disabled.
 Research files includes the current topic's attachments alongside project text
 files, including editable `.tex` sources.
@@ -18,6 +19,19 @@ topic permissions. A reference copied to another conversation does not grant
 access to its source topic. Completed original bytes cannot be replaced. Writers
 may explicitly retry PDF text extraction without changing that original identity.
 Attachments are included in database backups; there is no external public bucket.
+
+## Data files
+
+A topic attachment of any other type is a data file, stored as `application/octet-stream`. A data file claims
+nothing about its content: the server verifies only its declared size and SHA-256, checks no format, and never
+previews, extracts or decodes it. Uploader text is not kept and an image preview is refused. Its message
+reference is a plain Markdown link, `[name](url)`, which the browser shows as a download chip, never as a picture
+or in the PDF reader. Its content route always answers with `Content-Type: application/octet-stream`,
+`Content-Disposition: attachment` and `X-Content-Type-Options: nosniff`, so a browser saves it rather than
+displaying it. `media_read` and model context give its metadata only, with empty text and the note
+"binary data file; no text is read. Download it or pass it to a computation." Authorized bots can download its
+exact bytes with `media_download_chunk` or `workspace_fetch_media`. The size and storage limits below apply
+unchanged. Direct messages accept only the formats above, not data files.
 
 ## Agent context
 
@@ -162,11 +176,12 @@ Bot text workspace reads retain their 128 KiB limit; binary publication supports
 
 Under `/api/organizations/{org}/topics/{topic}/media`:
 
-- `POST` declares name, MIME, size and SHA-256; it returns an upload ID.
+- `POST` declares name, MIME (`image/png`, `image/jpeg`, `image/webp`, `application/pdf`, `text/markdown`,
+  `application/x-tex` or `application/octet-stream`), size and SHA-256; it returns an upload ID.
 - `PUT /{id}/chunks/{index}` accepts an immutable base64 chunk of at most 32 KiB.
-- `POST /{id}/finish` verifies bytes, format and digest and returns the private reference.
+- `POST /{id}/finish` verifies bytes, format (for every kind but a data file) and digest and returns the private reference.
 - `GET` lists completed files in this topic only.
-- `GET /{id}/{sha256}/content` serves authenticated bytes, with no public caching.
+- `GET /{id}/{sha256}/content` serves authenticated bytes, with no public caching; a data file always as a download.
 - `GET /{id}/{sha256}/read?offset=0&length=12000` returns a bounded text preview and metadata.
 - `POST /{id}/{sha256}/extract` retries bounded extraction from the immutable PDF for a current topic writer.
 

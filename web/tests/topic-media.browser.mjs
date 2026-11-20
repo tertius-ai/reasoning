@@ -56,8 +56,9 @@ createRoot(document.getElementById('root')).render(React.createElement(Fixture))
           const url = `/api/organizations/${org}/topics/${topic}/media/${match[1]}/${file.sha256}/content`;
           file.extraction = file.mime === "application/pdf" ? { status: "ready", method: "server", pages_read: 1, total_pages: 1 }
             : ["text/markdown", "application/x-tex"].includes(file.mime) ? { status: "ready", method: "text", truncated: false } : undefined;
-          data = { ...file, chunks: undefined, bytes: undefined, id: match[1], url, markdown: `![${file.name}](${url})` };
-        } else if (action.endsWith("/read")) data = { mime: file.mime, size_bytes: file.size_bytes, extraction: file.extraction };
+          data = { ...file, chunks: undefined, bytes: undefined, id: match[1], url,
+            markdown: `${file.mime === "application/octet-stream" ? "" : "!"}[${file.name}](${url})` };
+        } else if (action.endsWith("/read")) data = { name: file.name, mime: file.mime, size_bytes: file.size_bytes, extraction: file.extraction };
         else if (action.endsWith("/content")) {
           await route.fulfill({ status: 200, contentType: file.mime, body: file.bytes }); return;
         }
@@ -115,6 +116,17 @@ createRoot(document.getElementById('root')).render(React.createElement(Fixture))
     assert.deepEqual(await tex.locator(".topic-tex-comment").allInnerTexts(), ["% TODO: cite Borel"]);
     assert.deepEqual(await tex.locator(".topic-tex-math").allInnerTexts(), ["$r_{\\mathcal D}$"]);
     await page.getByRole("link", { name: "Download TeX" }).waitFor();
+    // Any other file is a data file: sent as application/octet-stream and offered only as a download chip.
+    const bundle = Buffer.concat([Buffer.from("# v2 git bundle\n"), Buffer.from(Array.from({ length: 4096 }, (_, index) => (index * 37) % 256))]);
+    await input.setInputFiles({ name: "work.bundle", mimeType: "", buffer: bundle });
+    const chip = page.locator("a.topic-file-chip"); await chip.waitFor();
+    const data = [...uploads.values()][4];
+    assert.equal(data.mime, "application/octet-stream"); assert.equal(data.vision_base64, ""); assert.equal(data.preview_text, "");
+    assert.match(await chip.innerText(), /work\.bundle[\s\S]*4 KB · Download/);
+    assert.equal(await chip.getAttribute("download"), "work.bundle");
+    assert.match(await chip.getAttribute("href"), /\/media\/0{31}5\/[a-f0-9]{64}\/content$/);
+    assert.ok(requested.every(url => !(url.includes("/media/" + "0".repeat(31) + "5/") && url.endsWith("/content"))), "a data file's bytes are never fetched for display");
+    assert.equal(await page.locator("iframe,object,embed").count(), 0);
     const unavailable = `/api/organizations/${org}/topics/${topic}/media/${"f".repeat(32)}/${"a".repeat(64)}/content`;
     await page.getByLabel("Markdown", { exact: true }).fill(`![private](${unavailable})`);
     await page.getByText("Attachment unavailable", { exact: true }).waitFor();

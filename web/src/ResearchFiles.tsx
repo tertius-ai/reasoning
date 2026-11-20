@@ -1,15 +1,18 @@
 import React, { useEffect, useRef, useState } from "react";
 import { ApiError, aborted, errorMessage, request, topicPath } from "./organization-api";
 import { ResearchMarkdown } from "./MathematicsBrowser";
-import { AttachmentButton, MediaScope, type MediaFile } from "./TopicMedia";
+import { AttachmentButton, DATA_FILE_TYPE, MARKDOWN_TYPE, MediaScope, TEX_TYPE, fileBadge, type MediaFile } from "./TopicMedia";
 type File = { id: string; path: string; revision?: number; head_revision: number; sha256: string; text?: string; truncated?: boolean;
   total_characters?: number;
   url?: string; download_url?: string };
-type Kind = "all" | "text" | "pdfs" | "pictures";
+type Kind = "all" | "text" | "pdfs" | "pictures" | "data";
 export type RetainedFile = { event_sequence: number; tool_index: number; path: string; recovery_path: string;
   sha256: string; size_bytes: number };
 const MAX_FILE_BYTES = 256 * 1024;
 const isPicture = (file: MediaFile) => file.mime.startsWith("image/");
+const isData = (file: MediaFile) => file.mime === DATA_FILE_TYPE;
+const mediaLabel = (file: MediaFile) => isPicture(file) ? "Picture" : isData(file) ? "Data file" : file.mime === MARKDOWN_TYPE ? "Markdown"
+  : file.mime === TEX_TYPE ? "TeX" : "PDF";
 const extension = (path: string) => (path.match(/\.([a-z0-9]+)$/i)?.[1] ?? "txt").slice(0, 3).toUpperCase();
 const kibibytes = (bytes: number) => `${Math.ceil(bytes / 1024).toLocaleString()} KiB`;
 const sourceText = async (url: string, signal: AbortSignal) => {
@@ -79,9 +82,9 @@ function ResearchFilesView({ organizationId, topicId, canWrite, onAuthLost, init
   // Runs once: the dialog keys this component by the file it opens first.
   useEffect(() => { if (initialFile) open(initialFile); }, []);
   const back = () => { leaveAction(); setSelected(null); setSelectedMedia(null); setEditing(false); setError(""); };
-  const pictures = media.filter(isPicture), pdfs = media.filter(file => !isPicture(file)), needle = query.trim().toLocaleLowerCase();
+  const pictures = media.filter(isPicture), data = media.filter(isData), pdfs = media.filter(file => !isPicture(file) && !isData(file)), needle = query.trim().toLocaleLowerCase();
   const shownText = kind === "all" || kind === "text" ? files.filter(file => file.path.toLocaleLowerCase().includes(needle)) : [];
-  const shownMedia = (kind === "all" ? media : kind === "pdfs" ? pdfs : kind === "pictures" ? pictures : [])
+  const shownMedia = (kind === "all" ? media : kind === "pdfs" ? pdfs : kind === "pictures" ? pictures : kind === "data" ? data : [])
     .filter(file => file.name.toLocaleLowerCase().includes(needle));
   const viewing = editing || !!selected || !!selectedMedia;
   const textBytes = new TextEncoder().encode(text).length;
@@ -92,7 +95,7 @@ function ResearchFilesView({ organizationId, topicId, canWrite, onAuthLost, init
     }}>New file</button>}</span>}</header>{error && <p role="alert" className="org-error">{error}</p>}
     {!viewing && <>
       <nav className="org-project-files-kinds" aria-label="Kind of file">
-        {([["all", "All", files.length + media.length], ["text", "Text", files.length], ["pdfs", "PDFs", pdfs.length], ["pictures", "Pictures", pictures.length]] as const)
+        {([["all", "All", files.length + media.length], ["text", "Text", files.length], ["pdfs", "PDFs", pdfs.length], ["pictures", "Pictures", pictures.length], ["data", "Data", data.length]] as const)
           .map(([value, label, count]) => <button key={value} type="button" aria-pressed={kind === value} onClick={() => setKind(value)}>{label} <span>{count}</span></button>)}
       </nav>
       <input type="search" aria-label="Search file names" placeholder="Search file names…" value={query} onChange={event => setQuery(event.target.value)} />
@@ -110,8 +113,8 @@ function ResearchFilesView({ organizationId, topicId, canWrite, onAuthLost, init
           <span className="org-project-files-text"><strong>{file.path}</strong><small>Text · revision {file.head_revision}</small></span>
           <button type="button" aria-label={`Open ${file.path}`} onClick={() => open(file)}>Open</button></li>)}
         {shownMedia.map(file => <li key={file.id}>{isPicture(file) ? <img src={file.url} alt="" loading="lazy" referrerPolicy="no-referrer" />
-          : <span className="org-project-file-icon" data-kind="pdf" aria-hidden="true">PDF</span>}
-          <span className="org-project-files-text"><strong>{file.name}</strong><small>{isPicture(file) ? "Picture" : "PDF"} · {kibibytes(file.size_bytes)}</small></span>
+          : <span className="org-project-file-icon" data-kind={fileBadge(file.mime).toLowerCase()} aria-hidden="true">{fileBadge(file.mime)}</span>}
+          <span className="org-project-files-text"><strong>{file.name}</strong><small>{mediaLabel(file)} · {kibibytes(file.size_bytes)}</small></span>
           <button type="button" aria-label={`Open ${file.name}`} onClick={() => { leaveAction(); setSelectedMedia(file); setSelected(null); setEditing(false); setError(""); }}>Open</button></li>)}
       </ul> : <p className="org-help">{files.length || media.length ? "No files match." : "Notes, proofs, pictures and PDFs appear here."}</p>}
     </>}
@@ -133,7 +136,7 @@ function ResearchFilesView({ organizationId, topicId, canWrite, onAuthLost, init
           leaveAction(); setText(selected.text ?? ""); setEditing(false);
         }}>Cancel</button>
       </form> : selectedMedia ? <><header><strong>{selectedMedia.name}</strong></header><ResearchMarkdown>{selectedMedia.markdown}</ResearchMarkdown>
-        <a href={selectedMedia.url} target="_blank" rel="noreferrer">Open original file</a> <a href={selectedMedia.url} download={selectedMedia.name}>Download {selectedMedia.name}</a>
+        {!isData(selectedMedia) && <a href={selectedMedia.url} target="_blank" rel="noreferrer">Open original file</a>} <a href={selectedMedia.url} download={selectedMedia.name}>Download {selectedMedia.name}</a>
         <small>SHA-256 {selectedMedia.sha256.slice(0, 12)} · {kibibytes(selectedMedia.size_bytes)}</small></> : selected && <><header><strong>{selected.path}</strong>{canWrite && (selected.total_characters ?? text.length) <= MAX_FILE_BYTES && (selected.revision ?? selected.head_revision) === selected.head_revision
           && <button disabled={busy} onClick={() => {
             if (!selected.truncated) { leaveAction(); setText(selected.text ?? ""); setName(selected.path); setEditing(true); return; }

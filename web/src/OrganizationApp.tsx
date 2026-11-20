@@ -41,7 +41,7 @@ import { TopicCopyButton, TopicSystemPrompt } from "./TopicDiagnostics";
 import { NavigationUsage, readNavigation, saveNavigation, Spend } from "./navigationState";
 import { ThemeToggle } from "./ThemeToggle";
 import { ShortcutsHelp, SlashCommandPalette, TOPIC_COMMANDS, TopicCommand, dispatchTopicCommand, useTopicCommand } from "./TopicCommands";
-import { MarkdownMedia, MediaScope, uploadMedia } from "./TopicMedia";
+import { MarkdownMedia, MarkdownMediaLink, MediaScope, mediaReference, uploadMedia } from "./TopicMedia";
 import { ReturnIcon } from "./ComposerIcons";
 import { TexRequestDialog, texRequest } from "./TexRequestDialog";
 import { EmailVerification, VerifyEmailBanner } from "./EmailVerification";
@@ -92,9 +92,11 @@ const messageMarkdownComponents: Components = {
     if (mentioned) return <MentionTag id={mentioned}>{children}</MentionTag>;
     const reference = referenceFromHref(href);
     if (reference) return <ReferenceLink kind={reference.kind} id={reference.id} />;
+    const external = <a href={href} target="_blank" rel="noopener noreferrer">{children}</a>;
+    // A link to a topic file, which is how a data file is referenced, offers it for download.
+    if (mediaReference(href)) return <MarkdownMediaLink href={href} fallback={external}>{children}</MarkdownMediaLink>;
     // Links into this application (message, topic and project links) navigate in place.
-    return applicationHref(href) ? <a href={href} onClick={followApplicationLink}>{children}</a>
-      : <a href={href} target="_blank" rel="noopener noreferrer">{children}</a>;
+    return applicationHref(href) ? <a href={href} onClick={followApplicationLink}>{children}</a> : external;
   },
   p: ({ children, node }) => node?.children.some(child => child.type === "element" && child.tagName === "img")
     ? <div className="topic-media-paragraph">{children}</div> : <p>{children}</p>,
@@ -1430,7 +1432,7 @@ function Conversation({ organizationId, topic, members, user, canWrite, canManag
   const attachFiles = (chosen: File[]) => {
     const change = changeFiles, room = MAX_DIRECT_ATTACHMENTS - files.length;
     setError(chosen.length > room ? `A message can carry at most ${MAX_DIRECT_ATTACHMENTS} files.` : "");
-    const pending = chosen.slice(0, Math.max(0, room)).map(file => ({ file, item: pendingFile(file) }));
+    const pending = chosen.slice(0, Math.max(0, room)).map(file => ({ file, item: pendingFile(file, true) }));
     change(current => [...current, ...pending.map(({ item }) => item)]);
     const settle = (key: string, value: Partial<PendingFile>) => change(current => current.map(file => file.key === key ? { ...file, ...value } : file));
     for (const { file, item } of pending) {
@@ -1451,7 +1453,7 @@ function Conversation({ organizationId, topic, members, user, canWrite, canManag
   };
   // The plus sits under the box beside the model picker in AI chats, and inside the box on its left everywhere else.
   const attach = <span ref={attachmentControl} className="org-composer-attach"><AttachFilesButton
-    disabled={!canWrite || sending || (topic.kind === "beta" && !!modelAttempt)} onFiles={attachFiles} /></span>;
+    disabled={!canWrite || sending || (topic.kind === "beta" && !!modelAttempt)} onFiles={attachFiles} dataFiles /></span>;
   return <MediaScope.Provider value={{ organizationId, topicId: topic.id, canWrite }}><div className="org-conversation-row"><section className="org-conversation" aria-label="Topic conversation">
     {texOpen && <TexRequestDialog bots={botModels} names={botNames} onClose={() => setTexOpen(false)} onPrepare={(source, bot) => {
       const label = `@${botNames[bot.bot_id] ?? bot.name}`;
@@ -1466,7 +1468,7 @@ function Conversation({ organizationId, topic, members, user, canWrite, canManag
         if (!modelAttempt && !message.addition) void askModel(message);
       }}
       addTo={threadAddTo && { id: threadAddTo.root.id, label: modelName(threadAddTo.root.model) }} onStopAdding={() => setThreadAdding(undefined)}
-      live={messages} attach={canWrite ? file => uploadMedia(file, organizationId, topic.id) : undefined}
+      live={messages} attach={canWrite ? file => uploadMedia(file, organizationId, topic.id) : undefined} dataFiles
       working={shown => topic.kind === "beta" && shown.map(message => {
         // A reply at work on a message of the thread shows trimmed here; its answer joins the thread when it arrives.
         const answering = threadAnswering(threads, message.sequence);
