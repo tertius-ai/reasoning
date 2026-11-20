@@ -507,3 +507,24 @@ def test_cli_requires_profile_and_catalog_before_sdk_or_claim(tmp_path):
     with pytest.raises(SystemExit) as result:
         main(["--data-dir", str(tmp_path), "run", "--backend", "modal"])
     assert result.value.code == 2 and not (tmp_path / "job.json").exists()
+
+
+def test_sdk_writes_large_stdin_in_drained_slices():
+    sandbox, inputs, _ = process_fixture([], [])
+    sdk = object.__new__(ModalSDK)
+    body = bytes(range(256)) * (10 * 1024)
+    assert sdk.pump(sandbox, ["docker", "exec", "--interactive", "fixture"], input_bytes=body)[0] == 0
+    assert [len(part) for part in inputs[:-1]] == [1024**2, 1024**2, len(body) - 2 * 1024**2] and inputs[-1] is None
+    assert b"".join(inputs[:-1]) == body
+
+
+def test_remote_docker_streams_pinned_input_bytes_into_the_vm(tmp_path):
+    from reasoning_ledger.server.compute_docker import attachment_arguments, container_name
+
+    commands = []
+    instance = RemoteDockerRunner(tmp_path, "a" * 32, vm_pump(commands=commands), SandboxFixture())
+    arguments = attachment_arguments(container_name("a" * 32, "b" * 32), "01-values.bin")
+    instance._command(arguments, input_bytes=b"pinned bytes", maximum=4096)
+    args, options = commands[-1]
+    assert args[:3] == ["docker", "--config", "/tmp/reasoning-docker-client"] and args[-len(arguments):] == arguments
+    assert options["input_bytes"] == b"pinned bytes"

@@ -29,6 +29,7 @@ CLEANUP_SECONDS = 120
 # The image download always gets at least this long, even after a slow VM or Docker start.
 MINIMUM_PULL_SECONDS = 60
 OVERHEAD_MEMORY = 512 * 1024**2
+STDIN_SLICE = 1024**2
 DIAGNOSTIC_CODES = ERROR_CODES | {
     "cancelled", "docker_unavailable", "sandbox_unavailable", "modal_unavailable", "output_limit",
     "invalid_runtime_identity", "runtime_identity_changed", "unbound_runtime_state", "invalid_job",
@@ -144,8 +145,10 @@ class ModalSDK:
 
             async def command():
                 process = await sandbox.exec.aio(*args, timeout=max(1, math.ceil(timeout)), text=False, env=environment)
-                if input_bytes:
-                    process.stdin.write(input_bytes)
+                # Bounded writes keep each buffered stdin slice small; input files can be several MiB.
+                for offset in range(0, len(input_bytes or b""), STDIN_SLICE):
+                    process.stdin.write(input_bytes[offset:offset + STDIN_SLICE])
+                    await process.stdin.drain.aio()
                 process.stdin.write_eof()
                 await process.stdin.drain.aio()
                 await asyncio.gather(read(process.stdout, 0, sink, maximum),

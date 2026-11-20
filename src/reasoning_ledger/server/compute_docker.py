@@ -17,7 +17,7 @@ from pathlib import Path
 
 from .compute_archive import ArchiveError, CollectedArtifact, collect_artifacts
 from .compute_catalog import DIGEST, ComputeImage, fits, resources
-from .compute_store import LOG_BYTES, ComputeStore
+from .compute_store import ATTACHMENT_PATH, LOG_BYTES, ComputeStore
 from .security import private_file
 from .workflow_inputs import input_bytes
 
@@ -174,6 +174,73 @@ def input_arguments(name: str) -> list[str]:
         "-c",
         "set -eu; umask 077; mkdir -p /work; cat > /work/inputs.json",
     ]
+
+
+def attachment_arguments(name: str, path: str) -> list[str]:
+    # File bytes are stdin data; the sanitized sandbox name is a positional argument, never shell source.
+    if not ATTACHMENT_PATH.fullmatch(path):
+        raise RuntimeFault("invalid_job")
+    return [
+        "container",
+        "exec",
+        "--interactive",
+        "--user",
+        PROGRAM_USER,
+        "--workdir",
+        "/work",
+        name,
+        "/bin/sh",
+        "-c",
+        'set -eu; umask 077; mkdir -p /work/in; cat > "/work/in/$1"',
+        "sh",
+        path,
+    ]
+
+
+def seal_arguments(name: str, paths: list[str]) -> list[str]:
+    # The program user owns the files it was given; they and their directory become read-only.
+    if not paths or any(not ATTACHMENT_PATH.fullmatch(path) for path in paths):
+        raise RuntimeFault("invalid_job")
+    return [
+        "container",
+        "exec",
+        "--user",
+        PROGRAM_USER,
+        "--workdir",
+        "/work/in",
+        name,
+        "/bin/sh",
+        "-c",
+        'set -eu; chmod 0444 -- "$@"; chmod 0555 /work/in',
+        "sh",
+        *paths,
+    ]
+
+
+def attachment_inputs(job: dict) -> list[tuple[str, bytes]]:
+    """Each pinned input file's sandbox path and the worker's verified local bytes, in pinned order."""
+    import hashlib
+
+    pinned, files = job["parameters"].get("attachments", []), job.get("attachment_files", [])
+    if not isinstance(pinned, list) or not isinstance(files, list) or len(pinned) != len(files):
+        raise RuntimeFault("invalid_job")
+    inputs = []
+    for item, file in zip(pinned, files, strict=True):
+        try:
+            if not isinstance(item, dict) or not isinstance(file, str) or not ATTACHMENT_PATH.fullmatch(item["path"]):
+                raise ValueError
+            fd = os.open(file, os.O_RDONLY | os.O_NOFOLLOW)
+            with os.fdopen(fd, "rb") as stream:
+                info = os.fstat(stream.fileno())
+                if not stat.S_ISREG(info.st_mode) or info.st_mode & 0o077 or info.st_size != item["size_bytes"]:
+                    raise ValueError
+                body = stream.read(item["size_bytes"] + 1)
+            if len(body) != item["size_bytes"] or hashlib.sha256(body).hexdigest() != item["sha256"]:
+                raise ValueError
+        except (KeyError, TypeError, ValueError, OSError) as exc:
+            raise RuntimeFault("invalid_job") from exc
+        inputs.append((item["path"], body))
+    return inputs
 
 
 def verify_daemon(info: dict, limits: dict, *, swapless: bool = False) -> None:
@@ -581,6 +648,7 @@ class DockerRunner:
                     raise ValueError
             except (ValueError, TypeError, RecursionError) as exc:
                 raise RuntimeFault("invalid_job") from exc
+        files = attachment_inputs(job)
 
         if (
             job.get("worker_id") != self.worker_id
@@ -602,11 +670,23 @@ class DockerRunner:
             self._command(["container", "start", name], stopped=stopped)
             began = time.monotonic()
             timeout = limits["wall_time_seconds"]
+
+            def remaining():
+                left = limits["wall_time_seconds"] - (time.monotonic() - began)
+                if left <= 0:
+                    raise RuntimeFault("wall_time_limit")
+                return left
+
             if encoded_inputs is not None:
                 self._command(input_arguments(name), input_bytes=encoded_inputs, maximum=4096, timeout=min(10, timeout), stopped=stopped)
-                timeout -= time.monotonic() - began
-                if timeout <= 0:
-                    raise RuntimeFault("wall_time_limit")
+                timeout = remaining()
+            # Pinned files are written before the program starts, within its wall time.
+            for path, body in files:
+                self._command(attachment_arguments(name, path), input_bytes=body, maximum=4096, timeout=remaining(), stopped=stopped)
+            if files:
+                self._command(seal_arguments(name, [path for path, _ in files]), maximum=4096, timeout=min(10, remaining()),
+                              stopped=stopped)
+                timeout = remaining()
             count = 0
 
             def captured(body):
