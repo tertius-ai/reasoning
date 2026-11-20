@@ -430,6 +430,9 @@ def test_direct_uploads_are_checked_and_unfinished_ones_stay_with_their_uploader
     assert people["first"].post(media + "/finish", json={}).status_code == 200
     assert upload(people, direct["id"], PDF, "fake.png", "image/png").status_code == 400
     assert upload(people, direct["id"], PDF, "page.html", "text/html").status_code == 400
+    # Direct messages accept only formats whose bytes are verified; a data file stays a topic attachment.
+    refused = upload(people, direct["id"], PDF, "work.bundle", "application/octet-stream")
+    assert refused.status_code == 400 and "data file" not in refused.json()["detail"]
     assert upload(people, direct["id"], PDF, "bad/name.pdf", "application/pdf").status_code == 400
     # A block refuses new files in both directions, with the same messages as for text.
     assert people["second"].put(people["root"] + "/direct-blocks/" + people["first_id"], json={}).status_code == 204
