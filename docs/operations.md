@@ -52,7 +52,10 @@ Modal relays on the chat host count as enrolled compute workers, so drain them
 before `make upgrade` and resume their claims afterwards. An upgrade does not
 replace their relay code; while they are still drained, run
 `make compute-relays-update` to move them onto the new release's relay code (see
-[Update the Modal relays](compute.md#update-the-modal-relays)).
+[Update the Modal relays](compute.md#update-the-modal-relays)). To change their
+per-job CPU, memory or wall-time limits, run `make compute-relays-limits` while
+they are drained (see
+[Change the Modal relay limits](compute.md#change-the-modal-relay-limits)).
 
 `make email-setup` enables Resend invitations and account-verification email on
 an existing managed server. It synchronizes release identity and refuses pending

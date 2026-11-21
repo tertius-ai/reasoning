@@ -297,3 +297,128 @@ def test_relay_update_closes_ssh_when_the_host_refuses(relays):
     with pytest.raises(InstallError, match="drain every"):
         compute_images.run_refresh_relays(state, None, remote=remote)
     assert calls[-1] == "close"
+
+
+GIB = 1024**3
+RELAY_LIMITS = {**TEX_LIMITS, "cpu": 4, "memory_bytes": 4 * GIB, "wall_time_seconds": 3600}
+LARGE = {**TEX_LIMITS, "cpu": 64, "memory_bytes": 256 * GIB, "wall_time_seconds": 86400}
+
+
+@pytest.fixture
+def limits(relays, monkeypatch):
+    import httpx
+
+    compute_images, state, calls, features = relays
+    features["installation_features"].append("modal-relay-limits-v1")
+    images = [{**image_record("lean-mathlib", "e"), "maximum_resources": LARGE},
+              {**image_record("research-cpu", "a"), "maximum_resources": LARGE}]
+    served = {"image_ids": ["lean-mathlib", "research-cpu"], "resources": RELAY_LIMITS, "draining": 1}
+    server = {"images": images, "puts": [], "remote": [], "fail_remote": False, "workers": [
+        relay("1" * 32, **served), relay("2" * 32, **served),
+        relay("3" * 32, name="laptop", draining=0), relay("4" * 32, **{**served, "revoked_at": 5})]}
+    answers = {"Organization administrator email": "owner@example.org", "Maximum MiB memory per compute job": "8192"}
+    prompts = []
+
+    def ask(prompt, default=None):
+        prompts.append(prompt)
+        return answers.get(prompt) or str(default)
+
+    def handler(request):
+        method, path = request.method, request.url.path
+        body = json.loads(request.content) if request.content else None
+        if path == "/api/auth/login":
+            assert body["password"] == "password-not-persisted"
+            return httpx.Response(200, json={"access_token": "fixture-session-" + "s" * 16})
+        if path == "/api/auth/logout":
+            return httpx.Response(204)
+        if path.endswith("/compute-configuration"):
+            return httpx.Response(200, json={"images": server["images"]})
+        if path.endswith("/compute-workers"):
+            return httpx.Response(200, json=server["workers"])
+        if method == "PUT" and path.endswith("/resources"):
+            identity = path.split("/")[-2]
+            calls.append("put")
+            server["puts"].append((identity, body))
+            worker = next(worker for worker in server["workers"] if worker["id"] == identity)
+            worker["resources"] = body
+            return httpx.Response(200, json=worker)
+        raise AssertionError(path)
+
+    def remote(config, document, ownership, bundle, payload, operation):
+        server["remote"].append((payload, operation))
+        calls.append("remote")
+        if server["fail_remote"]:
+            raise InstallError("fixture relay probe failed")
+        return {"resources": payload["resources"], "relays": payload["workers"], "updated": payload["workers"],
+                "restarted": payload["workers"], "live_compute_verified": False}
+
+    monkeypatch.setattr(compute_images, "ask", ask)
+    return compute_images, state, calls, server, answers, prompts, remote, httpx.MockTransport(handler)
+
+
+def test_relay_limits_change_the_server_first_then_every_relay_inside_one_ssh_window(limits):
+    compute_images, state, calls, server, _, prompts, remote, transport = limits
+    chosen = {**RELAY_LIMITS, "memory_bytes": 8 * GIB}
+
+    result = compute_images.run_relay_limits(state, None, remote=remote, transport=transport)
+
+    assert calls == ["change relay limits https://chat.example.org", "put", "put", "open", "remote", "close"]
+    assert server["puts"] == [("1" * 32, chosen), ("2" * 32, chosen)]
+    assert server["remote"] == [({"format": 1, "release_id": "a" * 64, "public_url": "https://chat.example.org",
+                                  "resources": chosen, "workers": ["1" * 32, "2" * 32]}, "limits")]
+    assert server["workers"][2]["resources"] == TEX_LIMITS and server["workers"][3]["resources"] == RELAY_LIMITS
+    assert prompts[-3:] == ["Maximum logical CPUs per compute job", "Maximum MiB memory per compute job",
+                            "Maximum seconds per compute job"]
+    assert result["ssh_closed"] is True and result["resources"] == chosen
+    assert not (state / "compute-limits/pending.json").exists()
+
+
+def test_relay_limits_resume_an_interrupted_change_without_asking_or_changing_the_server_again(limits):
+    compute_images, state, calls, server, _, prompts, remote, transport = limits
+    chosen = {**RELAY_LIMITS, "memory_bytes": 8 * GIB}
+    server["fail_remote"] = True
+    with pytest.raises(InstallError, match="fixture relay probe"):
+        compute_images.run_relay_limits(state, None, remote=remote, transport=transport)
+    assert calls[-1] == "close" and len(server["puts"]) == 2
+    pending = read_document(state / "compute-limits/pending.json")
+    assert pending == {"organization_id": "c" * 32, "email": "owner@example.org", "resources": chosen,
+                       "workers": ["1" * 32, "2" * 32]}
+    assert "password-not-persisted" not in json.dumps(pending)
+
+    server["fail_remote"] = False
+    prompts.clear()
+    calls.clear()
+    result = compute_images.run_relay_limits(state, None, remote=remote, transport=transport)
+    assert prompts == [] and len(server["puts"]) == 2
+    assert calls == ["change relay limits https://chat.example.org", "open", "remote", "close"]
+    assert result["resources"] == chosen and not (state / "compute-limits/pending.json").exists()
+
+
+@pytest.mark.parametrize("change", ["undrained", "image", "mixed", "invalid"])
+def test_relay_limits_refuse_before_consent_when_they_cannot_apply(limits, change):
+    compute_images, state, calls, server, answers, _, remote, transport = limits
+    if change == "undrained":
+        server["workers"][1]["draining"] = 0
+        expected = "drain every Modal relay worker first"
+    elif change == "image":
+        server["images"][0]["maximum_resources"] = {**LARGE, "memory_bytes": 6 * GIB}
+        expected = "maximum resources of image lean-mathlib"
+    elif change == "mixed":
+        server["workers"][1]["resources"] = {**RELAY_LIMITS, "cpu": 2}
+        expected = "different limits"
+    else:
+        answers["Maximum MiB memory per compute job"] = "eight"
+        expected = "whole numbers"
+    with pytest.raises(InstallError, match=expected):
+        compute_images.run_relay_limits(state, None, remote=lambda *_: pytest.fail("must not reach the host"), transport=transport)
+    assert calls == [] and server["puts"] == []
+    assert not (state / "compute-limits/pending.json").exists()
+
+
+def test_relay_limits_refuse_a_release_without_the_host_operation_before_any_prompt(limits):
+    compute_images, state, calls, _, _, prompts, _, transport = limits
+    features = compute_images.inspect_bundle(None)[0]
+    features["installation_features"].remove("modal-relay-limits-v1")
+    with pytest.raises(InstallError, match="make upgrade"):
+        compute_images.run_relay_limits(state, None, remote=lambda *_: pytest.fail("must not reach the host"), transport=transport)
+    assert calls == [] and prompts == []

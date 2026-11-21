@@ -13,7 +13,7 @@ import stat
 import subprocess
 from pathlib import Path
 
-from reasoning_ledger.server.compute_catalog import ComputeImage, canonical, fits
+from reasoning_ledger.server.compute_catalog import ComputeImage, canonical, fits, resources
 from reasoning_ledger.server.compute_modal import modal_profile
 from reasoning_ledger.server.compute_worker import WorkerClient, WorkerFault, drain_status, enrollment, verify_identity
 
@@ -72,6 +72,23 @@ def validate_refresh(value):
         return value
     except (KeyError, TypeError, ValueError):
         raise InstallError("invalid Modal relay update request") from None
+
+
+def validate_limits(value):
+    """Give every installed relay the same new per-job limits, for exactly the relay workers the operator changed."""
+    try:
+        if (not isinstance(value, dict) or set(value) != {"format", "release_id", "public_url", "resources", "workers"}
+                or type(value["format"]) is not int or value["format"] != 1
+                or not isinstance(value["release_id"], str) or not re.fullmatch(r"[a-f0-9]{64}", value["release_id"])
+                or not isinstance(value["workers"], list) or not 1 <= len(value["workers"]) <= 64
+                or any(not isinstance(item, str) or not re.fullmatch(r"[a-f0-9]{32}", item) for item in value["workers"])
+                or value["workers"] != sorted(set(value["workers"]))
+                or value["resources"] != resources(value["resources"])):
+            raise ValueError
+        public_origin(value["public_url"])
+        return value
+    except (KeyError, TypeError, ValueError):
+        raise InstallError("invalid Modal relay limits request") from None
 
 
 def validate_addition(value, operation):
@@ -444,6 +461,56 @@ class ModalHostInstaller:
             raise InstallError("unsafe Modal relay state")
         return state
 
+    def _drained_relays(self, value, account, parent, *, offered=None):
+        """Every installed relay, each proven unchanged, drained, settled and idle locally.
+
+        The server must report each relay's own enrollment, or, with ``offered``, those limits in its place.
+        """
+        units = self.root / "etc/systemd/system"
+        relays = []
+        for path in sorted(units.iterdir()):
+            match = RELAY_UNIT.fullmatch(path.name)
+            if not match:
+                continue
+            identifier, name = match[1], path.name[:-len(".service")]
+            info = path.lstat()
+            body = path.read_bytes() if stat.S_ISREG(info.st_mode) else b""
+            runtime = RELAY_RUNTIME.search(body)
+            if (not runtime or info.st_uid != os.getuid() or info.st_mode & 0o022 or info.st_nlink != 1
+                    or body != relay_unit(runtime[1].decode(), identifier).encode()):
+                raise InstallError("Modal service definition changed; do not overwrite it")
+            self.service_identity(name)
+            state = self._relay_safety(parent, identifier, account)
+            sandbox = state / "modal-sandbox.json"
+            if ((sandbox.exists() or sandbox.is_symlink())
+                    and json.loads(self._private_relay_file(sandbox, account)) != {"phase": "idle"}):
+                raise InstallError("a Modal relay has an unfinished VM attempt; let it settle first")
+            try:
+                config = enrollment(value["public_url"], json.loads(self._private_relay_file(state / "enrollment.json", account)))
+                if config["id"] != identifier:
+                    raise ValueError
+            except (ValueError, TypeError, KeyError, WorkerFault):
+                raise InstallError("a Modal relay enrollment is missing or does not match its service") from None
+            expected = config if offered is None else {**config, "resources": offered}
+            client = self.identity_client(expected)
+            try:
+                try:
+                    identity = verify_identity(expected, client)
+                except WorkerFault as exc:
+                    if str(exc) != "enrollment_mismatch" or offered is None:
+                        raise
+                    raise InstallError("the server does not record the new limits for every relay; change them there first") from None
+                if not identity["draining"]:
+                    raise InstallError("drain every Modal relay worker first; resume claims afterwards")
+                if not drain_status(expected, client.request("GET", "/api/worker/status"))["quiescent"]:
+                    raise InstallError("a Modal relay still has running or unknown jobs; settle them first")
+            finally:
+                client.close()
+            relays.append((identifier, name, runtime[1].decode()))
+        if not relays:
+            raise InstallError("no Modal relays are installed on this host")
+        return relays
+
     def _refresh(self, value):
         """Replace only the relay runtime. Enrollments, credentials, catalogs and Modal profiles stay as they are.
 
@@ -460,41 +527,7 @@ class ModalHostInstaller:
             account = self._relay_account(create=False)
             parent = self.root / "var/lib/reasoning-modal"
             units = self.root / "etc/systemd/system"
-            relays = []
-            for path in sorted(units.iterdir()):
-                match = RELAY_UNIT.fullmatch(path.name)
-                if not match:
-                    continue
-                identifier, name = match[1], path.name[:-len(".service")]
-                info = path.lstat()
-                body = path.read_bytes() if stat.S_ISREG(info.st_mode) else b""
-                runtime = RELAY_RUNTIME.search(body)
-                if (not runtime or info.st_uid != os.getuid() or info.st_mode & 0o022 or info.st_nlink != 1
-                        or body != relay_unit(runtime[1].decode(), identifier).encode()):
-                    raise InstallError("Modal service definition changed; do not overwrite it")
-                self.service_identity(name)
-                state = self._relay_safety(parent, identifier, account)
-                sandbox = state / "modal-sandbox.json"
-                if ((sandbox.exists() or sandbox.is_symlink())
-                        and json.loads(self._private_relay_file(sandbox, account)) != {"phase": "idle"}):
-                    raise InstallError("a Modal relay has an unfinished VM attempt; let it settle before updating relays")
-                try:
-                    config = enrollment(value["public_url"], json.loads(self._private_relay_file(state / "enrollment.json", account)))
-                    if config["id"] != identifier:
-                        raise ValueError
-                except (ValueError, TypeError, KeyError, WorkerFault):
-                    raise InstallError("a Modal relay enrollment is missing or does not match its service") from None
-                client = self.identity_client(config)
-                try:
-                    if not verify_identity(config, client)["draining"]:
-                        raise InstallError("drain every Modal relay worker before updating relays; resume claims afterwards")
-                    if not drain_status(config, client.request("GET", "/api/worker/status"))["quiescent"]:
-                        raise InstallError("a Modal relay still has running or unknown jobs; settle them before updating relays")
-                finally:
-                    client.close()
-                relays.append((identifier, name, runtime[1].decode()))
-            if not relays:
-                raise InstallError("no Modal relays are installed on this host")
+            relays = self._drained_relays(value, account, parent)
             venv = self._relay_venv(release)
             for identifier, _, _ in relays:
                 self._probe(venv, parent / identifier)
@@ -512,13 +545,77 @@ class ModalHostInstaller:
                 atomic_write(units / (name + ".service"), relay_unit(release, identifier).encode(), mode=0o644)
                 changed.append(identifier)
             self.run(["systemctl", "daemon-reload"])
-            for identifier, name, _ in relays:
-                self.service_identity(name)
-                if identifier in restart:
-                    self.run(["systemctl", "start", name])
-                    self.run(["systemctl", "is-active", "--quiet", name])
-                    self.service_identity(name, active=True)
+            self._restart(relays, restart)
             return {"release_id": release, "relays": [identifier for identifier, _, _ in relays], "updated": sorted(changed),
+                    "restarted": sorted(restart), "live_compute_verified": False}
+
+    def _restart(self, relays, restart):
+        for identifier, name, _ in relays:
+            self.service_identity(name)
+            if identifier in restart:
+                self.run(["systemctl", "start", name])
+                self.run(["systemctl", "is-active", "--quiet", name])
+                self.service_identity(name, active=True)
+
+    def limits(self, value):
+        validate_limits(value)
+        return self._locked(lambda: self._limits(value))
+
+    def _limits(self, value):
+        """Give every relay the per-job limits the server already records for it. Credentials, catalogs and the relay
+        runtime stay as they are.
+
+        Every relay must be drained with no running or unknown job, and idle locally, so a relay and the server never
+        disagree while it can claim a job. All relays are checked before any is stopped, and each is probed with its new
+        files before any starts. Only relays that were running are started again.
+        """
+        value = validate_limits(value)
+        offered = value["resources"]
+        self._installed(value)
+        setup = self.root / "var/lib/reasoning-deploy/modal-setup"
+        if not (setup / "installation.json").is_file():
+            raise InstallError("change relay limits only on a host with an installed Modal setup")
+        with locked_directory(setup):
+            account = self._relay_account(create=False)
+            parent = self.root / "var/lib/reasoning-modal"
+            relays = self._drained_relays(value, account, parent, offered=offered)
+            if sorted(identifier for identifier, _, _ in relays) != value["workers"]:
+                raise InstallError("the relays on this host differ from the relay workers on the server; reconcile them first")
+            changes = []
+            for identifier, name, _ in relays:
+                state = parent / identifier
+                try:
+                    config = json.loads(self._private_relay_file(state / "enrollment.json", account))
+                    profile = modal_profile(json.loads(self._private_relay_file(state / "modal-profile.json", account)))
+                    catalog = json.loads(self._private_relay_file(state / "catalog.json", account))
+                    images = [ComputeImage.parse(record) for record in catalog]
+                except (InstallError, OSError, ValueError, TypeError, KeyError):
+                    raise InstallError("a Modal relay profile or catalog is missing, unsafe or invalid") from None
+                if not images or any(not fits(offered, image.maximum_resources) for image in images):
+                    raise InstallError("the new limits exceed the maximum resources of an image a relay serves")
+                changes.append((identifier, name, state, {"enrollment.json": {**config, "resources": offered},
+                                                          "modal-profile.json": {**profile, "resources": offered}}))
+            # A lost reply after a stop must still start the relays that were running: keep that intent first.
+            journal = setup / "relay-limits.json"
+            restart = read_document(journal)["restart"] if journal.exists() or journal.is_symlink() else []
+            changed = []
+            for identifier, name, state, files in changes:
+                if all(self._private_relay_file(state / file, account) == canonical(body).encode() for file, body in files.items()):
+                    continue
+                if self._active(name) and identifier not in restart:
+                    restart.append(identifier)
+                    write_document(journal, {"restart": sorted(restart)})
+                self.run(["systemctl", "stop", name])
+                for file, body in files.items():
+                    atomic_write(state / file, canonical(body).encode())
+                    os.chown(state / file, account.pw_uid, account.pw_gid)
+                changed.append(identifier)
+            for identifier, _, runtime in relays:
+                self._probe(self.root / f"opt/reasoning/modal/{runtime}/venv", parent / identifier)
+            self._restart(relays, restart)
+            if journal.exists() or journal.is_symlink():
+                journal.unlink()
+            return {"resources": offered, "relays": [identifier for identifier, _, _ in relays], "updated": sorted(changed),
                     "restarted": sorted(restart), "live_compute_verified": False}
 
     def _unit(self, release, identifier):
@@ -536,7 +633,7 @@ class ModalHostInstaller:
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--input", required=True, type=Path)
-    parser.add_argument("--operation", required=True, choices=("prepare", "activate", "extend", "relays", "refresh"))
+    parser.add_argument("--operation", required=True, choices=("prepare", "activate", "extend", "relays", "refresh", "limits"))
     args = parser.parse_args(argv)
     try:
         if os.geteuid() != 0:
@@ -544,6 +641,8 @@ def main(argv=None):
         installer, value = ModalHostInstaller(), json.loads(read_private(args.input))
         if args.operation == "refresh":
             result = installer.refresh(value)
+        elif args.operation == "limits":
+            result = installer.limits(value)
         elif args.operation in {"extend", "relays"}:
             result = installer.add_images(value, args.operation)
         else:

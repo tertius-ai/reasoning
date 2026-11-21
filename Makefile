@@ -64,6 +64,7 @@ help:
 		'make compute-setup Enable Modal compute for this existing deployment, with CLI consent' \
 		'make compute-add-images Add approved images and their own Modal relays to existing compute' \
 		'make compute-relays-update Move the drained Modal relays onto the installed release'"'"'s relay code' \
+		'make compute-relays-limits Change the per-job CPU, memory and wall-time limits of the drained Modal relays' \
 		'make compute-source-publish Publish a maintainer source archive to Spaces, with private CLI consent' \
 		'make compute-publish Sign exact observed-source provenance and verify public images on hosted runners' \
 		'make email-setup   Enable Resend invitations and verification on this existing deployment' \
@@ -126,7 +127,7 @@ bot-status bot-doctor: check-uv
 	@$(UV) run --locked reasoning-bot $(patsubst bot-%,%,$@) --state-dir "$(BOT_STATE)" --config "$(BOT_CONFIG)"
 
 .PHONY: compute-images compute-setup _compute-setup compute-add-images _compute-add-images compute-relays-update _compute-relays-update \
-	compute-source-publish compute-publish
+	compute-relays-limits _compute-relays-limits compute-source-publish compute-publish
 compute-publish: check-uv
 	@$(UV) run --locked --extra publication python -m reasoning_ledger.compute_publish \
 		--source-root "$(CURDIR)" --state "$(COMPUTE_PUBLICATION_STATE)" --source-state "$(SOURCE_STATE)" \
@@ -166,6 +167,14 @@ compute-relays-update: check-uv check-deploy-tools
 _compute-relays-update:
 	@$(UV) run --locked reasoning-deploy operator-sync --state-dir "$(DEPLOY_STATE)" --require-no-pending-upgrade
 	@$(UV) run --locked reasoning-deploy compute-relays-update --state-dir "$(DEPLOY_STATE)"
+
+compute-relays-limits: check-uv check-deploy-tools
+	@$(UV) run --locked reasoning-deploy operator-session --state-dir "$(DEPLOY_STATE)" -- \
+		$(MAKE) --no-print-directory _compute-relays-limits DEPLOY_STATE="$(DEPLOY_STATE)"
+
+_compute-relays-limits:
+	@$(UV) run --locked reasoning-deploy operator-sync --state-dir "$(DEPLOY_STATE)" --require-no-pending-upgrade
+	@$(UV) run --locked reasoning-deploy compute-relays-limits --state-dir "$(DEPLOY_STATE)"
 
 .PHONY: email-setup _email-setup
 email-setup: check-uv check-deploy-tools
