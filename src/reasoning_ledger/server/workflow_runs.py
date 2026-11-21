@@ -129,6 +129,7 @@ class WorkflowRuns:
             params = node["parameters"]
             if node["kind"] == "compute":
                 images[node["id"]] = self.compute._admission(db, user, org, topic, params).record()
+                self.compute.require_runnable(db, org, params["image_id"], params["resources"])
             elif node["kind"] == "llm":
                 if bot_model(params["model"]):
                     parsed = bot_model(params["model"])

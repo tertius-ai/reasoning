@@ -237,6 +237,7 @@ def test_grant_at_its_ceiling_with_only_draining_workers_offers_no_capacity(fixt
     compute, org, user = app.state.compute, owner["organization_id"], owner["user_id"]
     scoped = grant(fixture, maximum_workers=2)
     workers = [enroll(fixture, scoped["token"], request())["worker"] for _ in range(2)]
+    assert [record["enrolled_workers"] for record in app.state.compute_scalers.list(user, org)] == [2]
     with store.transaction() as db:
         assert compute.available(db, org)
     for worker in workers:
@@ -251,6 +252,7 @@ def test_grant_at_its_ceiling_with_only_draining_workers_offers_no_capacity(fixt
     assert failure.value.status == 429
     # Revoking an idle drained worker frees its seat: the grant can enroll again, so it counts as capacity again.
     compute.change_worker(user, org, workers[0]["id"], revoke=True)
+    assert [record["enrolled_workers"] for record in app.state.compute_scalers.list(user, org)] == [1]
     with store.transaction() as db:
         assert compute.available(db, org) and compute.runnable(db, org, IMAGE["id"], dict(DEFAULT_RESOURCES))
     assert enroll(fixture, scoped["token"], request())["worker"]["id"] not in {worker["id"] for worker in workers}

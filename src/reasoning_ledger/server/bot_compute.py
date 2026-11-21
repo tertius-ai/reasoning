@@ -85,7 +85,6 @@ class BotCompute:
                 image = self.compute._admission(db, run["requested_by"], org, run["topic_id"], parameters)
                 if image.reference.split("@", 1)[1] != row["image_digest"]:
                     raise StoreError(409, "approved compute image identity changed")
-                self.compute.require_runnable(db, org, parameters["image_id"], parameters["resources"])
                 job = self.compute._enqueue(db, run["requested_by"], org, run["topic_id"], "bot-compute-" + identity, parameters)
                 db.execute("UPDATE bot_compute_approvals SET status='submitted',job_id=? WHERE id=?", (job["id"], identity))
             else:

@@ -30,7 +30,7 @@ export type ComputeWorker = { id: string; organization_id: string; name: string;
   created_at: number; last_seen_at: number | null; draining: number; revoked_at: number | null;
   retired_at: number | null; retirement_id: string | null };
 export type ComputeScaler = { id: string; organization_id: string; authorized_by: string; name: string;
-  image_ids: string[]; resources: ComputeResources; maximum_workers: number; scopes: string[];
+  image_ids: string[]; resources: ComputeResources; maximum_workers: number; enrolled_workers: number; scopes: string[];
   created_at: number; expires_at: number; revoked_at: number | null; enabled: boolean };
 
 export function captureScalerGrant(name: string, ids: string[], resources: ComputeResources, maximumWorkers: number, days: number, catalog: ComputeImage[]) {

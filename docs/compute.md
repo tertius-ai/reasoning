@@ -8,6 +8,17 @@ has a compute worker that is not revoked or draining, or an enabled compute
 scaler, models are not offered sandbox submission tools, so no reply waits on a
 job that nothing would run.
 
+The server queues a new job only if something would claim it: a worker that is
+neither revoked nor draining, or an enabled scaler below its worker ceiling, that
+serves the job's image with every resource limit at least as large as the job's.
+This holds for the Compute editor, project jobs, model and bot submissions,
+workflow compute steps and shared-work computations. Otherwise it refuses the job
+with HTTP 409 and names the largest job each such worker or scaler accepts for
+that image. A workflow checks its compute steps when it starts or is retried. A
+step that becomes due when nothing can run it fails with `admission_refused`.
+Replaying an accepted request returns its job unchanged. A job that is already
+queued keeps waiting while its workers drain.
+
 ## Enable compute on an existing deployment
 
 From an onboarded operator computer, run `make compute-setup`. It authenticates
@@ -338,7 +349,8 @@ integration and isolation, not upstream CAS mathematical correctness.
 ## Scoped compute automation and recoverable enrollment
 
 Owners/admins manage `compute-scalers` under the organization API root:
-GET lists metadata; POST creates a grant with `name`, distinct `image_ids`,
+GET lists metadata, including `enrolled_workers`, the workers that hold the
+grant's seats; POST creates a grant with `name`, distinct `image_ids`,
 six-field `resources`, `maximum_workers` (1–64), and `lifetime_seconds`
 (3600–31536000, default 2592000). The selected resource maxima must fit all
 selected approved images. POST `compute-scalers/{id}/rotate` accepts
@@ -365,9 +377,12 @@ current organization image permission, current image resource maxima, grant
 bounds, and ordinary organization capacity. Every unrevoked worker, draining ones
 included, consumes the grant's worker ceiling; revoked workers with running or
 unknown jobs still consume it too, regardless of lease expiry. A grant counts as
-organization capacity (models are offered `compute_submit`, and approvals and bot
-requests are accepted) only while it is below its ceiling. A grant whose workers
-have all drained offers nothing until a worker is revoked or retired.
+organization capacity (models are offered `compute_submit`, and new jobs within
+its limits are accepted) only while it is below its ceiling. Its workers never
+exceed its limits, so a full grant adds nothing beyond them. A grant whose
+workers have all drained offers nothing until a worker is revoked or retired.
+Administration → Compute shows each grant's per-worker CPU and memory limits and
+how many of its seats are held, beside each worker's own limits.
 
 Scaler endpoints cannot access chat, provider keys, worker protocol, or cloud
 APIs. **They delegate trusted execution through enrollment:** new worker tokens
