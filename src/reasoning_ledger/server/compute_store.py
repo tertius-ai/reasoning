@@ -715,6 +715,33 @@ class ComputeStore:
                 db.execute("UPDATE compute_workers SET draining=? WHERE id=?", (int(draining), worker))
             self.store._audit(db, org, user, "compute.worker-revoke" if revoke else "compute.worker-drain", worker)
 
+    def change_worker_resources(self, user: str, org: str, worker: str, limits: dict) -> dict:
+        """Change the largest job a worker accepts. Only a drained worker with no running or unknown job can change, so
+        no claim or attempt ever sees two different offers; the worker's own configuration must then match."""
+        try:
+            limits = resources(limits)
+        except (ValueError, TypeError) as exc:
+            raise StoreError(400, str(exc)) from exc
+        with self.store.transaction(write=True) as db:
+            self.store._require(db, user, org, admin=True)
+            current = _row(db.execute("SELECT * FROM compute_workers WHERE organization_id=? AND id=?", (org, worker)).fetchone())
+            if current["revoked_at"] is not None or current["retirement_id"] is not None:
+                raise StoreError(409, "revoked or retired workers keep their limits; enroll a replacement")
+            if not current["draining"]:
+                raise StoreError(409, "drain the worker before changing its limits")
+            if db.execute(
+                "SELECT 1 FROM compute_jobs WHERE organization_id=? AND worker_id=? AND status IN ('running','outcome_unknown') LIMIT 1",
+                (org, worker),
+            ).fetchone():
+                raise StoreError(409, "the worker still has running or unknown jobs; settle them before changing its limits")
+            for image in json.loads(current["image_ids_json"]):
+                if image not in self.images or not fits(limits, self.images[image].maximum_resources):
+                    raise StoreError(409, f"these limits exceed the maximum resources of image {image}")
+            if json.loads(current["resources_json"]) != limits:
+                db.execute("UPDATE compute_workers SET resources_json=? WHERE id=?", (canonical(limits), worker))
+                self.store._audit(db, org, user, "compute.worker-resources", worker)
+            return self._worker_view(db.execute("SELECT * FROM compute_workers WHERE id=?", (worker,)).fetchone())
+
     @staticmethod
     def _authenticate_worker(db: sqlite3.Connection, credential: str) -> dict:
         row = db.execute("SELECT * FROM compute_workers WHERE token_hash=? AND revoked_at IS NULL", (digest(credential),)).fetchone()

@@ -529,6 +529,44 @@ def test_resource_and_language_mismatch_skips_worker_without_consuming_job(compu
     assert large.post("/api/worker/claim", json={}).json()["id"] == job["id"]
 
 
+def test_only_a_drained_settled_worker_changes_its_limits_within_its_images(compute, installation):
+    config, _, _, client, owner, _ = compute
+    record, agent = worker(compute, resources=DEFAULT_RESOURCES)
+    root = f"/api/organizations/{owner['organization_id']}"
+    path = root + f"/compute-workers/{record['id']}"
+    larger = {**DEFAULT_RESOURCES, "cpu": 2}
+    _, other, _ = invited(installation, email="limits-member@example.org")
+    member = TestClient(client.app, base_url=config.public_url, headers=dict(other.headers))
+    small = enqueue(compute, "small")
+    claimed = agent.post("/api/worker/claim", json={}).json()
+    assert claimed["id"] == small["id"]
+    response = client.put(path + "/resources", json=larger)
+    assert response.status_code == 409 and "drain" in response.json()["detail"]
+    client.patch(path, json={"draining": True})
+    response = client.put(path + "/resources", json=larger)
+    assert response.status_code == 409 and "running or unknown" in response.json()["detail"]
+    assert finish(agent, claimed).json()["status"] == "succeeded"
+    response = client.put(path + "/resources", json={**larger, "cpu": 8})
+    assert response.status_code == 409 and IMAGE["id"] in response.json()["detail"]
+    assert client.put(path + "/resources", json={**larger, "cpu": 0}).status_code == 422
+    assert member.put(path + "/resources", json=larger).status_code == 403
+    assert agent.get("/api/worker/identity").json()["resources"] == DEFAULT_RESOURCES
+
+    changed = client.put(path + "/resources", json=larger)
+    assert changed.status_code == 200 and changed.json()["resources"] == larger and "token" not in changed.json()
+    assert agent.get("/api/worker/identity").json()["resources"] == larger
+    assert agent.get("/api/worker/status").json()["resources"] == larger
+    assert client.put(path + "/resources", json=larger).json()["resources"] == larger
+    large = enqueue(compute, "large", resources={**DEFAULT_RESOURCES, "cpu": 2})
+    assert agent.post("/api/worker/claim", json={}).json() is None
+    client.patch(path, json={"draining": False})
+    assert agent.post("/api/worker/claim", json={}).json()["id"] == large["id"]
+    client.delete(path)
+    response = client.put(path + "/resources", json=DEFAULT_RESOURCES)
+    assert response.status_code == 409 and "replacement" in response.json()["detail"]
+    assert client.put(root + "/compute-workers/" + "0" * 32 + "/resources", json=larger).status_code == 404
+
+
 def test_lease_expiry_allows_fenced_delivery_but_occupies_active_capacity(compute):
     _, store, _, client, owner, _ = compute
     root = f"/api/organizations/{owner['organization_id']}"

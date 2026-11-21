@@ -82,6 +82,41 @@ The host records the relays it will restart in
 stops any of them, so rerunning the same command after a lost reply finishes the
 update.
 
+## Change the Modal relay limits
+
+Each relay accepts jobs up to the per-job limits chosen in Modal setup, which
+suggests 4 CPUs, 4096 MiB memory and 3600 seconds. `make compute-relays-limits`
+changes the CPU, memory and wall-time limits of every relay; disk, process and
+artifact limits stay as they are. Lean jobs that import Mathlib need more memory
+than 4096 MiB: at that limit the import is slowed by page-cache thrashing. Run
+`make upgrade` first if the command asks for it.
+
+1. In Administration → Compute, drain every relay worker and let running jobs
+   finish.
+2. Run `make compute-relays-limits`. It signs in as an organization administrator
+   (the password is not saved), shows the relays' current limits and asks for the
+   new ones. Every relay gets the same limits, and they must fit every image the
+   relays serve. The command refuses before asking for consent if a relay can
+   still take jobs.
+3. After the typed confirmation, it records the new limits on the server for each
+   relay worker. Then, inside a temporary SSH window, the chat host writes the same
+   limits into each relay's enrollment and Modal profile. The host refuses unless
+   the server already records the new limits, every relay is drained with no
+   running or unknown job and no unfinished VM attempt, and its relays are exactly
+   the relay workers the server lists. It probes every relay with `verify-images`
+   and restarts only the relays that were running.
+4. Resume claims on each relay worker and run a small job.
+
+Enrollments, Modal credentials, catalogs and relay code are unchanged. A job's
+Modal VM is sized to the resources the job requests plus a fixed overhead, so a
+job that uses the larger limits costs more on the relays' Modal account; the
+organization's quota counts CPU-seconds only.
+
+If the command stops partway, run it again. The operator keeps the change in
+`DEPLOY_STATE/compute-limits/pending.json` and resumes it without asking for the
+limits again; the host records the relays it will restart in
+`/var/lib/reasoning-deploy/modal-setup/relay-limits.json` before it stops any.
+
 For owned hardware or dedicated DigitalOcean workers, use the separate-worker
 installation/provisioning commands linked below. Those workers need Docker on
 their execution host, not on the operator computer. Local personal CLI bots can
@@ -693,7 +728,13 @@ program runtime, which the worker enforces from the program's own start.
 Workers must stop containers on lease loss, heartbeat refusal, or a stop response.
 
 PATCH `compute-workers/{worker_id}` with `draining: true` stops fresh claims
-without stopping an already-running job. DELETE revokes the token immediately
+without stopping an already-running job. PUT `compute-workers/{worker_id}/resources`
+changes the largest job a worker accepts. It requires an unrevoked, drained worker
+with no running or unknown job, and limits within the maximum resources of each of
+its images; it is audited as `compute.worker-resources`. The worker's own
+enrollment must then match, or its identity check fails with
+`enrollment_mismatch`; `make compute-relays-limits` changes both for Modal relays.
+DELETE revokes the token immediately
 and prevents all further worker requests. Revocation does not itself prove
 container termination. These endpoints do not delete cloud hardware.
 
