@@ -10,7 +10,7 @@ import pytest
 from test_public_bot_runtime import setup
 from test_public_bots import fixture as bot_fixture
 from test_public_compute import compute as compute
-from test_public_compute import finish, submission, worker
+from test_public_compute import finish, submission, without_capacity, worker
 from test_public_server import installation as installation
 
 from reasoning_ledger.server.bot_compute import BotCompute
@@ -272,6 +272,7 @@ def test_bot_compute_uses_owner_approval_and_exact_existing_image_queue(compute)
     run = runtime.claim(bot["token"])
     bridge = BotCompute(runtime, state)
     parameters = {key: value for key, value in submission().items() if key != "client_id"}
+    without_capacity(compute)
     # A job nothing could claim is refused before the owner is asked; this worker only makes the image runnable.
     with pytest.raises(StoreError, match="no compute worker or scaler"):
         bridge.request(bot["token"], run["id"], run["lease"], **parameters)

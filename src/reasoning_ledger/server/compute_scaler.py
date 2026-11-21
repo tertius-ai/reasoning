@@ -39,6 +39,8 @@ class ComputeScalers:
             },
             "image_ids": json.loads(row["image_ids_json"]),
             "resources": json.loads(row["resources_json"]),
+            # Workers holding its seats; at maximum_workers the grant can enroll no one, so it adds no capacity.
+            "enrolled_workers": db.execute(SCALER_SEATS.format(scaler="?"), (row["id"],)).fetchone()[0],
             "scopes": ["compute:snapshot", "workers:enroll"],
             "enabled": sponsor is not None and row["revoked_at"] is None and row["expires_at"] > int(time.time()),
         }
