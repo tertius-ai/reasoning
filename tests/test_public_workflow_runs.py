@@ -452,6 +452,38 @@ def test_rejected_approval_blocks_descendants_and_retry_keeps_successful_work(in
         env.runs.approve(env.user, env.org, run["id"], "approve", 1, "approve", "stale-approval-001")
 
 
+def test_compute_steps_are_refused_when_no_worker_or_scaler_would_claim_them(installation):
+    env = installation
+    steps = [compute_node(), compute_node("final", ["compute"])]
+    env.compute.change_worker(env.user, env.org, env.worker["id"], draining=True)
+    with pytest.raises(StoreError, match="no compute worker or scaler in this organization runs image fixture") as refused:
+        env.start(steps, client="workflow-run-refused-001")
+    assert refused.value.status == 409
+    env.compute.change_worker(env.user, env.org, env.worker["id"], draining=False)
+    run = env.start(steps)
+    env.runs.advance(run["id"])
+    first = env.claim()
+    # The only worker drains while the first step runs, so nothing would claim the second step when it becomes due.
+    env.compute.change_worker(env.user, env.org, env.worker["id"], draining=True)
+    env.finish(first)
+    env.runs.advance(run["id"])
+    failed = env.view(run)
+    assert failed["status"] == "failed"
+    assert nodes(failed)["final"]["status"] == "failed" and nodes(failed)["final"]["error_code"] == "admission_refused"
+    with env.store.transaction() as db:
+        assert db.execute("SELECT COUNT(*) FROM compute_jobs").fetchone()[0] == 1
+    with pytest.raises(StoreError, match="no compute worker or scaler"):
+        env.runs.retry(env.user, env.org, run["id"], failed["revision"], "retry-while-drained-001")
+    env.compute.change_worker(env.user, env.org, env.worker["id"], draining=False)
+    env.runs.retry(env.user, env.org, run["id"], failed["revision"], "retry-after-resume-001")
+    env.runs.advance(run["id"])
+    final = env.claim()
+    assert final["parameters"]["program"] == "print(4)"
+    env.finish(final)
+    env.runs.advance(run["id"])
+    assert env.view(run)["status"] == "succeeded"
+
+
 def test_cancel_queued_child_and_replay_is_stable(installation):
     env = installation
     run = env.start([compute_node(), approval_node(["compute"])])

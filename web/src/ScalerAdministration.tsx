@@ -77,7 +77,9 @@ export function ScalerAdministration({ organizationId, images, onAuthLost }: { o
     </form>
     <ul className="org-admin-list">{records.map((record) => <li key={record.id}><div><strong>{record.name}</strong>
       <small>{record.id} · {record.revoked_at !== null ? "Revoked" : record.enabled ? "Enabled" : "Expired or sponsor unavailable"}</small>
-      <small>Up to {record.maximum_workers} workers · {record.image_ids.join(", ")} · Expires {new Date(record.expires_at * 1000).toLocaleString()}</small></div>
+      <small>Up to {record.maximum_workers} workers · {record.image_ids.join(", ")} · Expires {new Date(record.expires_at * 1000).toLocaleString()}</small>
+      <small>Each worker at most {record.resources.cpu} cores · {record.resources.memory_bytes} memory bytes</small>
+      <small>{record.enrolled_workers} of {record.maximum_workers} enrolled{record.enrolled_workers >= record.maximum_workers ? " · Full: adds no capacity beyond its workers" : ""}</small></div>
       {record.revoked_at === null && <>
         <button disabled={busy || !!credential} onClick={() => { if (window.confirm("Rotate this exact scaler grant? The old token stops working immediately; existing worker credentials remain valid. You become its sponsor for 30 days.")) void action(async () => {
           receive(await request<ComputeScaler & { token: string }>(root + "/" + record.id + "/rotate", { method: "POST", body: { lifetime_seconds: 2592000 } }), record.id);

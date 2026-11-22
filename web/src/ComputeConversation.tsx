@@ -232,7 +232,12 @@ export function ComputeConversation({ organizationId, topicId, userId, canWrite,
       const job = await deliverComputeAttempt(organizationId, topicId, userId, captured);
       if (!alive.current) return;
       pending.current = undefined; updateAttempt.current(undefined); setSelected(job.id); setEditorOpen(false); setRefresh((value) => value + 1);
-    } catch (cause) { if (alive.current) fail(cause); }
+    } catch (cause) {
+      if (!alive.current) return;
+      // A refused request was not queued (a retried, already queued request returns its job), so it can be edited again.
+      if (cause instanceof ApiError && [400, 409, 422].includes(cause.status)) { pending.current = undefined; updateAttempt.current(undefined); }
+      fail(cause);
+    }
     finally { working.current = false; if (alive.current) setBusy(false); }
   };
   const cancel = async (job: ComputeJob) => {

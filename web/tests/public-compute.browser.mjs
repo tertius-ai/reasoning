@@ -111,6 +111,9 @@ test("rendered compute policy, enrollment, shared replay/output, cancellation an
     assert.equal(await owner.evaluate((token) => JSON.stringify({ ...localStorage, ...sessionStorage }).includes(token), scalerToken), false);
     const grants = await call(root + "/compute-scalers", undefined, "GET");
     assert.equal(grants.length, 1); assert.equal(grants[0].maximum_workers, 2); assert.equal(grants[0].token, undefined);
+    assert.equal(grants[0].enrolled_workers, 0);
+    await automation.getByText("0 of 2 enrolled", { exact: true }).waitFor();
+    await automation.getByText(`Each worker at most ${grants[0].resources.cpu} cores · ${grants[0].resources.memory_bytes} memory bytes`, { exact: true }).waitFor();
     const scalerIdentity = await call("/compute-scaler/identity", undefined, "GET", scalerToken);
     assert.equal(scalerIdentity.id, grants[0].id); assert.deepEqual(scalerIdentity.scopes, ["compute:snapshot", "workers:enroll"]);
     owner.once("dialog", (dialog) => dialog.accept()); await automation.getByRole("button", { name: "Dismiss scaler credential", exact: true }).click();

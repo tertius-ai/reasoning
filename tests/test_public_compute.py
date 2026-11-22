@@ -61,7 +61,24 @@ def compute(installation, tmp_path):
         root + "/compute-policy", json={"allowed_images": [IMAGE["id"]], "monthly_cpu_seconds": 10000, "max_active_jobs": 2}
     )
     assert response.status_code == 200, response.text
+    capacity(app, owner)
     return config, store, app.state.compute, client, owner, topics
+
+
+def capacity(app, owner, image=IMAGE):
+    """An enabled scaler grant below its ceiling: admission queues jobs before a test registers the worker that claims
+    them, and the grant itself claims nothing."""
+    return app.state.compute_scalers.create(
+        owner["user_id"], owner["organization_id"], "Fixture capacity", [image["id"]], image["maximum_resources"], 64
+    )
+
+
+def without_capacity(compute):
+    """Revoke the fixture's scaler grant, so only workers and grants a test adds can run its jobs."""
+    _, _, _, client, owner, _ = compute
+    scalers = client.app.state.compute_scalers
+    for grant in scalers.list(owner["user_id"], owner["organization_id"]):
+        scalers.revoke(owner["user_id"], owner["organization_id"], grant["id"])
 
 
 def submission(client_id="job", **changes):
@@ -157,6 +174,46 @@ def test_replay_is_immutable_durable_and_precedes_changed_image_policy(compute):
     assert restarted.get(path).json() == [first]
     assert first["program_digest"] == "sha256:" + hashlib.sha256(first["parameters"]["program"].encode()).hexdigest()
     assert first["image"] == IMAGE
+
+
+def test_admission_refuses_a_job_that_no_worker_or_scaler_would_claim(compute):
+    _, store, state, client, owner, topics = compute
+    org, user = owner["organization_id"], owner["user_id"]
+    path = f"/api/organizations/{org}/topics/{topics[2]['id']}/compute-jobs"
+    created = client.post(f"/api/organizations/{org}/projects", json={"name": "Project computations"})
+    project = f"/api/organizations/{org}/projects/{created.json()['id']}/compute-jobs"
+    without_capacity(compute)
+    refused = client.post(path, json=submission("nothing-runs"))
+    assert refused.status_code == 409
+    assert "no compute worker or scaler in this organization runs image fixture-cas" in refused.json()["detail"]
+    # Modal setup's shape: one scaler grant, and relays enrolled through it at its limits until its ceiling is full.
+    relay = {**DEFAULT_RESOURCES, "memory_bytes": 512 * 1024**2}
+    scalers = client.app.state.compute_scalers
+    grant = scalers.create(user, org, "Modal relays", [IMAGE["id"]], relay, 2)
+    relays = [
+        scalers.enroll(grant["token"], f"{index:032x}", f"relay-{index}", [IMAGE["id"]], relay,
+                       "rnw_" + "r" * 42 + str(index))["worker"]
+        for index in range(2)
+    ]
+    with store.transaction() as db:
+        # The grant's ceiling is full, so it offers nothing beyond its relays, and it could never offer more than them.
+        assert state.capacity(db, org) == [{"image_ids": [IMAGE["id"]], "resources": relay}]
+    for endpoint in (path, project):
+        # Within the image's limits (1 GiB), but no relay takes more than 512 MiB.
+        large = client.post(endpoint, json=submission("larger-than-relays"))
+        assert large.status_code == 409
+        assert "no compute worker or scaler accepts a job this large for image fixture-cas" in large.json()["detail"]
+        assert "memory_bytes 536870912" in large.json()["detail"]
+    with store.transaction() as db:
+        assert db.execute("SELECT COUNT(*) FROM compute_jobs").fetchone()[0] == 0
+    queued = enqueue(compute, "fits", resources=relay)
+    # Draining both relays leaves nothing to claim a new job; replaying an accepted request still returns its job.
+    for record in relays:
+        state.change_worker(user, org, record["id"], draining=True)
+    assert enqueue(compute, "fits", resources=relay) == queued
+    assert client.post(path, json=submission("while-drained", resources=relay)).status_code == 409
+    state.change_worker(user, org, relays[0]["id"], draining=False)
+    assert state.claim("rnw_" + "r" * 42 + "0")["id"] == queued["id"]
 
 
 def test_concurrent_admission_reserves_quota_atomically(compute):

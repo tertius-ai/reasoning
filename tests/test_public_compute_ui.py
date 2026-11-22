@@ -75,7 +75,17 @@ def headers(owner):
     return {"authorization": "Bearer " + owner["access_token"]}
 
 
+def capacity(fixture):
+    """An enabled scaler grant below its ceiling: admission queues jobs before a test registers the worker that claims
+    them, and the grant itself claims nothing."""
+    _, app, owner, _, _ = fixture
+    app.state.compute_scalers.create(
+        owner["user_id"], owner["organization_id"], "Fixture capacity", [IMAGE["id"]], IMAGE["maximum_resources"], 64
+    )
+
+
 def test_shared_submission_receipt_history_cursor_logs_and_artifact_download(fixture):
+    capacity(fixture)
     _, app, owner, topics, root = fixture
 
     async def check():
@@ -155,6 +165,7 @@ def test_shared_submission_receipt_history_cursor_logs_and_artifact_download(fix
 
 @pytest.mark.parametrize("role", ["member", "viewer"])
 def test_member_and_viewer_visibility_do_not_grant_compute_administration(fixture, role):
+    capacity(fixture)
     store, app, owner, topics, root = fixture
     invite = store.invite(owner["user_id"], owner["organization_id"], role + "@example.org", role, 3600)
     user = store.accept_invitation(invite["token"], user_id=None, name=role, password="long fixture password")
@@ -181,6 +192,7 @@ def test_member_and_viewer_visibility_do_not_grant_compute_administration(fixtur
 
 
 def test_cookie_submission_requires_same_origin_csrf_and_strict_resource_fields(fixture):
+    capacity(fixture)
     _, app, owner, topics, root = fixture
 
     async def check():
@@ -199,6 +211,7 @@ def test_cookie_submission_requires_same_origin_csrf_and_strict_resource_fields(
 
 
 def test_uncertain_cancellation_holds_quota_and_requires_explicit_cleanup_reconciliation(fixture):
+    capacity(fixture)
     store, app, owner, topics, root = fixture
     compute = app.state.compute
     job = compute.enqueue(
@@ -236,6 +249,7 @@ def test_uncertain_cancellation_holds_quota_and_requires_explicit_cleanup_reconc
 
 
 def test_job_and_artifact_routes_refuse_cross_organization_ids(fixture):
+    capacity(fixture)
     store, app, owner, topics, root = fixture
     compute = app.state.compute
     job = compute.enqueue(
@@ -259,6 +273,7 @@ def test_job_and_artifact_routes_refuse_cross_organization_ids(fixture):
 
 
 def test_event_backlog_pages_use_exclusive_cursor_without_lost_logs(fixture):
+    capacity(fixture)
     _, app, owner, topics, root = fixture
     compute = app.state.compute
     job = compute.enqueue(
@@ -289,6 +304,7 @@ def test_event_backlog_pages_use_exclusive_cursor_without_lost_logs(fixture):
 
 
 def test_worker_identity_requires_worker_bearer_and_never_claims_or_updates_activity(fixture):
+    capacity(fixture)
     _, app, owner, topics, root = fixture
     compute = app.state.compute
     org, user = owner["organization_id"], owner["user_id"]

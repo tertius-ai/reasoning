@@ -382,6 +382,8 @@ class ComputeStore:
                 raise StoreError(409, "client identifier already names a different compute request")
             return self._public_job(existing)
         image = self._admission(db, user, org, topic, parameters, project=project)
+        # Every path queues here. Checked after replay, so an accepted request still returns its job once capacity is gone.
+        self.require_runnable(db, org, parameters["image_id"], parameters["resources"])
         self._expire(db, org)
         policy = self._policy(db, org)
         if policy.get("max_pending_jobs") is not None:
