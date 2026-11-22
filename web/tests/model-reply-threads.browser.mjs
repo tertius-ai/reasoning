@@ -136,10 +136,10 @@ test("a model's answer replies to its prompt, a reply to the answer asks a follo
     runs = [{ id: "run-k3", requested_by: user, model: "fixture/reasoner", status: "running", context_through_sequence: k3.sequence,
       created_at: 1_800_000_900, started_at: 1_800_000_900, cancel_requested: 0, message_id: null, output_text: "", accounting_state: "reserved",
       actual_microusd: null, reserved_microusd: 10, additions: [],
-      activity: [{ sequence: 1, phase: "round", round: 1 }, { sequence: 2, phase: "tool_requested", tool: "arxiv_search", detail: "searched arXiv for “K3 regulator”" }] }];
+      activity: [{ sequence: 1, phase: "round", round: 1 }, { sequence: 2, phase: "tool_requested", tool: "arxiv_search", detail: "searching arXiv for “K3 regulator”" }] }];
     const working = dialog.locator('.org-thread-working[data-run-id="run-k3"]');
     await working.waitFor({ timeout: 15000 });
-    assert.match(await working.getByRole("status", { name: "Reply progress" }).innerText(), /searched arXiv for “K3 regulator”…$/);
+    assert.match(await working.getByRole("status", { name: "Reply progress" }).innerText(), /searching arXiv for “K3 regulator”…$/);
     assert.match(await working.locator("header").innerText(), /fixture\/reasoner\s+working/);
 
     // "+ Add" beside Stop puts the thread's box into adding mode; the next message joins the running reply and waits in its card.
