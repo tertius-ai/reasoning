@@ -164,6 +164,14 @@ Progress remains visible during both phases; inbound SSH is closed afterward.
 If transport or activation is uncertain, rerun `make upgrade` without changing
 the checkout or state. The retained journals determine whether work is replayed.
 
+Before the new upgrade is journaled, the server removes earlier upgrade backups,
+scratch and releases that are no longer needed. It keeps the upgrade behind the
+running release, the one before it, rollback provenance and anything unfinished.
+Just before stopping the server it checks free disk space for the backup and
+migration; a shortfall stops nothing, reports the space needed and free, and is
+resumed with `make upgrade-resume` once space is freed. See
+[operations](operations.md) for the exact retention rule and space estimate.
+
 This path currently supports the single-server, no-compute test deployment.
 Externally executing workers/controllers require independent physical fencing,
 and production use still requires real-host upgrade and rollback rehearsal.

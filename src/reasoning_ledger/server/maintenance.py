@@ -11,7 +11,7 @@ import re
 import sqlite3
 import stat
 import tempfile
-from contextlib import ExitStack, contextmanager
+from contextlib import ExitStack, closing, contextmanager
 from pathlib import Path
 
 from ..deployment.host import InstallError, atomic_write, canonical
@@ -235,6 +235,41 @@ def _migrate_database(root, source):
                 sqlite_migration(db, statement)
             db.execute(f"PRAGMA user_version={index + 1}")
         snapshots._schema(db)
+    _compact(root / "server.sqlite3")
+
+
+def _compact(path):
+    """Rewrite a stopped database without its free pages when they are more than a quarter of the file.
+
+    A migration that shrinks stored rows leaves their pages free inside the file, and every later backup copies them.
+    The rewrite keeps every row and row id, so the state identity is unchanged; the dry run and the migration of the
+    stopped installation both run it. The original is replaced only by a complete, flushed copy, and only when no
+    write-ahead log remains beside it.
+    """
+    with closing(sqlite3.connect(path.as_uri() + "?mode=rw", uri=True)) as db:
+        pages, free = (db.execute("PRAGMA " + name).fetchone()[0] for name in ("page_count", "freelist_count"))
+        if free * 4 <= pages:
+            return
+        mode = stat.S_IMODE(os.stat(path, follow_symlinks=False).st_mode)
+        compacted = path.with_name(path.name + ".compact")
+        if compacted.exists() or compacted.is_symlink():
+            os.unlink(compacted)
+        os.close(os.open(compacted, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, mode))
+        db.execute("VACUUM INTO ?", (str(compacted),))
+    if any(Path(str(path) + suffix).exists() for suffix in ("-wal", "-shm", "-journal")):
+        os.unlink(compacted)
+        return
+    fd = os.open(compacted, os.O_RDONLY | os.O_NOFOLLOW)
+    try:
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+    os.replace(compacted, path)
+    directory = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        os.fsync(directory)
+    finally:
+        os.close(directory)
 
 
 def _version(root):

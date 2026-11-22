@@ -6,11 +6,13 @@ import io
 import json
 import os
 import shlex
+import shutil
 import sqlite3
 import subprocess
 import sys
 from contextlib import closing, contextmanager, redirect_stdout
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from test_public_host_rollback import ROLLBACK
@@ -410,6 +412,61 @@ def test_busy_reports_refuse_unrecognized_unbound_or_post_stop_diagnoses(mutatio
         server_changes.reject_failure(report, request)
     with pytest.raises(ValueError):
         server_changes.reject_failure(report | mutation, request)
+
+
+def test_insufficient_disk_space_is_refused_before_the_fence_and_resumes_once_space_is_free(operator):
+    change, engine, observation, *_ = operator
+    engine.disk_usage = lambda path: SimpleNamespace(f_bavail=0, f_frsize=4096)
+    with pytest.raises(host.InstallError, match="lacks the free disk space that the backup and migration need") as error:
+        change("upgrade-prepare")
+    text = str(error.value)
+    assert "GB must be free on the filesystem holding /var/lib/reasoning-upgrade-scratch; 0.0 GB is free" in text
+    assert "has not fenced or stopped anything. Free disk space on the server, then run make upgrade-resume." in text
+    assert engine._read(engine.directory / "server-upgrades" / OPERATION / "operation.json")["phase"] == "target_ready"
+    assert observation["active"] is True and not (engine.root / server_changes.server_upgrade.FENCE).exists()
+    assert not any(args[:2] == ["systemctl", "stop"] for args in observation["calls"])
+    engine.disk_usage = os.statvfs
+    assert change("upgrade-prepare")["phase"] == "prepared"
+
+
+def test_retention_failure_is_refused_before_any_journal_and_retried_by_make_upgrade(operator, monkeypatch):
+    change, engine, observation, *_ = operator
+    unused = engine.installer._directory("opt/reasoning/releases/" + "9" * 64)
+
+    original = shutil.rmtree
+
+    def refused(path, *args, **kwargs):
+        if ".pruned-" in str(path):
+            raise OSError(16, "SECRET removal fixture")
+        return original(path, *args, **kwargs)
+
+    with monkeypatch.context() as patch, pytest.raises(host.InstallError, match="could not be removed safely") as error:
+        patch.setattr(server_changes.server_upgrade.shutil, "rmtree", refused)
+        change("upgrade-prepare")
+    text = str(error.value)
+    assert "SECRET" not in text and "No upgrade is pending" in text and "make upgrade again" in text
+    assert "/var/lib/reasoning-deploy/server-upgrades" in text and "/opt/reasoning/releases" in text
+    assert observation["active"] is True and not engine.active.exists()
+    assert not (engine.directory / "server-upgrades" / OPERATION).exists()
+    assert change("upgrade-prepare")["phase"] == "prepared"
+    assert not unused.exists() and not unused.with_name(".pruned-" + unused.name).exists()
+
+
+@pytest.mark.parametrize("mutation", [
+    {"filesystem": "/tmp"}, {"filesystem": ["/var/lib/reasoning"]}, {"required_bytes": True}, {"required_bytes": 1.5},
+    {"available_bytes": 10**10}, {"available_bytes": -1}, {"extra": "SECRET"}, {"reason": "compute_jobs"},
+    {"phase": "source_stopped"},
+])
+def test_space_refusals_carry_only_bound_measured_values(mutation):
+    request = {"mode": "upgrade-prepare", "operation_id": OPERATION, "plan_id": "d" * 64}
+    report = {"format": 1, "kind": "server_busy", **request, "phase": "target_ready", "reason": "insufficient_disk",
+              "filesystem": "/var/lib/reasoning", "required_bytes": 10**10, "available_bytes": 10**9}
+    with pytest.raises(host.InstallError, match="10.0 GB must be free on the filesystem holding /var/lib/reasoning; 1.0 GB is free"):
+        server_changes.reject_failure(report, request)
+    with pytest.raises(ValueError):
+        server_changes.reject_failure(report | mutation, request)
+    with pytest.raises(ValueError):
+        server_changes.reject_failure({key: value for key, value in report.items() if key != "available_bytes"}, request)
 
 
 @pytest.mark.parametrize("reason", ["disk_full", "inflight_execution"])

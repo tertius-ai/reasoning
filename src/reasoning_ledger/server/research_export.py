@@ -6,6 +6,7 @@ import json
 from datetime import UTC, datetime
 
 from .compute_store import ComputeStore
+from .event_blobs import expand
 from .research_context import HARNESS_VERSION
 from .research_goals import RECOVERABLE_TURN_ERRORS
 from .research_media import view as media_view
@@ -35,15 +36,15 @@ def export_topic(inference, user, org, topic, *, research_only=True):
         def rows(query, args=(org, topic)):
             return [decoded(row) for row in db.execute(query, args)]
 
-        runs = []
+        runs, blobs = [], {}
         # Private side-chat replies belong to their owner's side chat, not to the topic's diagnostics.
         for row in db.execute(inference._joined() + "WHERE r.organization_id=? AND q.topic_id=? AND " + public_request("q.id")
                               + " ORDER BY q.created_at,r.id", (org, topic)):
             run = inference._view(row, db)
-            run["events"] = rows(
+            run["events"] = [{**event, "event": expand(db, org, event["event"], blobs)} for event in rows(
                 "SELECT sequence,created_at,event_json FROM llm_events WHERE organization_id=? AND run_id=? ORDER BY sequence",
                 (org, row["id"]),
-            )
+            )]
             run["tool_receipts"] = rows(
                 "SELECT * FROM research_tool_receipts WHERE organization_id=? AND run_id=? ORDER BY sequence", (org, row["id"])
             )

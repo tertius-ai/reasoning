@@ -70,8 +70,10 @@ def released_operation():
     bot_direct = ("    if statement == BOT_DIRECT_COLUMN and any(row[1] == \"direct_conversation_id\" "
                   "for row in db.execute(\"PRAGMA table_info(bot_runs)\")):\n        return\n",
                   "    if statement in BOT_DIRECT_RUNS:\n        _nullable_bot_run_column(db, statement.split()[5])\n        return\n")
-    assert branch in source and later in source and all(part in source for part in bot_direct)
-    for part in bot_direct:
+    # Nor did provider requests kept once per message (event_blobs_schema).
+    blobs = "    if statement == COMPACT_REQUESTS:\n        compact_requests(db)\n        return\n"
+    assert branch in source and later in source and blobs in source and all(part in source for part in bot_direct)
+    for part in (*bot_direct, blobs):
         source = source.replace(part, "", 1)
     source = source.replace("{PROJECT_ARTIFACTS, PROJECT_COMPUTE, *BOT_DIRECT_RUNS}", "{PROJECT_ARTIFACTS, PROJECT_COMPUTE}", 1)
     namespace = dict(vars(schema_operations))

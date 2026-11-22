@@ -47,6 +47,10 @@ stopped anything, and `make upgrade-resume` retries it. Model replies at work do
 not block an upgrade: the stop interrupts them and the target's startup recovers
 them. Work that starts in the seconds between the last check and the stop is still
 refused by the migration's own check, which then requires `make upgrade-resume`.
+The same refusal, with the server still serving, reports a failure to prune earlier
+upgrade history (before any journal; run `make upgrade` again) and insufficient
+free disk space (just before the fence; run `make upgrade-resume`), both described
+below.
 
 Modal relays on the chat host count as enrolled compute workers, so drain them
 before `make upgrade` and resume their claims afterwards. An upgrade does not
@@ -70,10 +74,56 @@ server URL; credential-only onboarding state does not need a duplicate URL.
 
 Upgrade backup and migration scratch uses private, operation-specific directories
 under `/var/lib/reasoning-upgrade-scratch/` on the data filesystem, not RAM-backed
-`/run`. Allow disk space for the source snapshot, encrypted archive, and decrypted
-verification copies. Preparation seals scratch directories against service-account
-access before activation. Resumption also seals any retained `/run` scratch for the
-same operation without replacing its original backup or journals.
+`/run`. Preparation seals scratch directories against service-account access
+before activation. Resumption also seals any retained `/run` scratch for the same
+operation without replacing its original backup or journals.
+
+Just before the restart fence, after the second check for running work, preparation
+checks free space on the filesystems holding `/var/lib/reasoning-upgrade-scratch`,
+`/var/lib/reasoning-deploy` and `/var/lib/reasoning`, counting each filesystem once.
+It measures the live data: the SQLite database with its write-ahead log, artifact
+chunks and cloud bot journals, without following links. Each role has a share of
+that size: scratch 3 (the backup's database copy, encrypted archive and verification
+unpack; later the archive, the migration dry run's restored copy and its journal or
+compaction), the root-private retained archive 1, and the live database 2 (the
+in-place migration's journal and compaction copy). A filesystem must have its roles'
+shares, at most 5 in total, times the live data size, plus 1 GiB free. A shortfall
+refuses the upgrade before anything is fenced or stopped; the operator sees the
+filesystem, the space needed and the space free. Free space on the server, then run
+`make upgrade-resume`.
+
+Each new preparation first prunes earlier upgrade history. It runs under the
+bootstrap lock, after the confirmed plan is verified and before the new operation is
+journaled, and only when no upgrade or replacement recovery is pending. It keeps:
+
+- the completed operation bound to the live installation (its target, or its source
+  after a completed rollback) and the next most recent completed operation, ordered
+  by backup creation time;
+- the operation named by live rollback provenance in
+  `/var/lib/reasoning/server-rollback.json`;
+- every operation that is not completed, whose rollback is not completed, or whose
+  records cannot be read.
+
+Other completed operation directories in `/var/lib/reasoning-deploy/server-upgrades/`
+are removed with their archives, backups and displaced state. The scratch of every
+completed operation is removed: `/var/lib/reasoning-upgrade-scratch/OPERATION_ID`,
+`/run/reasoning-upgrade-OPERATION_ID` and `/run/reasoning-rollback-ROLLBACK_ID`. A
+removed operation's rollback stage `/var/lib/reasoning-rollback-ROLLBACK_ID` is
+removed too; a kept operation keeps its stage, which completed rollback retries
+check. In `/opt/reasoning/releases/` the live release and the source and target
+releases of every kept operation stay; other releases and interrupted release
+extractions are removed. When any operation's journal cannot be read, every release
+stays. `/opt/reasoning/modal/` is never touched.
+
+Only root-owned directories are removed, links are never followed, and anything else
+is left in place. Each is first
+renamed to a `.pruned-` name in the same directory, so release-history scans never
+see a partly removed operation, and the next preparation finishes a removal that was
+interrupted. A removal failure refuses the upgrade before any journal, with the
+server still serving; inspect the named directories on the server, then run
+`make upgrade` again. Counts and freed bytes of the last prune that removed anything
+are recorded in root-private `/var/lib/reasoning-deploy/server-upgrade-retention.json`.
+Host-local retention is not an off-host backup; keep separate off-host copies.
 
 Resumed preparation uses the current operator tooling without rebuilding the
 retained target. Its service-user migration runner recognizes the raw-SQL
@@ -732,8 +782,8 @@ before invoking the target's offline migration. The target's journal must match
 the original operation, archive/key digests, schemas, release and byte allowance.
 Prepared-state verification requires no backup-key access and never starts the
 application. Service-owned scratch credentials/plaintext directories are sealed
-behind root-owned 0700 permissions before `prepared` is recorded; missing scratch
-after reboot is acceptable, but existing insecure/unsealed scratch is refused.
+behind root-owned 0700 permissions before `prepared` is recorded; scratch missing
+after reboot or retention is acceptable, but existing insecure/unsealed scratch is refused.
 The vault is host-local, not an off-host backup or secure-erasure mechanism.
 Retain separate off-host archive/key copies and use encrypted disks.
 
@@ -798,7 +848,9 @@ removes only the original managed restart-condition drop-in, reloads systemd,
 rechecks completed application history, and runs fresh full host diagnosis and
 HTTPS readiness. It publishes immutable `completion.json` in the original
 operation directory before marking `completed` and removing the exact active
-ownership pointer. Original recovery material and application history remain.
+ownership pointer. The operation's root recovery material remains until retention
+at a later preparation removes it under the retention rule above; application history
+remains.
 The receipt reports host upgrade completion, schema/release readiness and retained
 root-private recovery material, with runtime dependency attestation explicitly
 false. It is not proof of independent-release compatibility or actual cloud
@@ -806,7 +858,9 @@ operation from fixture tests.
 
 Completed retries perform fresh diagnosis and application/schema checks without
 starting, stopping, migrating or resnapshotting. Missing or changed completed
-root/application history is refused, never recreated. Resume the original IDs;
+root/application history is refused, never recreated. Retention keeps the operation
+bound to the live installation, so completed retries and rollback of the latest
+upgrade stay available. Resume the original IDs;
 do not edit journals or use bootstrap to bypass pending ownership. Explicit
 rollback preparation retains displaced state; separately confirmed source
 activation is described below. Off-host backups and physical execution fencing
@@ -863,8 +917,8 @@ credentials outside the host, settle provider billing or undo completed effects.
 Review restored memberships, keys, policy and external accounting before exposure.
 
 Temporary service access to archive/key/mail copies is sealed behind a root-owned
-0700 scratch directory under `/run` after restoration. Missing scratch after
-reboot is acceptable; the source candidate/provenance and root recovery vault are
+0700 scratch directory under `/run` after restoration. Scratch missing after
+reboot or retention is acceptable; the source candidate/provenance and root recovery vault are
 durable under `/var/lib`. Private plaintext scratch can remain after interruption;
 this is not off-host retention or secure erasure.
 
@@ -962,9 +1016,10 @@ recovery have separate operator commands described in this document.
 A completed rollback's source can be upgraded through the same separately
 confirmed preparation/activation backend. The target must declare
 `server-rollback-upgrade-v1`; the backend refuses an unsupported target before
-stopping the source. Original protected upgrade/rollback journals and root rollback
-completion must remain intact, and current source provenance must match that
-protected completion. This also applies when later upgrades retain an already
+stopping the source. The operation named by the source provenance, with its
+protected upgrade/rollback journals and root rollback completion, must remain intact;
+retention always keeps it, and current source provenance must match that protected
+completion. This also applies when later upgrades retain an already
 superseded source record. An ordinary installation without rollback provenance
 does not require this additional target feature; source rollback activation is
 separate from later-upgrade capability.
@@ -1004,8 +1059,8 @@ Original `rollback-release`/`rollback-observe` cannot reopen a superseded source
 For additional upgrades, the first handoff remains unchanged; its exact completed
 maintenance history and the immediately preceding completed journal/history must
 remain valid. Deleted provenance with retained rollback history also blocks
-initialization. Root upgrade/rollback completion and displaced-state evidence
-remain retained rather than rewritten by the handoff.
+initialization. The handoff does not rewrite root upgrade/rollback completion or
+displaced-state evidence.
 
 ## Host-local rollback state primitives
 
