@@ -180,6 +180,9 @@ export const automaticModelAttempt = (model: string, through: number, _maximum: 
   client_id: clientId, models: [model], max_completion_tokens: null, context_message_limit: 50, through_sequence: through,
 });
 
+const unreadLabel = (count: number) => `${count} unread ${count === 1 ? "message" : "messages"}`;
+const mentionsLabel = (count: number) => `${count} unread personal ${count === 1 ? "mention" : "mentions"}`;
+
 function NavigationSpend({ value, ready = true }: { value?: Spend; ready?: boolean }) {
   if (!ready) return <span className="org-tree-spend" aria-label="Loading confirmed spend">$…</span>;
   return <span className="org-tree-spend" title={`Confirmed provider spend. ${value?.unknown_calls ?? 0} unconfirmed calls; ${value?.external_runs ?? 0} bot runs with external accounting.`}>
@@ -254,8 +257,8 @@ export function TopicNavigation({ hierarchy, organizationId = "", userId = "", u
             aria-current={selected === topic.id ? "page" : undefined} title={`${KIND_LABEL[topic.kind]}: ${topic.name}`} {...reveal("topics", topic.id, KIND_SYMBOL[topic.kind] + "-" + topic.name)}
             onClick={() => onSelect(topic.id)}>
             <span className="org-kind" aria-label={topic.kind + " topic"}>{KIND_SYMBOL[topic.kind]}</span><span className="org-topic-name">-{topic.name}</span>
-            {!!state?.unread_mention_count && <span className="org-mention-count" aria-label={`${state.unread_mention_count} unread personal mentions`} title={`${state.unread_mention_count} unread personal mentions`}>@</span>}
-            {!!state?.unread_count && state.subscribed && <span className="org-unread" aria-label={`${state.unread_count} unread messages`}>{state.unread_count}</span>}
+            {!!state?.unread_mention_count && <span className="org-mention-count" aria-label={mentionsLabel(state.unread_mention_count)} title={mentionsLabel(state.unread_mention_count)}>@</span>}
+            {!!state?.unread_count && state.subscribed && <span className="org-unread" aria-label={unreadLabel(state.unread_count)}>{state.unread_count}</span>}
             {spend("topics", topic.id)}
           </button>{canManageProject && <button type="button" className="org-tree-more" aria-label={`Settings for ${KIND_SYMBOL[topic.kind]}-${topic.name}`}
             title={`Settings for ${KIND_SYMBOL[topic.kind]}-${topic.name}`} onClick={() => onTopicSettings(topic.id)}>⋯</button>}</div>;
@@ -690,7 +693,7 @@ function PresenceSidebar({ organizationId, open, onClose, onAuthLost, userId, on
       <span className="org-bot-owner">· {owner.split(/\s+/)[0]}</span>
       {pending ? <button type="button" className="org-bot-approval-indicator" aria-label={`Review ${pending} pending requests from ${bot.name}`}
         title="Approval needed" onClick={() => setReviewBot(bot)}>!</button>
-        : unread > 0 ? <span className="org-unread" aria-label={`${unread} unread messages from ${bot.name}`}>{unread}</span>
+        : unread > 0 ? <span className="org-unread" aria-label={`${unreadLabel(unread)} from ${bot.name}`}>{unread}</span>
           : <i className={bot.activity ? "org-bot-thinking" : ""} aria-label={activity ?? (bot.online ? "online" : "offline")} />}
       <div className="org-bot-hover" role="tooltip" id={"org-bot-hover-" + bot.id}>
         <span className="org-bot-hover-title"><strong>{bot.name}</strong> · {bot.engine === "claude" ? "Claude Code" : bot.engine === "codex" ? "Codex" : "Bot"}</span>

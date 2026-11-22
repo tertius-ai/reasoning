@@ -65,7 +65,7 @@ test("navigation nests creation controls and renders colored channel and topic l
   assert.match(markup, /α<\/span><span class="org-topic-name">-alpha conversation<\/span>/);
   for (const kind of ["alpha", "beta", "gamma"]) assert.match(markup, new RegExp(`aria-label="${kind} topic"`));
   assert.match(markup, /aria-current="page"/);
-  assert.match(markup, /3 unread messages/); assert.match(markup, /1 unread personal mentions/);
+  assert.match(markup, /3 unread messages/); assert.match(markup, /"1 unread personal mention"/);
   assert.doesNotMatch(markup, /5 unread messages/); assert.match(markup, /org-unfollowed/);
 });
 test("alpha messages group only adjacent same-author messages within five minutes on one day", () => {
