@@ -66,6 +66,12 @@ class DockerFixture:
     def _command(self, command, **options):
         self.sdk.commands.append(command)
 
+    def capacity(self):
+        return {"memory_bytes": 4528332 * 1024, "cpus": 1}
+
+    def preflight(self, image, limits):
+        return "sha256:" + "f" * 64
+
     def mount(self, path):
         self.sdk.commands.append(["mount", path])
         return {"filesystem": "fuse", "mount_options": "ro,relatime", "super_options": "rw", "read_only": True}
@@ -102,12 +108,13 @@ def test_run_uses_one_ephemeral_vm_and_existing_digest_pinned_docker_boundary(tm
     receipt = json.loads((instance.data_dir / "modal-last-attempt.json").read_bytes())
     assert receipt["execution_status"] == "succeeded" and receipt["cleanup_verified"] is True
     assert receipt["stage"] == "execution" and receipt["sandbox_id"] == "sb-fixture"
+    assert receipt["vm"] == {"memory_bytes": 4528332 * 1024, "cpus": 1}
     assert logs == [b"nonexecuting Modal transport fixture\n"]
 
 
 @pytest.mark.parametrize("stage,code", [("docker_setup", "docker_unavailable"), ("docker_ready", "invalid_runtime_identity"),
                                         ("image_pull", "output_limit"), ("image_pull", "wall_time_limit"),
-                                        ("execution", "image_verification_failed")])
+                                        ("limits_check", "sandbox_unavailable"), ("execution", "image_verification_failed")])
 def test_failed_stage_survives_cleanup_with_safe_code_and_one_startup_message(tmp_path, monkeypatch, stage, code):
     from reasoning_ledger.server import compute_modal
 
@@ -129,6 +136,11 @@ def test_failed_stage_survives_cleanup_with_safe_code_and_one_startup_message(tm
             if stage == "image_pull":
                 raise RuntimeFault(code)
 
+        def preflight(self, image, limits):
+            if stage == "limits_check":
+                raise RuntimeFault(code)
+            return super().preflight(image, limits)
+
         def run(self, *args, **options):
             raise RuntimeFault(code)
 
@@ -147,6 +159,9 @@ def test_failed_stage_survives_cleanup_with_safe_code_and_one_startup_message(tm
     assert sdk.terminations == ["sb-fixture"] and instance.state() == {"phase": "idle"}
     if stage != "execution":
         assert len(logs) == 1 and code.encode() in logs[0]
+    if stage == "limits_check":
+        assert logs == [b"Compute failed during the VM's limit check (sandbox_unavailable).\n"]
+        assert receipt["vm"] == {"memory_bytes": 4528332 * 1024, "cpus": 1}
 
 
 def test_image_download_gets_the_startup_allowance_left_after_vm_and_docker_start(tmp_path, monkeypatch):
@@ -370,7 +385,8 @@ def test_sdk_create_pins_runtime_caps_and_does_not_inject_any_credentials(monkey
     args, options = calls[0]
     assert args[0] == "dockerd" and options["runtime"] == "vm"
     # One requested CPU unit appears as one CPU to Docker in the VM (a 1-unit VM reported NCPU 1).
-    assert options["cpu"] == (1, 1) and options["memory"] == (1536, 1536)
+    # A 1 GiB job's VM: its memory, 512 MiB, and 1/32 of its memory for the VM's own kernel.
+    assert options["cpu"] == (1, 1) and options["memory"] == (1568, 1568)
     assert options["timeout"] == 720 and options["secrets"] == [] and options["include_oidc_identity_token"] is False
     assert options["tags"] == {"reasoning-name": name}
     assert "fixture_secret" not in json.dumps({key: value for key, value in options.items() if key not in {"client", "app"}})
@@ -635,10 +651,51 @@ def test_sdk_passes_volumes_and_mount_options_through_unchanged():
         Sandbox=SimpleNamespace(create=lambda *args, **kwargs: calls.append((args, kwargs))))
     sdk.create(sandbox_name("a" * 32, "b" * 32), DEFAULT_RESOURCES, {"/mnt/lean-env": "handle"})
     assert calls[0][1]["volumes"] == {"/mnt/lean-env": "handle"}
+    assert calls[0][1]["memory"] == (1024 + 512 + 32, 1024 + 512 + 32)
     sdk.create(sandbox_name("a" * 32, "b" * 32), DEFAULT_RESOURCES)
     assert calls[1][1]["volumes"] == {}
     volume = SimpleNamespace(with_mount_options=lambda **options: options)
     assert ModalSDK.mounted(volume, read_only=True, sub_path="/abc") == {"read_only": True, "sub_path": "/abc"}
+
+
+# MemTotal (KiB) reported inside Modal VMs given 4608, 6656 and 7680 MiB, by jobs of 4, 6 and 7 GiB.
+MEASURED_VM_KIB = {4608: 4528332, 6656: 6592712, 7680: 7624904}
+
+
+def guest_memtotal_kib(vm_mib):
+    """A Modal VM's MemTotal: the memory it was given, less the 116,536 KiB and 1/64 that its kernel keeps."""
+    vm = vm_mib * 1024
+    return vm - 116536 - vm // 64
+
+
+def test_vm_memory_leaves_the_daemon_check_room_at_every_job_size():
+    from reasoning_ledger.server.compute_catalog import RESOURCE_BOUNDS
+    from reasoning_ledger.server.compute_docker import verify_daemon
+    from reasoning_ledger.server.compute_modal import vm_memory_mib
+
+    assert all(abs(guest_memtotal_kib(vm) - measured) <= 8 for vm, measured in MEASURED_VM_KIB.items())
+    # A fixed 512 MiB left an 8 GiB job about 6 MiB, which the daemon check refused on Modal.
+    assert guest_memtotal_kib(8192 + 512) - (8192 + 256) * 1024 < 8 * 1024
+    daemon = {"OSType": "linux", "Architecture": "x86_64", "CgroupVersion": "2", "MemoryLimit": True, "CpuCfsQuota": True,
+              "PidsLimit": True, "SecurityOptions": ["name=seccomp,profile=builtin"], "NCPU": 64}
+    low, high = RESOURCE_BOUNDS["memory_bytes"]
+    for memory in (low, 1024**3, 4 * 1024**3, 7 * 1024**3, 8 * 1024**3, 64 * 1024**3, high):
+        limits = {**DEFAULT_RESOURCES, "memory_bytes": memory}
+        reported = guest_memtotal_kib(vm_memory_mib(limits)) * 1024
+        assert reported - (memory + 256 * 1024**2) >= 128 * 1024**2
+        verify_daemon({**daemon, "MemTotal": reported}, limits, swapless=True)
+
+
+def test_capacity_reports_the_docker_hosts_memory_and_cpus_or_refuses():
+    from reasoning_ledger.server.compute_docker import DockerRunner
+
+    docker = object.__new__(DockerRunner)
+    docker._command = lambda args, **options: json.dumps({"MemTotal": 8 * 1024**3, "NCPU": 2, "OSType": "linux"}).encode()
+    assert docker.capacity() == {"memory_bytes": 8 * 1024**3, "cpus": 2}
+    for body in (b'{"MemTotal": "8G", "NCPU": 2}', b'{"NCPU": 2}', b"not json"):
+        docker._command = lambda args, body=body, **options: body
+        with pytest.raises(RuntimeFault, match="sandbox_unavailable"):
+            docker.capacity()
 
 
 def test_installed_optional_sdk_accepts_the_volume_calls():
