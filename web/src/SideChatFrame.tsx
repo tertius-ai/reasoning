@@ -39,7 +39,7 @@ function follow(event: React.PointerEvent<HTMLElement>, move: (next: PointerEven
 }
 
 export function useSideChatFrame({ user, aside, mainUnread }: { user: string; aside: React.RefObject<HTMLElement | null>; mainUnread: number }) {
-  const layout = useSideChatLayout(user);
+  const layout = useSideChatLayout(user, true);
   const phone = useMedia(PHONE), overlay = useMedia(OVERLAY);
   const latest = useRef(layout);
   latest.current = layout;

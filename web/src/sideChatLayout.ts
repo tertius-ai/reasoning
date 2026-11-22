@@ -134,10 +134,11 @@ function flush() {
     .finally(() => { sending = false; flush(); });
 }
 const subscribe = (listener: () => void) => { listeners.add(listener); return () => { listeners.delete(listener); }; };
-/** The signed-in person's side chat layout; it changes for everyone using it when any of them saves a new one. */
-export function useSideChatLayout(user: string): SideChatLayout {
+/** The signed-in person's side chat layout; it changes for everyone using it when any of them saves a new one. With `load`,
+ * it also reads the account's copy, which only an open side chat needs; until then the browser's copy stands in. */
+export function useSideChatLayout(user: string, load = false): SideChatLayout {
   adopt(user);
-  useEffect(() => { void loadSideChatLayout(user); }, [user]);
+  useEffect(() => { if (load) void loadSideChatLayout(user); }, [user, load]);
   return useSyncExternalStore(subscribe, () => current, () => DEFAULT_LAYOUT);
 }
 /** Whether a media query matches, kept up to date. */
