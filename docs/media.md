@@ -47,7 +47,11 @@ Each has a 12-second wall deadline, up to 200 pages and 2 MiB of UTF-8 text;
 POSIX workers additionally enforce 512 MiB address-space and eight CPU-second
 limits. macOS refuses every memory limit, so there the worker keeps the CPU
 limit and relies on pypdf's 75 MB per-stream decoding caps; elsewhere a refused
-memory limit fails the extraction. NUL characters and invalid Unicode are replaced. Coverage, truncation,
+memory limit fails the extraction. The worker stops after eight CPU seconds or ten
+seconds of wall time, inside the parent's deadline, and keeps the text of the pages
+it has read as partial coverage with the `time_limit` error. It checks before each
+page, and a signal at either limit interrupts a page in progress. Only a document
+that cannot be parsed in that time fails without text. NUL characters and invalid Unicode are replaced. Coverage, truncation,
 password requirements, empty text, and parser/resource failures are reported
 explicitly. Successful upload does not promise readable text. Writers can retry
 extraction from the original attachment through its PDF controls. Scanned pages
