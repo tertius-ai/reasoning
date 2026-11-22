@@ -6,9 +6,33 @@ import {
   type RenderTask,
 } from "pdfjs-dist";
 import pdfWorkerUrl from "pdfjs-dist/build/pdf.worker.min.mjs?url";
+import jbig2WasmUrl from "pdfjs-dist/wasm/jbig2.wasm?url&no-inline";
+import openjpegWasmUrl from "pdfjs-dist/wasm/openjpeg.wasm?url&no-inline";
+import foxitDingbatsUrl from "pdfjs-dist/standard_fonts/FoxitDingbats.pfb?url&no-inline";
+import foxitSymbolUrl from "pdfjs-dist/standard_fonts/FoxitSymbol.pfb?url&no-inline";
 import { nearestPdfPage } from "./pdfNavigation";
 
 GlobalWorkerOptions.workerSrc = pdfWorkerUrl;
+
+// pdf.js asks for its decoders and fonts by fixed file name. The worker decodes JBIG2 and CCITT (scanned pages) and
+// JPX images only with jbig2.wasm and openjpeg.wasm; without them it drops the image and the page renders blank.
+// With system fonts on, the only standard fonts it fetches are Symbol and ZapfDingbats. Each file is a content-hashed
+// build asset, so it caches like the rest of the release and survives upgrades for pages that are already open.
+const BUNDLED_BINARY_DATA: Record<string, Record<string, string>> = {
+  wasmUrl: { "jbig2.wasm": jbig2WasmUrl, "openjpeg.wasm": openjpegWasmUrl },
+  standardFontDataUrl: { "FoxitDingbats.pfb": foxitDingbatsUrl, "FoxitSymbol.pfb": foxitSymbolUrl },
+};
+
+// Passed as getDocument's BinaryDataFactory, which makes the worker request these files by name through this page.
+class BundledBinaryData {
+  async fetch({ kind, filename }: { kind: string; filename: string }): Promise<Uint8Array> {
+    const url = BUNDLED_BINARY_DATA[kind]?.[filename];
+    if (!url) throw new Error(`PDF support file ${filename} is not part of this build`);
+    const response = await fetch(url);
+    if (!response.ok) throw new Error(`PDF support file ${filename} could not be loaded (${response.status})`);
+    return new Uint8Array(await response.arrayBuffer());
+  }
+}
 
 const MIN_ZOOM = 0.5;
 const MAX_ZOOM = 2;
@@ -218,7 +242,7 @@ export function PdfViewer({ url, name }: { url: string; name: string }) {
     setPageNumber(1);
     setZoom(1);
     setError(null);
-    const task = getDocument({ url, useSystemFonts: true, disableFontFace: true });
+    const task = getDocument({ url, useSystemFonts: true, disableFontFace: true, BinaryDataFactory: BundledBinaryData });
     void task.promise.then((loaded) => {
       if (loaded.numPages > 200) { void task.destroy(); throw new Error("PDF preview is limited to 200 pages; download the document to inspect all pages."); }
       if (active) setDocument(loaded);

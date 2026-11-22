@@ -24,7 +24,15 @@ from reasoning_ledger.source_release import source_bytes
 from . import host, server_operations, server_recovery, server_upgrade, worker_host
 
 MAX_FILE = 32 * 1024**2
-STATIC_REFERENCE = re.compile(r"""["'(]((?:\./|\.\./|/assets/|assets/)[A-Za-z0-9._/-]+)""")
+# Quoted or url(...) references, and the template literals the bundler emits for imported asset URLs. A template
+# literal counts only as a whole `/assets/...` path, so library defaults such as pdf.js's `./pdf.worker.mjs` do not.
+STATIC_REFERENCE = re.compile(r"""(?:["'(]|`(?=/assets/[A-Za-z0-9._/-]+`))((?:\./|\.\./|/assets/|assets/)[A-Za-z0-9._/-]+)""")
+# Built files that JavaScript or CSS loads by URL: modules and module workers (.mjs), styles, fonts (including the
+# Type 1 standard fonts pdf.js fetches as .pfb), images, data and WebAssembly decoders.
+REFERENCED_ASSET_SUFFIXES = frozenset({".js", ".mjs", ".css", ".woff", ".woff2", ".ttf", ".pfb", ".svg", ".png", ".json", ".wasm"})
+# Notices for the pdf.js image decoders and standard fonts the PDF viewer ships as separate build files.
+PDFJS_NOTICES = ("pdf.js-JBIG2.txt", "pdf.js-JBIG2-wasm.txt", "pdf.js-OpenJPEG.txt", "pdf.js-OpenJPEG-wasm.txt",
+                 "pdf.js-Foxit-fonts.txt")
 
 
 class PublicHTML(HTMLParser):
@@ -64,6 +72,7 @@ def public_frontend(directory: Path) -> dict[str, bytes]:
         "web/licenses/Reasoning-NOTICE.txt",
         "web/licenses/KaTeX-MIT.txt",
         "web/licenses/IBM-Plex-OFL-1.1.txt",
+        *("web/licenses/" + name for name in PDFJS_NOTICES),
     }
     if not required <= files.keys():
         raise host.InstallError("frontend omits required notices")
@@ -95,7 +104,7 @@ def public_frontend(directory: Path) -> dict[str, bytes]:
                     target = reference
                 else:
                     target = posixpath.normpath(posixpath.join(posixpath.dirname(name), reference))
-                if Path(target).suffix in {".js", ".css", ".woff", ".woff2", ".ttf", ".svg", ".png", ".json"}:
+                if Path(target).suffix in REFERENCED_ASSET_SUFFIXES:
                     pending.append(target)
         if len(files) > 500 or sum(len(body) for body in files.values()) > host.MAX_BUNDLE:
             raise host.InstallError("frontend exceeds release bounds")
@@ -231,6 +240,7 @@ def build_bundle(source_root: Path, wheel: Path | None, frontend: Path, output: 
         "Reasoning-NOTICE.txt": source_root / "NOTICE",
         "KaTeX-MIT.txt": source_root / "web/public/licenses/KaTeX-MIT.txt",
         "IBM-Plex-OFL-1.1.txt": source_root / "web/public/licenses/IBM-Plex-OFL-1.1.txt",
+        **{name: source_root / "web/public/licenses" / name for name in PDFJS_NOTICES},
     }.items():
         if files["web/licenses/" + target] != read_file(source):
             raise host.InstallError("frontend contains stale legal material; rebuild it from the current source")

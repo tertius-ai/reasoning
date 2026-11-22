@@ -44,6 +44,7 @@ def payload():
         "web/licenses/Reasoning-NOTICE.txt": b"Notice",
         "web/licenses/KaTeX-MIT.txt": b"MIT",
         "web/licenses/IBM-Plex-OFL-1.1.txt": b"OFL",
+        **{"web/licenses/" + name: b"pdf.js notice " + name.encode() for name in release.PDFJS_NOTICES},
     }
 
 
@@ -277,6 +278,26 @@ def test_public_frontend_collects_only_reachable_dependencies_and_not_workbench(
         release.public_frontend(frontend)
 
 
+def test_public_frontend_collects_asset_urls_the_bundler_writes_as_template_literals(payload, tmp_path):
+    frontend = tmp_path / "web"
+    for name, body in payload.items():
+        if name.startswith("web/"):
+            path = tmp_path / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(body)
+    # The shape of the built PDF viewer chunk: pdf.js's own default worker name, then the imported asset URLs.
+    (frontend / "assets/shared-x.js").write_bytes(
+        b"workerSrc||=`./pdf.worker.mjs`;var w=`/assets/pdf.worker.min-AbCd1234.mjs`,"
+        b"j=`/assets/jbig2-AbCd1234.wasm`,f=`/assets/FoxitSymbol-AbCd1234.pfb`;"
+    )
+    for name in ("pdf.worker.min-AbCd1234.mjs", "jbig2-AbCd1234.wasm", "FoxitSymbol-AbCd1234.pfb"):
+        (frontend / "assets" / name).write_bytes(b"built asset")
+    result = release.public_frontend(frontend)
+    assert {"web/assets/pdf.worker.min-AbCd1234.mjs", "web/assets/jbig2-AbCd1234.wasm",
+            "web/assets/FoxitSymbol-AbCd1234.pfb"} <= result.keys()
+    assert "web/assets/pdf.worker.mjs" not in result
+
+
 @pytest.mark.parametrize(
     "body",
     [
@@ -491,7 +512,7 @@ def builder_inputs(payload, tmp_path, monkeypatch):
             path.write_bytes(body)
     (frontend / "licenses/Reasoning-Apache-2.0.txt").write_bytes((source / "LICENSE").read_bytes())
     (frontend / "licenses/Reasoning-NOTICE.txt").write_bytes((source / "NOTICE").read_bytes())
-    for name in ("KaTeX-MIT.txt", "IBM-Plex-OFL-1.1.txt"):
+    for name in ("KaTeX-MIT.txt", "IBM-Plex-OFL-1.1.txt", *release.PDFJS_NOTICES):
         path = source / "web/public/licenses" / name
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_bytes((frontend / "licenses" / name).read_bytes())
@@ -594,7 +615,8 @@ def test_release_default_catalog_cannot_follow_linked_directory_or_file(builder_
     assert not output.exists()
 
 
-@pytest.mark.parametrize("notice", ["Reasoning-Apache-2.0.txt", "Reasoning-NOTICE.txt", "KaTeX-MIT.txt", "IBM-Plex-OFL-1.1.txt"])
+@pytest.mark.parametrize("notice", ["Reasoning-Apache-2.0.txt", "Reasoning-NOTICE.txt", "KaTeX-MIT.txt", "IBM-Plex-OFL-1.1.txt",
+                                    *release.PDFJS_NOTICES])
 def test_release_builder_refuses_stale_built_notices(builder_inputs, notice):
     source, wheel, frontend = builder_inputs
     (frontend / "licenses" / notice).write_bytes(b"stale notice")

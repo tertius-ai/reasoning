@@ -82,7 +82,8 @@ def test_new_release_bundle_contains_source_not_a_wheel_and_verifies_every_paylo
                 "web/reasoning.svg": b"<svg/>", "web/assets/entry.js": b"export const fixture=true;"}
     for name, path in {"Reasoning-Apache-2.0.txt": ROOT / "LICENSE", "Reasoning-NOTICE.txt": ROOT / "NOTICE",
                        "KaTeX-MIT.txt": ROOT / "web/public/licenses/KaTeX-MIT.txt",
-                       "IBM-Plex-OFL-1.1.txt": ROOT / "web/public/licenses/IBM-Plex-OFL-1.1.txt"}.items():
+                       "IBM-Plex-OFL-1.1.txt": ROOT / "web/public/licenses/IBM-Plex-OFL-1.1.txt",
+                       **{name: ROOT / "web/public/licenses" / name for name in release.PDFJS_NOTICES}}.items():
         frontend["web/licenses/" + name] = path.read_bytes()
     monkeypatch.setattr(release, "public_frontend", lambda _: frontend)
     monkeypatch.setattr(release, "export_requirements", lambda *args, **kwargs: b"fixture==1 --hash=sha256:" + b"a" * 64 + b"\n")
