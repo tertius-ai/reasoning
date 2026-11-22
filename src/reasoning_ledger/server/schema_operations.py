@@ -2,6 +2,8 @@
 
 import re
 
+from .event_blobs import compact_requests
+from .event_blobs_schema import COMPACT_REQUESTS
 from .reaction_emoji_schema import ADD_CHECK as REACTION_EMOJI_ADD
 from .reaction_emoji_schema import DROP_CHECK as REACTION_EMOJI_DROP
 
@@ -68,6 +70,9 @@ def sqlite_migration(db, statement):
         return
     if statement == CLAIM_INDEX:
         repair_claim_index(db)
+        return
+    if statement == COMPACT_REQUESTS:
+        compact_requests(db)
         return
     if statement == BOT_DIRECT_COLUMN and any(row[1] == "direct_conversation_id" for row in db.execute("PRAGMA table_info(bot_runs)")):
         return

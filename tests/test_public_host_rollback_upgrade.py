@@ -4,6 +4,7 @@ import subprocess
 from contextlib import ExitStack
 
 import pytest
+from test_public_host_rollback import candidate
 from test_public_host_rollback_activation import activate, ready, rollback_activate, rollback_prepare
 from test_public_host_rollback_activation import activation_inputs as activation_inputs
 from test_public_host_rollback_activation import bootstrap as bootstrap
@@ -11,7 +12,7 @@ from test_public_host_rollback_activation import installed as installed
 from test_public_host_rollback_activation import payload as payload
 from test_public_host_rollback_activation import prepared_inputs as prepared_inputs
 from test_public_host_rollback_activation import rollback_inputs as rollback_inputs
-from test_public_host_upgrade import ORIGIN, operation, pack, prepare, refresh_plan
+from test_public_host_upgrade import OPERATION, ORIGIN, operation, pack, prepare, refresh_plan
 
 from reasoning_ledger.deployment import host, server_operations
 from reasoning_ledger.server import backup as snapshots
@@ -108,6 +109,9 @@ def test_managed_upgrade_after_completed_rollback_retains_original_history_and_a
         engine.command = engine.inspector.command = engine.installer.command = commands
         engine.inspector.health = readiness
         prepare(inputs, operation_id=NEXT_OPERATION)
+        # Retention keeps the rolled-back operation, bound through its source and named by provenance, with its stage.
+        assert (operation(original) / "rollback-completion.json").exists() and candidate(original).is_dir()
+        assert not (engine.root / "var/lib/reasoning-upgrade-scratch" / OPERATION).exists()
         result = engine.activate(
             operation_id=NEXT_OPERATION,
             confirmed_plan=inputs[5]["plan_id"],

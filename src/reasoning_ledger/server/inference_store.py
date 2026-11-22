@@ -507,9 +507,13 @@ class InferenceStore:
 
     def events(self, user: str, org: str, run: str, after: int, limit: int = 200) -> list[dict]:
         self.run(user, org, run)
+        from .event_blobs import expand
+
         with self.store.transaction() as db:
+            blobs = {}
             return [
-                {"sequence": row["sequence"], "event": json.loads(row["event_json"]), "created_at": row["created_at"]}
+                {"sequence": row["sequence"], "event": expand(db, org, json.loads(row["event_json"]), blobs),
+                 "created_at": row["created_at"]}
                 for row in db.execute(
                     "SELECT * FROM llm_events WHERE organization_id=? AND run_id=? AND sequence>? ORDER BY sequence LIMIT ?",
                     (org, run, after, limit),

@@ -18,6 +18,7 @@ import pwd
 import re
 import secrets
 import selectors
+import shutil
 import signal
 import stat
 import subprocess
@@ -104,6 +105,48 @@ BUSY_REASONS = {
 }
 # Phases in which the source server has not been fenced or stopped.
 BUSY_PHASES = ("none", "preparing", "target_ready")
+# Other refusals made in those phases, reported the same way: the source keeps serving and nothing was fenced.
+REFUSAL_REASONS = {
+    **BUSY_REASONS,
+    "insufficient_disk": "the server lacks the free disk space that the backup and migration need",
+    "retention_failed": "earlier upgrade backups or releases could not be removed safely",
+}
+# Each filesystem role's peak use during preparation, in multiples of the live data size L. L bounds both the SQLite
+# database with its write-ahead log (D) and the backup payload (P: that database plus artifact chunks and cloud bot
+# journals). Scratch (3L): the backup stages a database copy, the encrypted archive and a verification unpack (D + 2P);
+# the migration dry run then holds the archive, its restored copy and that copy's journal or compaction (2P + D).
+# Deploy (1L): the root-private retained archive (P). Live data (2L): the in-place migration's journal and compaction
+# copy (2D). On one filesystem the peaks do not coincide; the largest total comes during the live migration (scratch
+# archive and restored copy, retained archive, live journal and compaction), at most SPACE_FACTOR * L. Each
+# filesystem also keeps SPACE_MARGIN free for logs and growth between the check and the backup.
+SPACE_ROLES = (("var/lib/reasoning-upgrade-scratch", 3), ("var/lib/reasoning-deploy", 1), ("var/lib/reasoning", 2))
+SPACE_FACTOR = 5
+SPACE_MARGIN = 1024**3
+SPACE_FIELDS = ("filesystem", "required_bytes", "available_bytes")
+# Completed upgrades kept by retention: the one bound to the live installation and the next most recent.
+RETAINED_COMPLETED = 2
+PRUNED = ".pruned-"
+TEMPORARY_RELEASE = re.compile(r"\.(?:upgrade-)?release-[A-Za-z0-9_]{1,64}")
+
+
+def space_report(value):
+    """The only measured values that may accompany an insufficient-space refusal."""
+    if (
+        not isinstance(value, dict)
+        or set(value) != set(SPACE_FIELDS)
+        or not isinstance(value["filesystem"], str)
+        or value["filesystem"] not in {"/" + role for role, _ in SPACE_ROLES}
+        or any(type(value[key]) is not int or not 0 <= value[key] < 2**63 for key in SPACE_FIELDS[1:])
+        or value["available_bytes"] >= value["required_bytes"]
+    ):
+        raise ValueError("invalid space report")
+    return value
+
+
+def space_detail(value):
+    return "{:.1f} GB must be free on the filesystem holding {}; {:.1f} GB is free".format(
+        value["required_bytes"] / 1e9, value["filesystem"], value["available_bytes"] / 1e9
+    )
 
 
 class MigrationFailure(host.InstallError):
@@ -115,13 +158,14 @@ class MigrationFailure(host.InstallError):
 
 
 class ServerBusy(host.InstallError):
-    """The running server has work that would refuse offline migration; nothing was fenced or stopped."""
+    """Preparation refused while the source still serves (running work, disk space, retention); nothing was fenced or stopped."""
 
-    def __init__(self, reason):
-        if not isinstance(reason, str) or reason not in BUSY_REASONS:
+    def __init__(self, reason, *, space=None):
+        if not isinstance(reason, str) or reason not in REFUSAL_REASONS or (space is None) == (reason == "insufficient_disk"):
             raise host.InstallError("invalid busy diagnosis")
-        self.reason = reason
-        super().__init__("upgrade refused before stopping the server: " + BUSY_REASONS[reason])
+        self.reason, self.space = reason, None if space is None else space_report(space)
+        detail = "" if space is None else "; " + space_detail(space)
+        super().__init__("upgrade refused before stopping the server: " + REFUSAL_REASONS[reason] + detail)
 
 
 class CommandFailure(host.InstallError):
@@ -432,9 +476,10 @@ def bounded_command(args, *, check=True, timeout=1200):
 
 
 class HostUpgrade:
-    def __init__(self, *, root=Path("/"), command=None, health=None, droplet_id=None):
+    def __init__(self, *, root=Path("/"), command=None, health=None, droplet_id=None, disk_usage=None):
         self.root = root.absolute()
         self.command = command or bounded_command
+        self.disk_usage = disk_usage or os.statvfs
         self.installer = host.HostInstaller(root=self.root, command=self.command)
         self.inspector = server_operations.ServerInspector(root=self.root, command=self.command, health=health, droplet_id=droplet_id)
         self.directory = self.root / "var/lib/reasoning-deploy"
@@ -718,6 +763,206 @@ class HostUpgrade:
             raise ServerBusy("unverified") from None
         if value["busy"] is not None:
             raise ServerBusy(value["busy"])
+
+    def _live_bytes(self):
+        """An upper bound of the live database with its WAL and of the backup payload; links are never followed."""
+        data, total = self.root / "var/lib/reasoning", 0
+        self.inspector._directory(data, uid=data.lstat().st_uid, private=True)
+
+        def files():
+            for name in ("server.sqlite3", "server.sqlite3-wal", "artifacts", "cloud-bots"):
+                path = data / name
+                if path.is_symlink() or not path.exists():
+                    continue
+                if not path.is_dir():
+                    yield path
+                    continue
+                for current, _, names in os.walk(path, followlinks=False):
+                    yield from (Path(current) / item for item in names)
+
+        for count, path in enumerate(files()):
+            if count > 1024**2:
+                raise host.InstallError("live data exceeds the bounded space estimate")
+            info = path.lstat()
+            if stat.S_ISREG(info.st_mode):
+                total += info.st_size
+        return total
+
+    def _require_space(self):
+        """Refuse, with the source still serving, when a filesystem lacks the space preparation can need."""
+        live, filesystems = self._live_bytes(), {}
+        for relative, share in SPACE_ROLES:
+            path = self.root / relative
+            while path != self.root and not path.exists() and not path.is_symlink():
+                path = path.parent
+            info = path.lstat()
+            if not stat.S_ISDIR(info.st_mode):
+                raise host.InstallError("upgrade space check requires its original data directories")
+            label, shares, _ = filesystems.get(info.st_dev, ("/" + relative, 0, path))
+            filesystems[info.st_dev] = (label, shares + share, path)
+        for label, shares, path in filesystems.values():
+            usage = self.disk_usage(path)
+            if type(usage.f_bavail) is not int or type(usage.f_frsize) is not int:
+                raise host.InstallError("filesystem free space is unverified")
+            available, required = usage.f_bavail * usage.f_frsize, min(shares, SPACE_FACTOR) * live + SPACE_MARGIN
+            if available < required:
+                raise ServerBusy(
+                    "insufficient_disk", space={"filesystem": label, "required_bytes": required, "available_bytes": available}
+                )
+
+    @staticmethod
+    def _sync_directory(path):
+        fd = os.open(path, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        try:
+            os.fsync(fd)
+        finally:
+            os.close(fd)
+
+    def _entries(self, parent):
+        if not parent.exists() and not parent.is_symlink():
+            return []
+        self.inspector._directory(parent)
+        entries = sorted(parent.iterdir())
+        if len(entries) > 10_000:
+            raise host.InstallError("retained upgrade history exceeds the inspection limit")
+        return entries
+
+    def _discard(self, path, removed, key):
+        """Remove one root-owned directory tree. It first leaves its scanned name for a dot name in the same parent,
+        so an interrupted removal is never seen as history and is finished by the next prune."""
+        try:
+            info = path.lstat()
+        except FileNotFoundError:
+            return
+        if not stat.S_ISDIR(info.st_mode) or info.st_uid != os.getuid():
+            return
+        self.inspector._directory(path.parent)
+        hidden = path if path.name.startswith(PRUNED) else path.with_name(PRUNED + path.name)
+        if hidden != path:
+            host.atomic_rename(path, hidden)
+            self._sync_directory(path.parent)
+        total = info.st_blocks * 512
+        for current, directories, names in os.walk(hidden, followlinks=False):
+            for name in (*directories, *names):
+                total += os.lstat(os.path.join(current, name)).st_blocks * 512
+        shutil.rmtree(hidden)
+        self._sync_directory(path.parent)
+        removed["bytes_freed"] += total
+        removed[key] += 1
+
+    def _retention_record(self, operation):
+        """What retention needs from one operation directory; None when the releases it uses cannot be determined."""
+        info = operation.lstat()
+        if not stat.S_ISDIR(info.st_mode) or info.st_uid != os.getuid():
+            return None
+        record = {"operation": operation, "completed": False, "releases": set(), "created": 0, "binding": None, "rollback_id": None}
+        path = operation / "operation.json"
+        if not path.exists() and not path.is_symlink():
+            # Its journal was never written, so no release was installed for it.
+            return record
+        try:
+            state = self._read(path)
+            identity = state["identity"]
+            record["releases"] = {identity[role]["release_id"] for role in ("source", "target")}
+            if state["operation_id"] != operation.name or not all(map(_hex, record["releases"])):
+                return None
+        except (host.InstallError, OSError, ValueError, TypeError, KeyError, AttributeError, RecursionError):
+            return None
+        try:
+            rollback = operation / "rollback.json"
+            if rollback.exists() or rollback.is_symlink():
+                value = self._read(rollback)
+                if value["phase"] != "completed" or not _hex(value["rollback_id"]):
+                    return record
+                completion, receipt = operation / "rollback-completion.json", self._rollback_receipt(state, value, operation)
+                binding, record["rollback_id"] = identity["source"], value["rollback_id"]
+            elif state["phase"] == "completed":
+                completion, receipt, binding = operation / "completion.json", self._upgrade_receipt(state, operation), identity["target"]
+            else:
+                return record
+            created = state["backup"]["created_at"]
+            if host.canonical(self._read(completion)) == host.canonical(receipt) and type(created) is int:
+                record.update(completed=True, created=created, binding=host.canonical(binding))
+        except (host.InstallError, OSError, ValueError, TypeError, KeyError, AttributeError, RecursionError):
+            pass
+        return record
+
+    def _prune(self, operation_id):
+        """Before a new preparation, remove completed upgrade history, scratch and releases that are no longer needed.
+
+        Kept: the completed operation bound to the live installation and the next most recent completed one, the
+        operation named by live rollback provenance, every operation that is not completed or cannot be read, the live
+        release and each kept operation's source and target releases. A refusal leaves the source serving.
+        """
+        if any(path.exists() or path.is_symlink() for path in (self.active, self.directory / "active-server-recovery.json")):
+            raise host.InstallError("retention requires no pending upgrade or replacement recovery")
+        removed = {"upgrades_removed": 0, "releases_removed": 0, "scratch_removed": 0, "bytes_freed": 0}
+        try:
+            self._prune_history(removed)
+            if any(removed.values()):
+                self._write(self.directory / "server-upgrade-retention.json", {"format": 1, "operation_id": operation_id, **removed})
+        except (host.InstallError, OSError, ValueError, TypeError, KeyError, AttributeError, RecursionError):
+            raise ServerBusy("retention_failed") from None
+        return removed
+
+    def _prune_history(self, removed):
+        live = self._read(self.directory / "installation.json")
+        if live.get("phase") != "services_started" or not _hex(live.get("release_id")):
+            raise host.InstallError("retention requires the started live installation binding")
+        binding = host.canonical({key: value for key, value in live.items() if key != "phase"})
+        provenance = None
+        journal = self.root / "var/lib/reasoning/server-rollback.json"
+        if journal.exists() or journal.is_symlink():
+            uid = pwd.getpwnam("reasoning").pw_uid
+            with self._input(journal, 8192, uid=uid, parent_uid=uid) as (stream, _):
+                value = json.loads(stream.read(8193), object_pairs_hook=_pairs)
+            if not isinstance(value, dict) or not _hex(value.get("operation_id")):
+                raise host.InstallError("live rollback provenance is unreadable")
+            provenance = value["operation_id"]
+        history, releases = self.directory / "server-upgrades", self.root / "opt/reasoning/releases"
+        scratch, run, lib = self.root / "var/lib/reasoning-upgrade-scratch", self.root / "run", self.root / "var/lib"
+        # Finish removals that an interrupted prune left under their dot names.
+        for parent, pattern, key in (
+            (history, r"[a-f0-9]{64}", "upgrades_removed"),
+            (releases, r"[a-f0-9]{64}", "releases_removed"),
+            (releases, TEMPORARY_RELEASE.pattern, "scratch_removed"),
+            (scratch, r"[a-f0-9]{64}", "scratch_removed"),
+            (run, r"reasoning-(?:upgrade|rollback)-[a-f0-9]{64}", "scratch_removed"),
+            (lib, r"reasoning-rollback-[a-f0-9]{64}", "scratch_removed"),
+        ):
+            for path in self._entries(parent):
+                if re.fullmatch(re.escape(PRUNED) + pattern, path.name):
+                    self._discard(path, removed, key)
+        operations, unknown = [], False
+        for path in self._entries(history):
+            if _hex(path.name):
+                record = self._retention_record(path)
+                unknown = unknown or record is None
+                operations += [] if record is None else [record]
+        completed = sorted((item for item in operations if item["completed"]), key=lambda item: (item["created"], item["operation"].name))
+        completed.reverse()
+        kept = [item["operation"].name for item in completed if item["binding"] == binding][:1]
+        kept += [item["operation"].name for item in completed if item["operation"].name not in kept][: RETAINED_COMPLETED - len(kept)]
+        keep = {*kept, *(item["operation"].name for item in operations if not item["completed"])} | ({provenance} - {None})
+        needed = {live["release_id"]}.union(*(item["releases"] for item in operations if item["operation"].name in keep))
+        for item in completed:
+            name, rollback = item["operation"].name, item["rollback_id"]
+            victims = [scratch / name, run / ("reasoning-upgrade-" + name)]
+            if rollback is not None:
+                # A kept completed rollback replays against its published stage; only its removal takes the stage.
+                victims += [run / ("reasoning-rollback-" + rollback)] + ([] if name in keep else [lib / ("reasoning-rollback-" + rollback)])
+            for victim in victims:
+                self._discard(victim, removed, "scratch_removed")
+            if name not in keep:
+                self._discard(item["operation"], removed, "upgrades_removed")
+        if unknown:
+            # An operation whose releases cannot be read keeps every release.
+            return
+        for path in self._entries(releases):
+            if _hex(path.name) and path.name not in needed:
+                self._discard(path, removed, "releases_removed")
+            elif TEMPORARY_RELEASE.fullmatch(path.name):
+                self._discard(path, removed, "scratch_removed")
 
     def _snapshot(self, state, operation, uid):
         key = operation / "backup.key"
@@ -2233,9 +2478,6 @@ class HostUpgrade:
             raise host.InstallError("the application service account must not own root upgrade recovery material")
         self._rollback_upgrade_support(target_manifest)
         if state is None:
-            target_path = self.root / "opt/reasoning/releases" / target_release
-            if target_path.exists() or target_path.is_symlink():
-                raise host.InstallError("upgrade cannot adopt an existing target release without its original operation")
             report = self.inspector.inspect(source_manifest, source_release, source_checksum, origin, owned_bootstrap_fd=fd)
             plan = server_operations.upgrade_plan(report, source_manifest, target_manifest, target_release, target_checksum)
             if (
@@ -2245,6 +2487,11 @@ class HostUpgrade:
                 or not {"server-maintenance-v1", "server-upgrade-preparation-v1"} <= set(target_manifest.get("installation_features", []))
             ):
                 raise host.InstallError("confirmed upgrade preflight differs or target offline maintenance is unsupported")
+            # No upgrade or recovery is pending here. Earlier completed history is pruned before this one is journaled.
+            self._prune(operation_id)
+            target_path = self.root / "opt/reasoning/releases" / target_release
+            if target_path.exists() or target_path.is_symlink():
+                raise host.InstallError("upgrade cannot adopt an existing target release without its original operation")
             # Before any journal: a busy server refuses with nothing pending, so make upgrade can simply run again.
             self._require_idle(source_release)
             metadata = {}
@@ -2318,6 +2565,7 @@ class HostUpgrade:
         if state["phase"] == "target_ready":
             # Again just before the fence: work may have started while the target was installed.
             self._require_idle(source_release)
+            self._require_space()
             advance("fencing")
         if state["phase"] == "fencing":
             self._fence(state)

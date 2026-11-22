@@ -328,7 +328,7 @@ def run_upgrade(target_bundle: Path, directory: Path, command, *, detect_public_
                 else:
                     approve(
                         "Stop the server, retain a verified encrypted backup, and prepare this upgrade? "
-                        "If the server has running work that would block migration, nothing is stopped.",
+                        "If the server has running work that would block migration, or too little free disk space, nothing is stopped.",
                         "prepare upgrade " + source["public_url"],
                     )
                     with setup_ui.upgrade_progress(
@@ -336,7 +336,9 @@ def run_upgrade(target_bundle: Path, directory: Path, command, *, detect_public_
                         (
                             "snapshot SSH trust",
                             "upload exact releases",
+                            "remove earlier upgrades",
                             "check for running work",
+                            "check disk space",
                             "fence restart",
                             "stop service",
                             "verify encrypted backup",

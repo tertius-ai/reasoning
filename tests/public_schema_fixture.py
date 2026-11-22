@@ -3,6 +3,7 @@
 
 def remove_collaboration_schema(db):
     """Strip collaboration migrations in foreign-key dependency order, preserving core rows."""
+    db.execute("DROP TABLE IF EXISTS llm_event_blobs")
     db.execute("DROP TABLE IF EXISTS compute_environments")
     db.execute("DROP TABLE IF EXISTS user_side_chat_layouts")
     if "side_chat_open" in {row[1] for row in db.execute("PRAGMA table_info(topic_subscriptions)")}:

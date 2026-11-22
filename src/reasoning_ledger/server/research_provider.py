@@ -15,6 +15,7 @@ from decimal import Decimal
 
 import httpx
 
+from .event_blobs import stored_request
 from .inference_timing import Spans
 from .openrouter import (
     MAX_EVENT_BYTES,
@@ -439,6 +440,9 @@ class ResearchCompletion:
             )
             event = {"type": "agent", "phase": "provider_response" if response else "provider_request", "call_id": call}
             event["response" if response else "request"] = response if response else payload
+            if not response:
+                # Each round repeats earlier messages; they are kept once and expanded exactly for readers.
+                event = stored_request(db, self.row["organization_id"], event)
             self.inference._event(db, self.row["organization_id"], self.row["id"], event)
             if opening is not None:
                 self._prefix = db.execute("SELECT output_text FROM llm_runs WHERE id=?", (self.row["id"],)).fetchone()[0]

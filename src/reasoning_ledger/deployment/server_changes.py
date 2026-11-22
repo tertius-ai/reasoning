@@ -33,7 +33,7 @@ LAUNCHER = (
 def busy_report(request, engine, error):
     """A refusal before the source was fenced or stopped, with its allowlisted diagnosis; None otherwise."""
     try:
-        if (not isinstance(error, server_upgrade.ServerBusy) or error.reason not in server_upgrade.BUSY_REASONS
+        if (not isinstance(error, server_upgrade.ServerBusy) or error.reason not in server_upgrade.REFUSAL_REASONS
                 or request["mode"] != "upgrade-prepare"
                 or not all(server_upgrade._hex(request[key]) for key in ("operation_id", "plan_id"))):
             return None
@@ -48,10 +48,20 @@ def busy_report(request, engine, error):
             phase = "none"
         if phase not in server_upgrade.BUSY_PHASES:
             return None
-        return {"format": 1, "kind": "server_busy", "mode": request["mode"], "operation_id": request["operation_id"],
-                "plan_id": request["plan_id"], "phase": phase, "reason": error.reason}
+        report = {"format": 1, "kind": "server_busy", "mode": request["mode"], "operation_id": request["operation_id"],
+                  "plan_id": request["plan_id"], "phase": phase, "reason": error.reason}
+        if error.reason == "insufficient_disk":
+            report.update(server_upgrade.space_report(error.space))
+        return report
     except Exception:
         return None
+
+
+BUSY_ADVICE = {
+    "insufficient_disk": "Free disk space on the server",
+    "retention_failed": "Inspect the earlier upgrades in /var/lib/reasoning-deploy/server-upgrades and the releases in "
+                        "/opt/reasoning/releases on the server",
+}
 
 
 def failure_report(request, *, engine=None, error=None):
@@ -88,16 +98,22 @@ def reject_busy(value, request):
     """Raise the operator's explanation of a refusal made before the server was stopped."""
     expected = {"format": 1, "kind": "server_busy", "mode": "upgrade-prepare", "operation_id": request["operation_id"],
                 "plan_id": request["plan_id"], "phase": value.get("phase"), "reason": value.get("reason")}
+    space = None
+    if value.get("reason") == "insufficient_disk":
+        space = server_upgrade.space_report({key: value.get(key) for key in server_upgrade.SPACE_FIELDS})
+        expected.update(space)
     if (request["mode"] != "upgrade-prepare" or set(value) != set(expected)
             or any(type(value[key]) is not type(item) or value[key] != item for key, item in expected.items())
-            or value["phase"] not in server_upgrade.BUSY_PHASES or value["reason"] not in server_upgrade.BUSY_REASONS):
+            or not isinstance(value["phase"], str) or value["phase"] not in server_upgrade.BUSY_PHASES
+            or not isinstance(value["reason"], str) or value["reason"] not in server_upgrade.REFUSAL_REASONS):
         raise ValueError("invalid bound busy report")
     nothing_pending = value["phase"] == "none"
     raise host.InstallError(
-        "Upgrade refused before stopping the server: " + server_upgrade.BUSY_REASONS[value["reason"]] + ". "
+        "Upgrade refused before stopping the server: " + server_upgrade.REFUSAL_REASONS[value["reason"]]
+        + ("" if space is None else " (" + server_upgrade.space_detail(space) + ")") + ". "
         "The server was not stopped and keeps serving"
         + (". No upgrade is pending; " if nothing_pending else "; this upgrade is pending but has not fenced or stopped anything. ")
-        + "Let that work finish or stop it, then run "
+        + BUSY_ADVICE.get(value["reason"], "Let that work finish or stop it") + ", then run "
         + ("make upgrade again." if nothing_pending else "make upgrade-resume.")
     )
 

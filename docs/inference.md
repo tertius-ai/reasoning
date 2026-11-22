@@ -330,6 +330,21 @@ receipts, contexts, sessions, and accessible project text-file revisions.
 Absent detail in older records is not reconstructed. Compute log bodies and
 binary artifacts are referenced by metadata, not embedded.
 
+Each round of a research reply records the exact request it sends to the
+model, and each round repeats the messages of the rounds before it. A
+`provider_request` run event therefore stores each entry of `request.messages`
+and the whole `request.tools` value as `{"$blob": sha256}`, marked
+`"request_encoding": "sha256-blobs-v1"`. The values are kept once per
+organization in `llm_event_blobs`, keyed by the SHA-256 of their JSON. The run
+events API and every export restore the exact original request, so readers see
+no difference. The migration that adds `llm_event_blobs` rewrites requests
+recorded inline into this form on SQLite installations. PostgreSQL
+installations keep earlier requests inline, and readers accept both forms. When
+a migration leaves more than a quarter of the SQLite file as free pages, offline
+migration rewrites the stopped database without them (`VACUUM INTO` a new file
+that replaces the original once complete), keeping every row and row id. This
+keeps later backups, and the upgrades that make them, from copying freed space.
+
 Every format contains private research and participant names, but excludes
 operator credentials, provider keys, login sessions, and unsent drafts. Share
 only with trusted recipients. Clipboard fallback provides selectable JSON and

@@ -666,11 +666,18 @@ def test_default_output_has_no_wire_token_cap_and_records_exact_call_events(inst
     result = state.run(owner["user_id"], owner["organization_id"], run["id"])
     assert result["status"] == "succeeded" and len(fixture.requests) == 6
     assert all("max_completion_tokens" not in request and "max_tokens" not in request for request in fixture.requests)
+    from reasoning_ledger.server.event_blobs import expand
+
     with state.store.transaction() as db:
-        events = [json.loads(row[0]) for row in db.execute("SELECT event_json FROM llm_events WHERE run_id=?", (run["id"],))]
+        stored = [json.loads(row[0]) for row in db.execute("SELECT event_json FROM llm_events WHERE run_id=?", (run["id"],))]
+        events = [expand(db, owner["organization_id"], event) for event in stored]
+        blobs = db.execute("SELECT COUNT(*) FROM llm_event_blobs WHERE organization_id=?", (owner["organization_id"],)).fetchone()[0]
     requests = [event["request"] for event in events if event.get("phase") == "provider_request"]
     responses = [event["response"] for event in events if event.get("phase") == "provider_response"]
     assert requests == fixture.requests and len(responses) == 6
+    # Each round repeats earlier messages; they are stored once.
+    assert all(event.get("request_encoding") for event in stored if event.get("phase") == "provider_request")
+    assert blobs < sum(len(request["messages"]) for request in requests)
     assert KEY not in json.dumps(events)
 
 
