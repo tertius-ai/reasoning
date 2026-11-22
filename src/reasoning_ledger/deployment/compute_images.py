@@ -226,6 +226,144 @@ def run_refresh_relays(directory: Path, command, *, detect_public_ipv4=None, rem
         return {**result, "ssh_closed": True}
 
 
+def relay_limits(configuration, workers):
+    """The organization's live Modal relay workers, and every installed image with its maximum resources."""
+    try:
+        images = {record["id"]: ComputeImage.parse(record) for record in configuration["images"]}
+        if not isinstance(workers, list) or any(not isinstance(worker, dict) for worker in workers):
+            raise ValueError
+        relays = [worker for worker in workers if str(worker.get("name", "")).startswith(RELAY_PREFIX)
+                  and worker.get("revoked_at") is None and worker.get("retired_at") is None]
+        for worker in relays:
+            if (not re.fullmatch(r"[a-f0-9]{32}", str(worker["id"])) or not isinstance(worker["image_ids"], list)
+                    or worker["resources"] != resources(worker["resources"])):
+                raise ValueError
+    except (KeyError, TypeError, ValueError):
+        raise InstallError("invalid compute images, Modal relay identity or limits") from None
+    if not relays:
+        raise InstallError("no Modal relay workers are enrolled; run make compute-setup first")
+    return images, relays
+
+
+def describe(limits):
+    return f"{limits['cpu']} CPU, {limits['memory_bytes'] // 1024**2} MiB memory, {limits['wall_time_seconds']} s wall time"
+
+
+def choose_limits(current):
+    """Only CPU, memory and wall time are asked, as in Modal setup; disk, PIDs and artifact limits are kept."""
+    try:
+        chosen = {**current,
+                  "cpu": int(ask("Maximum logical CPUs per compute job", current["cpu"])),
+                  "memory_bytes": int(ask("Maximum MiB memory per compute job", current["memory_bytes"] // 1024**2)) * 1024**2,
+                  "wall_time_seconds": int(ask("Maximum seconds per compute job", current["wall_time_seconds"]))}
+        return resources(chosen)
+    except (TypeError, ValueError):
+        raise InstallError("choose whole numbers within the supported bounds: 1 to 64 CPUs, 64 MiB to 256 GiB memory, "
+                           "1 to 86400 seconds") from None
+
+
+def run_relay_limits(directory: Path, command, *, detect_public_ipv4=None, remote=owned_modal_remote, transport=None):
+    """Change the per-job limits of every Modal relay: the server's record first, then each relay on the chat host.
+
+    The relays must stay drained throughout, so a relay never claims a job while it and the server disagree. An
+    interrupted change is saved in DEPLOY_STATE/compute-limits and resumed by running the same command again.
+    """
+    with locked_directory(directory.absolute()) as state:
+        current = current_binding(state)
+        bundle = archived_release(state, current["release_id"])
+        manifest, release, checksum = inspect_bundle(bundle, current["bundle_sha256"])
+        if release != current["release_id"] or checksum != current["bundle_sha256"]:
+            raise InstallError("synchronize the installed release before changing Modal relay limits")
+        if "modal-relay-limits-v1" not in manifest.get("installation_features", []):
+            raise InstallError("upgrade the server to a release that can change Modal relay limits (make upgrade), then retry")
+        config_path, plan_path, ownership = state / "setup.json", state / "plan.json", state / "ownership"
+        config, document = read_document(config_path), read_document(plan_path)
+        origin = public_origin(operator_origin(config, document, current))
+        work = state / "compute-limits"
+        with locked_directory(work):
+            pending_path = work / "pending.json"
+            pending = read_document(pending_path) if pending_path.exists() or pending_path.is_symlink() else None
+            if pending is not None:
+                organization, email = pending["organization_id"], pending["email"]
+                print(f"Resuming the interrupted change to {describe(pending['resources'])}.")
+            else:
+                completion = state / "setup-completion.json"
+                default = read_document(completion)["organization_id"] if completion.exists() else None
+                organization = ask("Existing organization ID", default)
+                email = ask("Organization administrator email")
+                if not re.fullmatch(r"[a-f0-9]{32}", organization):
+                    raise InstallError("organization ID must be a 32-character identity")
+            secret = getpass.getpass("Organization administrator password (not saved): ")
+            endpoint = "/api/organizations/" + organization
+            admin = AdminSession(origin, email, secret, transport=transport)
+            try:
+                images, relays = relay_limits(admin.request("GET", endpoint + "/compute-configuration"),
+                                              admin.request("GET", endpoint + "/compute-workers"))
+                identities = sorted(worker["id"] for worker in relays)
+                undrained = [worker["id"] for worker in relays if not worker.get("draining")]
+                if undrained:
+                    raise InstallError("drain every Modal relay worker first (Administration → Compute → Drain worker); "
+                                       "still taking jobs: " + ", ".join(undrained))
+                if pending is not None:
+                    if pending["workers"] != identities:
+                        raise InstallError("the Modal relay workers changed since the interrupted change; "
+                                           f"reconcile them, then remove {pending_path}")
+                    chosen = pending["resources"]
+                else:
+                    if any(worker["resources"] != relays[0]["resources"] for worker in relays):
+                        raise InstallError("the Modal relays have different limits, and this command gives them all the same "
+                                           "limits; reconcile them first")
+                    print(f"Site: {origin}\nOrganization: {organization}")
+                    print(f"Current limits of every Modal relay: {describe(relays[0]['resources'])}.")
+                    chosen = choose_limits(relays[0]["resources"])
+                for worker in relays:
+                    for image in worker["image_ids"]:
+                        if image not in images or not fits(chosen, images[image].maximum_resources):
+                            raise InstallError(f"these limits exceed the maximum resources of image {image}")
+                print(f"Site: {origin}")
+                for worker in relays:
+                    print(f"Relay {worker['id']}: {describe(worker['resources'])} → {describe(chosen)}")
+                print("Each job's Modal VM is sized to the resources the job requests, so larger jobs cost more on the "
+                      "relays' Modal account.")
+                print("Enrollments, Modal credentials, catalogs and relay code are unchanged. The relays stay drained; "
+                      "resume claims on each afterwards.")
+                approve("Change the Modal relay limits?", "change relay limits " + origin)
+                if pending is None:
+                    pending = {"organization_id": organization, "email": email, "resources": chosen, "workers": identities}
+                    write_document(pending_path, pending, new=True)
+                for worker in relays:
+                    if worker["resources"] != chosen:
+                        changed = admin.request("PUT", endpoint + f"/compute-workers/{worker['id']}/resources", chosen)
+                        if not isinstance(changed, dict) or changed.get("id") != worker["id"] or changed.get("resources") != chosen:
+                            raise InstallError("the server's relay limits change is unverified; run the same command again")
+            finally:
+                admin.close()
+            plan_id = document["plan_id"] if "plan_id" in document else read_document(state / "setup-completion.json")["plan_id"]
+            cidr = temporary_ssh_cidr(detect_public_ipv4)
+            try:
+                config, opened = _ssh_action(
+                    command, state, config_path, config, plan_path, plan_id, ownership, ["--open-cidr", cidr, "--wait-seconds", 60]
+                )
+                if opened.get("phase") != "open":
+                    raise InstallError("temporary SSH access is unverified")
+                request = {"format": 1, "release_id": release, "public_url": origin, "resources": chosen, "workers": identities}
+                result = remote(config, document, ownership, bundle, request, "limits")
+                if (not isinstance(result, dict) or result.get("resources") != chosen or result.get("relays") != identities
+                        or result.get("live_compute_verified") is not False):
+                    raise InstallError("Modal relay limits receipt is invalid")
+            finally:
+                config, closed = close_ssh_with_token_recovery(
+                    lambda arguments: _invoke(command, arguments), state, config_path, config, plan_path, ownership, plan_id,
+                    document["plan"],
+                )
+                if closed.get("phase") != "closed":
+                    raise InstallError("SSH closure is unverified; run make doctor with the same deployment state")
+            pending_path.unlink()
+        print("Relay limits changed. Resume claims on each relay worker, then run a small job; live execution is not "
+              "claimed until one succeeds.")
+        return {**result, "ssh_closed": True}
+
+
 def _journal(work, target, origin, release, configuration, workers, approved):
     path = work / "addition.json"
     if path.exists() or path.is_symlink():

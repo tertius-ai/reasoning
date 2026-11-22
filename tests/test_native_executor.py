@@ -435,8 +435,11 @@ def test_native_executor_finishes_without_tools_after_budget_exhaustion():
     assert "tools" not in final_payload
     assert "tool_choice" not in final_payload
     assert "tool-call budget is now exhausted" in final_payload["messages"][-1]["content"]
-    denied = [event for event in events if event.kind.value == "tool.completed"][-1]
+    ran, denied = [event for event in events if event.kind.value == "tool.completed"]
     assert denied.data["ok"] is False
+    assert denied.data["skipped"] is True, "a call the budget denied never ran"
+    assert "skipped" not in ran.data
+    assert "skipped" not in json.loads(final_payload["messages"][-2]["content"]), "the marker is for the timeline, not the model"
 
 
 def test_native_executor_repairs_future_intent_before_completing():
