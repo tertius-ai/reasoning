@@ -277,9 +277,10 @@ except ImportError as exc:  # pragma: no cover
 # The workbench page's policy is a response header, not a <meta> tag, because
 # browsers ignore frame-ancestors in a meta policy. The built page loads only
 # same-origin module scripts (the frontend build rejects inline script); the
-# Explorer bootstrap is a non-executable JSON script.
+# Explorer bootstrap is a non-executable JSON script. 'wasm-unsafe-eval' lets the
+# PDF viewer's worker compile the pdf.js image decoders; JavaScript eval stays blocked.
 WORKBENCH_CONTENT_SECURITY_POLICY = (
-    "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; "
+    "default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; "
     "img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self'; "
     "object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'"
 )

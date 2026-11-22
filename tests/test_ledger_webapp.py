@@ -37,7 +37,7 @@ from reasoning_ledger.webapp import (  # noqa: E402
 
 AUTHOR = {"operator": "op", "agent": "a", "session": "s"}
 WORKBENCH_CSP = (
-    "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; "
+    "default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; "
     "img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self'; "
     "object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'"
 )

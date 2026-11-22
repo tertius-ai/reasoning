@@ -61,8 +61,10 @@ from .workflow_worker import WorkflowWorker
 
 SESSION_COOKIE = "reasoning_session"
 CSRF_COOKIE = "reasoning_csrf"
+# 'wasm-unsafe-eval' lets the PDF viewer's worker compile the pdf.js image decoders (JBIG2, CCITT, JPX). It permits
+# WebAssembly compilation only; JavaScript eval stays blocked and every script still comes from this origin.
 APPLICATION_CSP = (
-    "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; "
+    "default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; "
     "img-src 'self' data:; font-src 'self' data:; connect-src 'self'; "
     "object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'"
 )
