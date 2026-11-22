@@ -709,7 +709,13 @@ class Store:
                     AND m.sequence>COALESCE(s.last_read_sequence,0)) AS unread_count,
                 (SELECT COUNT(*) FROM message_mentions mm JOIN messages m ON m.id=mm.message_id
                     WHERE mm.organization_id=t.organization_id AND mm.user_id=? AND m.topic_id=t.id
-                    AND m.sequence>COALESCE(s.last_read_sequence,0)) AS unread_mention_count
+                    AND m.sequence>COALESCE(s.last_read_sequence,0)) AS unread_mention_count,
+                (SELECT COUNT(*) FROM messages m JOIN messages p ON p.organization_id=m.organization_id AND p.id=m.reply_to
+                    WHERE m.organization_id=t.organization_id AND m.topic_id=t.id AND m.sequence>COALESCE(s.last_read_sequence,0)
+                    AND p.author_id=? AND p.sender_kind IN ('human','assistant')
+                    AND (m.sender_kind='bot' OR (m.sender_kind='human' AND m.author_id<>?))
+                    AND NOT EXISTS (SELECT 1 FROM message_mentions own WHERE own.message_id=m.id AND own.user_id=?))
+                    AS unread_reply_count
                 FROM topics t LEFT JOIN topic_subscriptions s ON s.organization_id=t.organization_id AND s.topic_id=t.id AND s.user_id=?
                 JOIN channels c ON c.organization_id=t.organization_id AND c.id=t.channel_id
                 WHERE t.organization_id=? AND t.deleted_at IS NULL AND c.deleted_at IS NULL AND c.project_id IN (
@@ -718,7 +724,7 @@ class Store:
                     WHERE p.organization_id=? AND p.deleted_at IS NULL
                         AND (p.visibility='organization' OR ? IN ('owner','admin') OR pm.user_id IS NOT NULL)
                 ) ORDER BY t.created_at,t.id""",
-                    (user_id, user_id, organization_id, user_id, organization_id, role),
+                    (user_id, user_id, user_id, user_id, user_id, organization_id, user_id, organization_id, role),
                 )
             ]
             for state in result["topic_state"]:

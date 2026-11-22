@@ -295,12 +295,26 @@ Record actual run IDs, tool outputs, and artifacts when reporting acceptance.
 ## Navigation and lifecycle
 
 Ctrl/⌘+B toggles navigation; Ctrl/⌘+Shift+P toggles people and bots;
-Ctrl/⌘+K searches; Alt+↑/↓ changes topics. `?` toggles help outside text fields.
+Ctrl/⌘+K searches; Alt+↑/↓ changes topics; Alt+Shift+↑/↓ steps through the
+mentions and replies in a topic. `?` toggles help outside text fields.
 `@` (people and bots), `#` (topics and projects) and `/` open autocomplete;
 arrows and Enter/Tab select; Escape dismisses menus.
 On a phone, **More topic actions** reveals the compact toolbar.
 Hover or keyboard-focus a message for reaction, message actions (copy link,
 fork, edit), and single-message copy controls. The plus attaches pictures, PDFs, Markdown and TeX files; each waits as a chip above the text until you send.
+
+Mentions of you and replies to you are marked in amber. A reply to you is
+someone's reply to your message, or to a model answer you asked for; a model's
+answer itself is not one, and a reply that also mentions you counts as a mention.
+Each topic shows `@` and the number of unread mentions of you and `↩` and the
+number of unread replies to you, in every topic you can read, followed or not. A
+collapsed channel or closed project adds them up on its heading, the sidebar
+header names the totals (click them to open what holds them), and while the
+sidebar is closed its button carries their sum. Opening a topic marks it read
+from its end as before; when it held mentions or replies you had not read, a bar
+at its top says so and steps to each (↓ and ↑, or Alt+Shift+↓/↑ outside text
+fields). Those messages carry a tag and an amber edge, and your message shows how
+many of its replies are new, until you close the bar.
 
 A private project is visible to its roster and to every organization owner and
 admin, who can also open its topics. If you see a project marked

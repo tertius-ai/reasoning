@@ -82,8 +82,11 @@ with accessible names, not color alone. Project, channel, and topic creation
 controls sit at the hierarchy level they affect. Channels use alternating-color
 `#` labels without disclosure arrows; topic labels join an italic,
 alternating-color Greek glyph to the name with a hyphen. Author labels and
-timestamps identify participants. Unread and mention badges reflect server
-state; unfollowed topics remain accessible but recede in the navigation.
+timestamps identify participants. Unread, mention and reply badges reflect server
+state; unfollowed topics remain accessible but recede in the navigation. Amber
+marks what is for the reader: `@` with the number of mentions and `↩` with the
+number of replies to them, never color alone, added up on collapsed channels,
+closed projects, the sidebar header and the navigation toggle.
 Organization creation is an owner/administrator action and presents the fresh,
 explicitly reused, and no-AI credential choices before creation. The sidebar overlays the
 conversation below 700 px; its always-visible toggle and Ctrl/Command+B open

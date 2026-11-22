@@ -4,10 +4,11 @@ import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { createServer } from "vite";
 
-let server, api, TopicNavigation, automaticModelAttempt, prepareMessageAttempt, initializeDraft, agentCommand, alphaMessageGroups, MessageMarkdown;
+let server, api, forYou, TopicNavigation, automaticModelAttempt, prepareMessageAttempt, initializeDraft, agentCommand, alphaMessageGroups, MessageMarkdown;
 before(async () => {
   server = await createServer({ appType: "custom", logLevel: "silent", server: { middlewareMode: true } });
   api = await server.ssrLoadModule("/src/organization-api.ts");
+  forYou = await server.ssrLoadModule("/src/forYou.ts");
   ({ TopicNavigation, automaticModelAttempt, prepareMessageAttempt, initializeDraft, agentCommand, alphaMessageGroups, MessageMarkdown } = await server.ssrLoadModule("/src/OrganizationApp.tsx"));
 });
 after(async () => { await server?.close(); });
@@ -48,7 +49,7 @@ test("navigation nests creation controls and renders colored channel and topic l
       { id: "d", project_id: "p", name: "notes" },
     ],
     topics: ["alpha", "beta", "gamma"].map((kind) => ({ id: kind, channel_id: "c", kind, name: kind + " conversation" })),
-    topic_state: [{ topic_id: "alpha", subscribed: true, unread_count: 3, unread_mention_count: 1 },
+    topic_state: [{ topic_id: "alpha", subscribed: true, unread_count: 3, unread_mention_count: 1, unread_reply_count: 2 },
       { topic_id: "beta", subscribed: false, unread_count: 5, unread_mention_count: 0 }],
   };
   const markup = renderToStaticMarkup(React.createElement(TopicNavigation, {
@@ -65,9 +66,38 @@ test("navigation nests creation controls and renders colored channel and topic l
   assert.match(markup, /α<\/span><span class="org-topic-name">-alpha conversation<\/span>/);
   for (const kind of ["alpha", "beta", "gamma"]) assert.match(markup, new RegExp(`aria-label="${kind} topic"`));
   assert.match(markup, /aria-current="page"/);
-  assert.match(markup, /3 unread messages/); assert.match(markup, /1 unread personal mentions/);
+  assert.match(markup, /3 unread messages/); assert.match(markup, /aria-label="1 unread mention of you"[^>]*>@1</);
+  assert.match(markup, /aria-label="2 unread replies to you"[^>]*>↩2</); assert.match(markup, /data-for-you="3"/);
   assert.doesNotMatch(markup, /5 unread messages/); assert.match(markup, /org-unfollowed/);
 });
+test("mentions of you and replies to you follow the topic list's rule", () => {
+  const me = "a".repeat(32), them = "b".repeat(32), bot = "c".repeat(32);
+  let sequence = 0;
+  const message = (author_id, content, reply_to = null, author_kind = "human") => ({ id: String(++sequence), sequence, author_id, author_kind, content, reply_to });
+  const question = message(me, "Is the count right?");
+  const answer = message(me, "Yes.", question.id, "assistant");
+  const reply = message(them, "It matches.", question.id);
+  const onAnswer = message(them, "Agreed with the answer.", answer.id);
+  const mentionReply = message(them, `@[${me}] see above`, question.id);
+  const botReply = message(bot, "Checked.", question.id, "bot");
+  const own = message(me, "Thanks.", reply.id);
+  const theirs = message(them, "Their note.");
+  const theirReply = message(them, "Replying to myself.", theirs.id);
+  const toThem = message(me, "Replying to them.", theirs.id);
+  const elsewhere = message(them, "Unrelated.");
+  const messages = [question, answer, reply, onAnswer, mentionReply, botReply, own, theirs, theirReply, toThem, elsewhere];
+  const items = forYou.forYouItems(messages, me, 0, sequence);
+  assert.deepEqual(items.map(item => [item.id, item.kind, item.root]), [
+    [reply.id, "reply", question.id], [onAnswer.id, "reply", question.id], [mentionReply.id, "mention", question.id], [botReply.id, "reply", question.id]]);
+  assert.deepEqual(forYou.forYouItems(messages, me, reply.sequence, botReply.sequence - 1).map(item => item.id), [onAnswer.id, mentionReply.id],
+    "only messages after the read point and through the newest one when the topic opened");
+  assert.equal(forYou.mentionsMember(`@[${me}:model]`, me), true);
+  assert.equal(forYou.mentionsMember(`@[${me}x]`, me), false);
+  assert.equal(forYou.forYouTally(2, 1), "2 mentions and 1 reply");
+  assert.equal(forYou.forYouTally(0, 3), "3 replies");
+  assert.equal(forYou.forYouTally(1, 0), "1 mention");
+});
+
 test("alpha messages group only adjacent same-author messages within five minutes on one day", () => {
   const message = (id, author_id, created_at, author_kind="human") => ({id,author_id,created_at,author_kind});
   const messages = [message("a","alice",100),message("b","alice",150),message("c","bob",160),
