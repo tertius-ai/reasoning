@@ -31,12 +31,14 @@ class SDKFixture:
     def __init__(self):
         self.creates, self.terminations, self.commands = [], [], []
         self.active, self.lose, self.uncertain, self.app = None, False, False, "ap-fixture"
+        self.volumes = self.bound = None
 
     def identity(self):
         return self.app
 
-    def create(self, name, limits):
+    def create(self, name, limits, volumes=None):
         self.creates.append((name, limits))
+        self.volumes = volumes
         self.active = SandboxFixture()
         if self.lose:
             raise OSError("private provider body")
@@ -64,8 +66,13 @@ class DockerFixture:
     def _command(self, command, **options):
         self.sdk.commands.append(command)
 
-    def run(self, job, spool, log, stopped):
+    def mount(self, path):
+        self.sdk.commands.append(["mount", path])
+        return {"filesystem": "fuse", "mount_options": "ro,relatime", "super_options": "rw", "read_only": True}
+
+    def run(self, job, spool, log, stopped, *, lean_environment=None):
         assert not stopped()
+        self.sdk.bound = lean_environment
         log(b"nonexecuting Modal transport fixture\n")
         return Outcome("succeeded", 42, 0, None)
 
@@ -122,7 +129,7 @@ def test_failed_stage_survives_cleanup_with_safe_code_and_one_startup_message(tm
             if stage == "image_pull":
                 raise RuntimeFault(code)
 
-        def run(self, *args):
+        def run(self, *args, **options):
             raise RuntimeFault(code)
 
     if stage == "docker_ready":
@@ -528,3 +535,120 @@ def test_remote_docker_streams_pinned_input_bytes_into_the_vm(tmp_path):
     args, options = commands[-1]
     assert args[:3] == ["docker", "--config", "/tmp/reasoning-docker-client"] and args[-len(arguments):] == arguments
     assert options["input_bytes"] == b"pinned bytes"
+
+
+MOUNTINFO = (b"22 1 0:21 / / rw,relatime shared:1 - ext4 /dev/vda rw\n"
+             b"36 22 0:32 / /mnt/lean-env ro,nosuid,nodev,relatime shared:9 - fuse modal-volume rw,user_id=0,allow_other\n")
+
+
+def test_mount_facts_report_the_topmost_mount_and_whether_it_is_read_only():
+    from reasoning_ledger.server.compute_modal import mount_facts
+
+    assert mount_facts(MOUNTINFO, "/mnt/lean-env") == {
+        "filesystem": "fuse", "mount_options": "ro,nosuid,nodev,relatime", "super_options": "rw,user_id=0,allow_other",
+        "read_only": True}
+    writable = MOUNTINFO.replace(b" ro,nosuid", b" rw,nosuid")
+    assert mount_facts(writable, "/mnt/lean-env")["read_only"] is False
+    # A read-only filesystem counts as read-only even through a writable mount.
+    assert mount_facts(writable.replace(b" rw,user_id", b" ro,user_id"), "/mnt/lean-env")["read_only"] is True
+    # Something mounted over the environment later is what Docker would bind.
+    covered = MOUNTINFO + b"40 36 0:40 / /mnt/lean-env rw,relatime - tmpfs tmpfs rw\n"
+    assert mount_facts(covered, "/mnt/lean-env")["read_only"] is False
+
+
+@pytest.mark.parametrize("body", [b"", MOUNTINFO.replace(b"/mnt/lean-env", b"/mnt/other"), b"\xff\xfe",
+                                  MOUNTINFO.replace(b"rw,user_id", b"rw,user\tid")])
+def test_a_missing_or_unreadable_environment_mount_fails_closed(body):
+    from reasoning_ledger.server.compute_modal import mount_facts
+
+    with pytest.raises(RuntimeFault, match="environment_unavailable"):
+        mount_facts(body, "/mnt/lean-env")
+
+
+def test_a_job_with_an_environment_mounts_only_its_directory_read_only_and_checks_the_vm(tmp_path):
+    from reasoning_ledger.server.compute_modal import ENVIRONMENT_MOUNT, EnvironmentVolume
+
+    instance, sdk = runner(tmp_path)
+    mounted = []
+    sdk.mounted = lambda volume, **options: mounted.append((volume, options)) or ("handle", options)
+    outcome = instance.run(job(), tmp_path, lambda _: None, lambda: False,
+                           lean_environment=EnvironmentVolume("volume", "/environments/abc"))
+    assert outcome.status == "succeeded"
+    assert mounted == [("volume", {"read_only": True, "sub_path": "/environments/abc"})]
+    assert sdk.volumes == {ENVIRONMENT_MOUNT: ("handle", {"read_only": True, "sub_path": "/environments/abc"})}
+    assert sdk.bound == ENVIRONMENT_MOUNT
+    # The VM's mount is checked after Docker is ready and before the image download.
+    assert sdk.commands[0] == ["mount", ENVIRONMENT_MOUNT] and sdk.commands[1][:2] == ["image", "pull"]
+    receipt = json.loads((instance.data_dir / "modal-last-attempt.json").read_bytes())
+    assert receipt["environment_mount"]["read_only"] is True and receipt["cleanup_verified"] is True
+
+
+def test_a_job_without_an_environment_has_no_volume_and_no_bind(tmp_path):
+    instance, sdk = runner(tmp_path)
+    instance.run(job(), tmp_path, lambda _: None, lambda: False)
+    assert sdk.volumes is None and sdk.bound is None and ["mount", "/mnt/lean-env"] not in sdk.commands
+    assert json.loads((instance.data_dir / "modal-last-attempt.json").read_bytes())["environment_mount"] is None
+
+
+def test_a_writable_vm_mount_stops_the_job_before_the_image_or_the_program(tmp_path):
+    from reasoning_ledger.server.compute_modal import EnvironmentVolume
+
+    instance, sdk = runner(tmp_path)
+    sdk.mounted = lambda volume, **options: volume
+
+    class WritableMount(DockerFixture):
+        def mount(self, path):
+            return {"filesystem": "fuse", "mount_options": "rw", "super_options": "rw", "read_only": False}
+
+        def run(self, *args, **options):
+            pytest.fail("the program must not run")
+
+    instance.docker_factory = WritableMount
+    logs = []
+    outcome = instance.run(job(), tmp_path, logs.append, lambda: False, lean_environment=EnvironmentVolume("volume", "/abc"))
+    assert outcome.status == "failed" and sdk.commands == [] and sdk.terminations == ["sb-fixture"]
+    receipt = json.loads((instance.data_dir / "modal-last-attempt.json").read_bytes())
+    assert receipt["stage"] == "environment_mount" and receipt["error_code"] == "environment_writable"
+    assert receipt["environment_mount"]["read_only"] is False
+    assert logs == [b"Compute failed during Lean environment mount check (environment_writable).\n"]
+
+
+@pytest.mark.parametrize("environment", [("volume", "/../escape"), ("volume", "relative"), ("volume", "/a/b/c"), ("volume", None),
+                                         "volume"])
+def test_an_invalid_environment_is_refused_before_any_vm(tmp_path, environment):
+    from reasoning_ledger.server.compute_modal import EnvironmentVolume
+
+    instance, sdk = runner(tmp_path)
+    value = EnvironmentVolume(*environment) if isinstance(environment, tuple) else environment
+    with pytest.raises(RuntimeFault, match="invalid_job"):
+        instance.run(job(), tmp_path, lambda _: None, lambda: False, lean_environment=value)
+    assert sdk.creates == []
+
+
+def test_sdk_passes_volumes_and_mount_options_through_unchanged():
+    calls = []
+    sdk = object.__new__(ModalSDK)
+    sdk.profile, sdk.client = profile(), object()
+    image = SimpleNamespace(apt_install=lambda *args: ("docker-supervisor", args))
+    sdk.modal = SimpleNamespace(App=SimpleNamespace(lookup=lambda *a, **kw: SimpleNamespace(app_id="ap-fixture")),
+        Image=SimpleNamespace(from_registry=lambda *a, **kw: image),
+        Sandbox=SimpleNamespace(create=lambda *args, **kwargs: calls.append((args, kwargs))))
+    sdk.create(sandbox_name("a" * 32, "b" * 32), DEFAULT_RESOURCES, {"/mnt/lean-env": "handle"})
+    assert calls[0][1]["volumes"] == {"/mnt/lean-env": "handle"}
+    sdk.create(sandbox_name("a" * 32, "b" * 32), DEFAULT_RESOURCES)
+    assert calls[1][1]["volumes"] == {}
+    volume = SimpleNamespace(with_mount_options=lambda **options: options)
+    assert ModalSDK.mounted(volume, read_only=True, sub_path="/abc") == {"read_only": True, "sub_path": "/abc"}
+
+
+def test_installed_optional_sdk_accepts_the_volume_calls():
+    import inspect
+
+    modal = pytest.importorskip("modal")
+    from modal_proto import api_pb2
+
+    inspect.signature(modal.Sandbox.create).bind("dockerd", runtime="vm", volumes={"/mnt/lean-env": object()})
+    # The SDK's synchronized classmethod retains cls in __signature__.
+    inspect.signature(modal.Volume.ephemeral).bind(modal.Volume, client=object(), environment_name="main",
+                                                   version=api_pb2.VOLUME_FS_VERSION_V2)
+    inspect.signature(modal.Volume.with_mount_options).bind(object(), read_only=True, sub_path="/abc")

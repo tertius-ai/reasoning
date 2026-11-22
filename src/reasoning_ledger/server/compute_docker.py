@@ -41,6 +41,9 @@ ENVIRONMENT = {
     "PYTHONDONTWRITEBYTECODE": "1",
     "REASONING_OUTPUT_DIR": "/work/out",
 }
+# A sealed Lean environment appears here, read-only, in a job that names one.
+LEAN_ENVIRONMENT_PATH = "/opt/lean-env"
+HOST_PATH = re.compile(r"(?:/[A-Za-z0-9_][A-Za-z0-9_.-]{0,63}){1,8}\Z")
 
 
 class RuntimeFault(Exception):
@@ -81,7 +84,17 @@ def container_name(worker: str, attempt: str) -> str:
     return f"reasoning-{worker}-{attempt}"
 
 
-def create_arguments(worker: str, attempt: str, image: ComputeImage, limits: dict) -> list[str]:
+def environment_mount(source: str) -> dict:
+    """The one bind mount a job may have: a sealed environment from the Docker host, read-only and unpropagated."""
+    if not isinstance(source, str) or not HOST_PATH.fullmatch(source) or "/../" in source + "/" or "/./" in source + "/":
+        raise RuntimeFault("invalid_job")
+    return {"Type": "bind", "Source": source, "Target": LEAN_ENVIRONMENT_PATH, "ReadOnly": True,
+            "BindOptions": {"Propagation": "rprivate"}}
+
+
+def create_arguments(worker: str, attempt: str, image: ComputeImage, limits: dict, *,
+                     lean_environment: str | None = None) -> list[str]:
+    """`lean_environment` is a sealed environment's directory on the Docker host, bound read-only at LEAN_ENVIRONMENT_PATH."""
     limits = resources(limits)
     if not fits(limits, image.maximum_resources):
         raise RuntimeFault("image_verification_failed")
@@ -137,6 +150,9 @@ def create_arguments(worker: str, attempt: str, image: ComputeImage, limits: dic
     ]
     for path, options in mounts(limits).items():
         args.extend(["--tmpfs", f"{path}:{options}"])
+    if lean_environment is not None:
+        bind = environment_mount(lean_environment)
+        args.extend(["--mount", f"type=bind,source={bind['Source']},target={bind['Target']},readonly,bind-propagation=rprivate"])
     for key, value in ENVIRONMENT.items():
         args.extend(["--env", f"{key}={value}"])
     return [*args, image.reference, str(limits["wall_time_seconds"] + 90)]
@@ -280,7 +296,21 @@ def verify_image(info: dict, image: ComputeImage) -> str:
     return identifier
 
 
-def verify_container(info: dict, identifier: str, worker: str, attempt: str, limits: dict, *, swapless: bool = False) -> None:
+def verify_mounts(info: dict, lean_environment: str | None) -> bool:
+    """No host path reaches the container, except the job's own sealed environment as one read-only, unpropagated bind."""
+    host = info.get("HostConfig", {})
+    expected = [] if lean_environment is None else [environment_mount(lean_environment)]
+    if (host.get("Mounts") or []) != expected:
+        return False
+    actual = [mount for mount in info.get("Mounts") or [] if mount.get("Type") != "tmpfs"]
+    return len(actual) == len(expected) and all(
+        mount.get("Type") == "bind" and mount.get("Source") == bind["Source"] and mount.get("Destination") == bind["Target"]
+        and mount.get("RW") is False and mount.get("Propagation") == "rprivate" and mount.get("Mode", "") in {"", "ro"}
+        for mount, bind in zip(actual, expected, strict=True))
+
+
+def verify_container(info: dict, identifier: str, worker: str, attempt: str, limits: dict, *, swapless: bool = False,
+                     lean_environment: str | None = None) -> None:
     config, host = info.get("Config", {}), info.get("HostConfig", {})
     expected = {
         "ReadonlyRootfs": True,
@@ -331,7 +361,7 @@ def verify_container(info: dict, identifier: str, worker: str, attempt: str, lim
         or host.get("RestartPolicy", {}).get("Name") != "no"
         or host.get("LogConfig", {}).get("Type") != "none"
         or host.get("Tmpfs") != mounts(limits)
-        or any(mount.get("Type") != "tmpfs" for mount in info.get("Mounts", []))
+        or not verify_mounts(info, lean_environment)
     ):
         raise RuntimeFault("image_verification_failed")
 
@@ -628,7 +658,10 @@ class DockerRunner:
         if remaining.strip():
             raise CleanupUncertain("cleanup_uncertain")
 
-    def run(self, job: dict, spool: Path, log: Callable[[bytes], None], stopped: Callable[[], bool]) -> Outcome:
+    def run(self, job: dict, spool: Path, log: Callable[[bytes], None], stopped: Callable[[], bool], *,
+            lean_environment: str | None = None) -> Outcome:
+        """Run one claimed attempt. `lean_environment` is a sealed environment's directory on this Docker host, which the
+        job sees read-only at LEAN_ENVIRONMENT_PATH."""
         self.verify_runtime_identity()
         image = ComputeImage.parse(job["image"])
         parameters = job["parameters"]
@@ -663,9 +696,12 @@ class DockerRunner:
             # Creation may succeed even if delivery of its response fails. The
             # deterministic name is checked and cleaned in every exit path.
             created = True
-            self._command(create_arguments(self.worker_id, job["attempt_id"], image, limits), stopped=stopped)
+            self._command(create_arguments(self.worker_id, job["attempt_id"], image, limits,
+                                           lean_environment=lean_environment),
+                          stopped=stopped)
             info = self._inspect("container", name)
-            verify_container(info, identifier, self.worker_id, job["attempt_id"], limits, swapless=self.swapless)
+            verify_container(info, identifier, self.worker_id, job["attempt_id"], limits, swapless=self.swapless,
+                             lean_environment=lean_environment)
             self._evidence(name, image, limits, language, stopped)
             self._command(["container", "start", name], stopped=stopped)
             began = time.monotonic()

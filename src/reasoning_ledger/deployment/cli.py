@@ -546,6 +546,9 @@ def main(argv: list[str] | None = None, *, raise_errors: bool = False) -> int:
     compute_limits = commands.add_parser(
         "compute-relays-limits", help="change the per-job CPU, memory and wall-time limits of the drained Modal relays")
     compute_limits.add_argument("--state-dir", type=Path, default=Path.home() / ".reasoning-deploy")
+    compute_probe = commands.add_parser(
+        "compute-environment-probe", help="check on a live Modal run that a sealed Lean environment mounts read-only into a job")
+    compute_probe.add_argument("--state-dir", type=Path, default=Path.home() / ".reasoning-deploy")
     mail_setup = commands.add_parser("email-setup", help="enable Resend mail on an existing synchronized managed deployment")
     mail_setup.add_argument("--state-dir", type=Path, default=Path.home() / ".reasoning-deploy")
     upgrade_stage = commands.add_parser("upgrade-stage", help="retain the currently installed release before building its replacement")
@@ -986,6 +989,15 @@ def main(argv: list[str] | None = None, *, raise_errors: bool = False) -> int:
                 result = run_relay_limits(args.state_dir, lambda arguments: main(arguments, raise_errors=True))
             except (EOFError, KeyboardInterrupt):
                 raise InstallError("the relay limits change stopped; run the same command again to resume it") from None
+        elif args.command == "compute-environment-probe":
+            from .compute_images import run_environment_probe
+
+            if not sys.stdin.isatty():
+                raise InstallError("run the Lean environment probe in your terminal; the typed consent belongs in the CLI")
+            try:
+                result = run_environment_probe(args.state_dir, lambda arguments: main(arguments, raise_errors=True))
+            except (EOFError, KeyboardInterrupt):
+                raise InstallError("the Lean environment probe stopped; run the same command again") from None
         elif args.command == "email-setup":
             from .mail_setup import run_mail_setup
 

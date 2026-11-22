@@ -15,6 +15,7 @@ from reasoning_ledger.server.compute_docker import (
     COMMANDS,
     ENVIRONMENT,
     LABEL,
+    LEAN_ENVIRONMENT_PATH,
     PROGRAM_USER,
     SUPERVISOR_USER,
     CleanupUncertain,
@@ -22,6 +23,7 @@ from reasoning_ledger.server.compute_docker import (
     RuntimeFault,
     container_name,
     create_arguments,
+    environment_mount,
     execution_arguments,
     input_arguments,
     mounts,
@@ -606,3 +608,89 @@ def test_inputs_that_differ_from_their_pins_refuse_before_container_creation(con
     with pytest.raises(RuntimeFault, match="invalid_job"):
         runner.run(job, tmp_path / "spool", lambda _: None, lambda: False)
     assert runner.calls == []
+
+
+SEALED = "/mnt/lean-env"
+
+
+def with_environment(container, **changes):
+    """The inspection Docker reports for a container created with the sealed environment bound read-only."""
+    container = copy.deepcopy(container)
+    container["HostConfig"]["Mounts"] = [environment_mount(SEALED)]
+    container["Mounts"] = [{"Type": "bind", "Source": SEALED, "Destination": LEAN_ENVIRONMENT_PATH, "Mode": "", "RW": False,
+                            "Propagation": "rprivate", **changes}]
+    return container
+
+
+def test_a_sealed_environment_is_the_only_bind_and_it_is_read_only_and_unpropagated(image):
+    args = create_arguments(WORKER, ATTEMPT, image, LIMITS, lean_environment=SEALED)
+    assert [value for index, value in enumerate(args) if args[index - 1] == "--mount"] == [
+        f"type=bind,source={SEALED},target={LEAN_ENVIRONMENT_PATH},readonly,bind-propagation=rprivate"]
+    assert args.count("--mount") == 1 and "--volume" not in args and args[-2:] == [image.reference, "210"]
+    assert create_arguments(WORKER, ATTEMPT, image, LIMITS)[:-2] == [
+        value for index, value in enumerate(args[:-2]) if "--mount" not in (value, args[index - 1])]
+
+
+@pytest.mark.parametrize("source", ["relative/path", "/mnt/../etc", "/mnt/./x", "/mnt/env,readonly=false", "/mnt/a b", "/",
+                                    "/mnt/" + "x" * 65])
+def test_an_unsafe_environment_source_is_refused(image, source):
+    with pytest.raises(RuntimeFault, match="invalid_job"):
+        create_arguments(WORKER, ATTEMPT, image, LIMITS, lean_environment=source)
+
+
+def test_the_inspected_environment_bind_must_match_exactly(container):
+    verify_container(with_environment(container), IMAGE_ID, WORKER, ATTEMPT, LIMITS, lean_environment=SEALED)
+    # A container with the environment bind is refused where none was asked for, and the other way round.
+    with pytest.raises(RuntimeFault, match="image_verification_failed"):
+        verify_container(with_environment(container), IMAGE_ID, WORKER, ATTEMPT, LIMITS)
+    with pytest.raises(RuntimeFault, match="image_verification_failed"):
+        verify_container(container, IMAGE_ID, WORKER, ATTEMPT, LIMITS, lean_environment=SEALED)
+
+
+@pytest.mark.parametrize("change", [
+    {"RW": True}, {"Propagation": "rshared"}, {"Source": "/"}, {"Destination": "/work"}, {"Type": "volume"}, {"Mode": "rw"},
+])
+def test_a_writable_shared_or_misplaced_environment_mount_is_refused(container, change):
+    with pytest.raises(RuntimeFault, match="image_verification_failed"):
+        verify_container(with_environment(container, **change), IMAGE_ID, WORKER, ATTEMPT, LIMITS, lean_environment=SEALED)
+
+
+@pytest.mark.parametrize("change", [
+    {"ReadOnly": False}, {"BindOptions": {"Propagation": "rshared"}}, {"BindOptions": {"Propagation": "rprivate", "NonRecursive": True}},
+    {"Target": "/opt"},
+])
+def test_the_requested_environment_mount_must_be_read_only_and_recursive(container, change):
+    inspected = with_environment(container)
+    inspected["HostConfig"]["Mounts"][0].update(change)
+    with pytest.raises(RuntimeFault, match="image_verification_failed"):
+        verify_container(inspected, IMAGE_ID, WORKER, ATTEMPT, LIMITS, lean_environment=SEALED)
+
+
+def test_a_second_bind_or_requested_mount_is_refused(container):
+    inspected = with_environment(container)
+    inspected["Mounts"].append({**inspected["Mounts"][0], "Source": "/var/run", "Destination": "/run/host"})
+    with pytest.raises(RuntimeFault, match="image_verification_failed"):
+        verify_container(inspected, IMAGE_ID, WORKER, ATTEMPT, LIMITS, lean_environment=SEALED)
+    inspected = copy.deepcopy(container)
+    inspected["HostConfig"]["Mounts"] = [{"Type": "bind", "Source": "/", "Target": "/host", "ReadOnly": True}]
+    with pytest.raises(RuntimeFault, match="image_verification_failed"):
+        verify_container(inspected, IMAGE_ID, WORKER, ATTEMPT, LIMITS)
+
+
+def test_the_lifecycle_binds_and_verifies_the_environment_it_was_given(container, job, tmp_path):
+    runner, created = FixtureRunner(with_environment(container)), []
+    original = runner._command
+
+    def command(args, **options):
+        if args[:2] == ["container", "create"]:
+            created.append(args)
+        return original(args, **options)
+
+    runner._command = command
+    outcome = runner.run(job, tmp_path, lambda _: None, lambda: False, lean_environment=SEALED)
+    assert outcome.status == "succeeded" and runner.removed
+    assert created[0][created[0].index("--mount") + 1].startswith(f"type=bind,source={SEALED},")
+    # The same container without the environment it was asked for fails verification and is removed.
+    runner = FixtureRunner(container)
+    outcome = runner.run(job, tmp_path, lambda _: None, lambda: False, lean_environment=SEALED)
+    assert outcome.status == "failed" and outcome.error_code == "image_verification_failed" and runner.removed

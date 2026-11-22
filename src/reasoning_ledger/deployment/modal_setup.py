@@ -226,15 +226,18 @@ def owned_modal_remote(config, document, directory, bundle, value, operation, *,
 
     from .cli import STAGE_SCRIPT, ssh_arguments
     from .digitalocean import DigitalOcean
-    from .modal_host import validate_addition, validate_limits, validate_refresh, validate_request
+    from .modal_host import validate_addition, validate_limits, validate_probe, validate_refresh, validate_request
     from .private import write_private
     from .release_state import operator_origin
     from .server_install import ServerInstaller
     from .ssh_host import server_trust
 
     addition, refresh, limits = operation in {"extend", "relays"}, operation == "refresh", operation == "limits"
+    probe = operation == "environment-probe"
     if refresh:
         validate_refresh(value)
+    elif probe:
+        validate_probe(value)
     elif limits:
         validate_limits(value)
     elif addition:
@@ -255,6 +258,8 @@ def owned_modal_remote(config, document, directory, bundle, value, operation, *,
             raise InstallError("upgrade the server to a release that can update Modal relays before updating them")
         if limits and "modal-relay-limits-v1" not in features:
             raise InstallError("upgrade the server to a release that can change Modal relay limits before changing them")
+        if probe and "modal-environment-probe-v1" not in features:
+            raise InstallError("upgrade the server to a release that can probe Lean environments before probing them")
         with locked_directory(directory):
             installer.state = read_document(directory / "digitalocean.json")
             installer._validate_state()

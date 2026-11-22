@@ -12,7 +12,7 @@ import math
 import re
 import tempfile
 import time
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 from .compute_catalog import REFERENCE, ComputeImage, canonical, fits, resources
@@ -33,11 +33,47 @@ STDIN_SLICE = 1024**2
 DIAGNOSTIC_CODES = ERROR_CODES | {
     "cancelled", "docker_unavailable", "sandbox_unavailable", "modal_unavailable", "output_limit",
     "invalid_runtime_identity", "runtime_identity_changed", "unbound_runtime_state", "invalid_job",
+    "environment_unavailable", "environment_writable",
 }
 STAGE_NAMES = {
     "sandbox_create": "Modal VM creation", "docker_setup": "Docker client setup",
-    "docker_ready": "Docker readiness", "image_pull": "image download", "execution": "execution and result collection",
+    "docker_ready": "Docker readiness", "environment_mount": "Lean environment mount check", "image_pull": "image download",
+    "execution": "execution and result collection",
 }
+# Where a job's sealed Lean environment is mounted in its VM, before Docker binds it into the container.
+ENVIRONMENT_MOUNT = "/mnt/lean-env"
+MOUNT_FIELD = re.compile(r"[A-Za-z0-9_.,=:/@+-]{1,512}\Z")
+
+
+@dataclass(frozen=True)
+class EnvironmentVolume:
+    """One sealed environment: a directory of a Modal Volume. A job's VM mounts only that directory, read-only."""
+
+    volume: object
+    sub_path: str
+
+
+def mount_facts(mountinfo: bytes, path: str) -> dict:
+    """The filesystem and options of the topmost mount at `path`, from /proc/self/mountinfo.
+
+    It is read-only when either the mount or its filesystem is mounted read-only.
+    """
+    found = None
+    try:
+        for line in mountinfo.decode("ascii").splitlines():
+            fields = line.split(" ")
+            if len(fields) < 10 or fields[4] != path:
+                continue
+            tail = fields[fields.index("-") + 1:]
+            if len(tail) != 3 or not all(MOUNT_FIELD.fullmatch(item) for item in (fields[5], tail[0], tail[2])):
+                raise ValueError
+            found = {"filesystem": tail[0], "mount_options": fields[5], "super_options": tail[2]}
+    except (UnicodeError, ValueError):
+        raise RuntimeFault("environment_unavailable") from None
+    if found is None:
+        raise RuntimeFault("environment_unavailable")
+    found["read_only"] = "ro" in found["mount_options"].split(",") or "ro" in found["super_options"].split(",")
+    return found
 
 
 def pull_seconds(elapsed):
@@ -89,7 +125,8 @@ class ModalSDK:
                                     create_if_missing=True, client=client)
         return app.app_id
 
-    def create(self, name, limits):
+    def create(self, name, limits, volumes=None):
+        """A fresh VM running only Docker; `volumes` maps VM paths to Volume handles with their mount options."""
         client = self.connect()
         app = self.modal.App.lookup(self.profile["app"], environment_name=self.profile["environment"], client=client)
         # A VM sandbox reports one CPU to Docker per requested unit, so request the job's logical CPUs directly.
@@ -101,8 +138,19 @@ class ModalSDK:
             image=self.modal.Image.from_registry(self.profile["supervisor_image"], add_python="3.12").apt_install("docker.io"),
             runtime="vm", cpu=(cores, cores), memory=(memory, memory), timeout=limits["wall_time_seconds"] + OVERHEAD_SECONDS,
             secrets=[], include_oidc_identity_token=False, encrypted_ports=[], unencrypted_ports=[],
-            tags={"reasoning-name": name},
+            volumes=dict(volumes or {}), tags={"reasoning-name": name},
         )
+
+    def ephemeral_volume(self):
+        """A context manager for a version 2 Volume that Modal deletes when the context exits."""
+        from modal_proto import api_pb2
+
+        return self.modal.Volume.ephemeral(client=self.connect(), environment_name=self.profile["environment"],
+                                           version=api_pb2.VOLUME_FS_VERSION_V2)
+
+    @staticmethod
+    def mounted(volume, *, read_only, sub_path=None):
+        return volume.with_mount_options(read_only=read_only, sub_path=sub_path)
 
     def lookup(self, name, identifier=None):
         client = self.connect()
@@ -207,6 +255,13 @@ class RemoteDockerRunner(DockerRunner):
             raise RuntimeFault("sandbox_unavailable") from None
         return not any(line.strip() for line in devices) and total[1:] == ["0", "kB"]
 
+    def mount(self, path):
+        """How `path` is mounted in the VM; see mount_facts."""
+        code, body = self.sdk.pump(self.sandbox, ["/bin/cat", "/proc/self/mountinfo"], maximum=1024**2)
+        if code:
+            raise RuntimeFault("sandbox_unavailable")
+        return mount_facts(body, path)
+
     def _pump(self, args, **options):
         return self.sdk.pump(self.sandbox, [*self.prefix, *args], environment=self.environment, **options)
 
@@ -294,7 +349,9 @@ class ModalRunner:
         # Configuration/identity check only: do not start a paid VM in a probe.
         self.verify_runtime_identity()
 
-    def run(self, job, spool, log, stopped):
+    def run(self, job, spool, log, stopped, *, lean_environment=None):
+        """Run one claimed attempt in a fresh VM. With `lean_environment` (an EnvironmentVolume), the VM mounts that
+        directory read-only at ENVIRONMENT_MOUNT and the job's container sees it read-only at /opt/lean-env."""
         image = ComputeImage.parse(job["image"])
         parameters = job["parameters"]
         limits = resources(parameters["resources"])
@@ -311,9 +368,14 @@ class ModalRunner:
             raise RuntimeFault("invalid_job")
         if stopped():
             raise RuntimeFault("cancelled")
+        if lean_environment is not None and (not isinstance(lean_environment, EnvironmentVolume)
+                                             or not isinstance(lean_environment.sub_path, str)
+                                             or not re.fullmatch(r"(?:/[a-z0-9][a-z0-9_-]{0,63}){1,2}", lean_environment.sub_path)):
+            raise RuntimeFault("invalid_job")
         diagnostic = {"format": 1, "job_id": job["id"], "worker_id": self.worker_id,
                       "attempt_id": job["attempt_id"], "sandbox_id": None, "stage": "sandbox_create",
-                      "execution_status": None, "error_code": None, "exception_type": None, "cleanup_verified": False}
+                      "execution_status": None, "error_code": None, "exception_type": None, "cleanup_verified": False,
+                      "environment_mount": None}
         diagnostic_path = self.data_dir / "modal-last-attempt.json"
 
         def record(**changes):
@@ -337,7 +399,11 @@ class ModalRunner:
         # A lost creation response is reconciled by name, never by creating again.
         self.write_state(self.journal, intent)
         try:
-            sandbox = self.sdk.create(name, limits)
+            volumes = None
+            if lean_environment is not None:
+                volumes = {ENVIRONMENT_MOUNT: self.sdk.mounted(lean_environment.volume, read_only=True,
+                                                              sub_path=lean_environment.sub_path)}
+            sandbox = self.sdk.create(name, limits, volumes)
             if not isinstance(sandbox.object_id, str) or not re.fullmatch(r"sb-[A-Za-z0-9]+", sandbox.object_id):
                 raise RuntimeFault("modal_unavailable")
             intent["sandbox_id"] = sandbox.object_id
@@ -357,13 +423,22 @@ class ModalRunner:
                         if time.monotonic() >= deadline:
                             raise
                         time.sleep(0.1)
+                if lean_environment is not None:
+                    # The container's bind is read-only either way; the VM mount must be too, so no process in the VM
+                    # can change a sealed environment that other jobs share.
+                    record(stage="environment_mount")
+                    facts = runner.mount(ENVIRONMENT_MOUNT)
+                    record(environment_mount=facts)
+                    if not facts["read_only"]:
+                        raise RuntimeFault("environment_writable")
                 record(stage="image_pull")
                 # A fresh VM downloads the whole image (several GB for research images). It may use what is left of
                 # the startup allowance after VM creation and Docker readiness, which the server's deadline also grants.
                 runner._command(["image", "pull", "--quiet", "--platform", "linux/amd64", image.reference],
                                 timeout=pull_seconds(time.monotonic() - began), maximum=65536, stopped=stopped)
                 record(stage="execution")
-                outcome = runner.run(job, spool, log, stopped)
+                outcome = runner.run(job, spool, log, stopped,
+                                     lean_environment=None if lean_environment is None else ENVIRONMENT_MOUNT)
                 record(execution_status=outcome.status, error_code=outcome.error_code)
                 return outcome if outcome.status == "succeeded" else replace(outcome, elapsed_ms=limits["wall_time_seconds"] * 1000)
         except CleanupUncertain:

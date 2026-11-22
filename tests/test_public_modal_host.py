@@ -535,3 +535,81 @@ def test_relay_limits_refuse_before_stopping_or_writing_anything_when_unsafe(lim
         installer.limits(request)
     assert relay_files(root, identifier) == before
     assert not any(call[:2] in (["systemctl", "stop"], ["systemctl", "start"]) for call in calls)
+
+
+@pytest.fixture
+def probe(host):
+    """A running relay of the installed release, and a host command that answers the probe with a fixed receipt."""
+    root, payload, worker, installer, calls, identity = host
+    installer.install(payload, "prepare")
+    installer.install({**payload, "workers": [worker]}, "activate")
+    original, answer = installer.command, {"body": json.dumps({"format": 1, "failures": [], "writer": {}}).encode()}
+
+    def command(arguments, **options):
+        if "probe-environment-mount" in arguments:
+            calls.append(arguments)
+            return answer["body"]
+        return original(arguments, **options)
+
+    installer.command = command
+    calls.clear()
+    request = {"format": 1, "release_id": payload["release_id"], "public_url": payload["public_url"]}
+    return root, request, worker, installer, calls, answer
+
+
+def test_environment_probe_runs_as_the_relay_account_with_the_relays_own_state(probe):
+    root, request, worker, installer, calls, _ = probe
+    identifier = worker["enrollment"]["id"]
+    before = relay_files(root, identifier)
+
+    result = installer.environment_probe(request)
+
+    assert result == {"release_id": request["release_id"], "relay": identifier,
+                      "probe": {"format": 1, "failures": [], "writer": {}}}
+    state = f"{root}/var/lib/reasoning-modal/{identifier}"
+    assert calls[-1] == ["runuser", "-u", "reasoning-modal", "--",
+                         f"{root}/opt/reasoning/modal/{request['release_id']}/venv/bin/reasoning-compute-worker",
+                         "--data-dir", state, "probe-environment-mount", "--modal-profile", state + "/modal-profile.json",
+                         "--catalog", state + "/catalog.json"]
+    # The relay keeps running and its files are untouched.
+    assert not any(call[:2] in (["systemctl", "stop"], ["systemctl", "start"], ["systemctl", "restart"]) for call in calls)
+    assert relay_files(root, identifier) == before
+    assert worker["profile"]["token_secret"] not in str(calls) and worker["enrollment"]["token"] not in str(calls)
+
+
+def test_environment_probe_is_bounded_by_its_own_timeout(probe, monkeypatch):
+    from reasoning_ledger.deployment import modal_host
+
+    _, request, _, installer, _, _ = probe
+    seen = []
+    installer.command = None
+    monkeypatch.setattr(modal_host.subprocess, "run", lambda arguments, **options: seen.append(options["timeout"]) or
+                        SimpleNamespace(returncode=0, stdout=json.dumps({"format": 1, "failures": []}).encode()))
+    monkeypatch.setattr(installer, "service_identity", lambda *args, **options: None)
+    installer.environment_probe(request)
+    assert seen == [modal_host.PROBE_SECONDS] and 900 < modal_host.PROBE_SECONDS < 1200
+
+
+@pytest.mark.parametrize("change", ["older-relay", "receipt", "no-relays", "no-setup", "request"])
+def test_environment_probe_refuses_what_it_cannot_trust(probe, change):
+    root, request, worker, installer, calls, answer = probe
+    unit = root / "etc/systemd/system" / ("reasoning-modal-" + worker["enrollment"]["id"] + ".service")
+    if change == "older-relay":
+        unit.write_text(relay_unit("7" * 64, worker["enrollment"]["id"]))
+        expected = "make compute-relays-update"
+    elif change == "receipt":
+        answer["body"] = b'{"format": 1}'
+        expected = "invalid Lean environment probe receipt"
+    elif change == "no-relays":
+        unit.unlink()
+        expected = "no Modal relays"
+    elif change == "no-setup":
+        (root / "var/lib/reasoning-deploy/modal-setup/installation.json").unlink()
+        expected = "installed Modal setup"
+    else:
+        request = {**request, "workers": []}
+        expected = "invalid Lean environment probe request"
+    with pytest.raises(InstallError, match=expected):
+        installer.environment_probe(request)
+    if change != "receipt":
+        assert not any("probe-environment-mount" in call for call in calls)
