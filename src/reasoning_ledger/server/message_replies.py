@@ -19,13 +19,21 @@ THREAD_LIMIT = 200
 
 
 def answered(db, run: dict) -> str | None:
-    """The message a model reply answers: the human message its context ends at. Delegated tasks and workflows answer none."""
+    """The message a model reply answers: the human message its context ends at. Delegated tasks and workflows answer none.
+
+    A turn that continues an earlier one, after its delegated work returned or an explicit resume, answers what that
+    turn answered: its own context is the earlier turn's, carried over, so it records no message of its own.
+    """
     from .topic_agents import TopicAgents
 
     request = db.execute("SELECT topic_id,context_through_sequence FROM llm_requests WHERE organization_id=? AND id=?",
                          (run["organization_id"], run["request_id"])).fetchone()
-    if request is None or not request["context_through_sequence"] or TopicAgents.metadata(db, run).get("agent_task_id"):
+    if request is None or TopicAgents.metadata(db, run).get("agent_task_id"):
         return None
+    if not request["context_through_sequence"]:
+        earlier = db.execute("SELECT r.* FROM topic_agent_handoffs h JOIN llm_runs r ON r.id=h.parent_run WHERE h.next_run=?",
+                             (run["id"],)).fetchone()
+        return answered(db, dict(earlier)) if earlier else None
     row = db.execute("SELECT id FROM messages WHERE organization_id=? AND topic_id=? AND sequence=? AND sender_kind='human'",
                      (run["organization_id"], request["topic_id"], request["context_through_sequence"])).fetchone()
     return row["id"] if row else None

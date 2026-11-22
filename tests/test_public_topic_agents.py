@@ -703,6 +703,55 @@ def test_coordinator_waiting_for_delegates_settles_once_its_work_continues(insta
     assert state.run(owner["user_id"], owner["organization_id"], continuation["id"])["answer_state"]["status"] == "response_ready"
 
 
+def test_a_reply_that_waited_points_to_the_reply_that_continued_it_and_both_answer_the_question(installation):
+    state, client, owner, topics, parent, quote = root(installation)
+    path = f"/api/organizations/{owner['organization_id']}/topics/{topics[1]['id']}/messages"
+
+    def messages():
+        return {message["inference_run_id"] or message["id"]: message for message in client.get(path).json()}
+
+    fixture = DelegatingProvider()
+    ResearchAgent(state, fixture.provider, parent, quote).execute()
+    question = next(message for message in client.get(path).json() if message["author_kind"] == "human")
+    checkpoint = messages()[parent["id"]]
+    assert checkpoint["content"].endswith("*Waiting: delegated work. This is a checkpoint, not a completed answer.*")
+    assert checkpoint["reply_to"] == question["id"] and "continued" not in checkpoint
+    agents = TopicAgents(state)
+    agents.dispatch()
+    for _ in range(2):
+        ResearchAgent(state, fixture.provider, state.claim(), quote).execute()
+    agents.dispatch()
+    continuation = state.claim()
+    # Handed on: the continuation is at work and has posted nothing yet.
+    assert messages()[parent["id"]]["continued"] == {"message_id": None}
+    ResearchAgent(state, fixture.provider, continuation, quote).execute()
+    found = messages()
+    answer = found[continuation["id"]]
+    assert answer["content"] == "Integrated comparison; the source claims remain unverified."
+    assert found[parent["id"]]["continued"] == {"message_id": answer["id"]}
+    # The continuation answers the question its waiting reply answered; delegated results still answer nothing.
+    assert answer["reply_to"] == question["id"] and "continued" not in answer
+    delegated = [message for message in found.values() if message.get("agent_role") in {"librarian", "critic"}]
+    assert len(delegated) == 2 and all(message["reply_to"] is None and "continued" not in message for message in delegated)
+    thread = client.get(path + f"/{question['id']}/thread").json()
+    assert [message["id"] for message in thread["messages"]] == [question["id"], checkpoint["id"], answer["id"]]
+
+
+def test_a_resumed_reply_answers_the_question_of_the_reply_it_resumes(installation):
+    state, client, owner, topics, parent, _ = root(installation)
+    path = f"/api/organizations/{owner['organization_id']}/topics/{topics[1]['id']}"
+    assert client.post(path + "/agents/control", json={"status": "paused"}).status_code == 200
+    state.progress(parent, "Partial work before the pause.", None)
+    state.finish(parent, "cancelled", usage=Usage(8, 20, 10), error="agents_paused")
+    assert client.post(path + "/agents/control", json={"status": "active"}).status_code == 200
+    resumed = state.claim()
+    finish(state, resumed, "The resumed answer.")
+    found = {message["inference_run_id"]: message for message in client.get(path + "/messages").json() if message["inference_run_id"]}
+    question = next(message for message in client.get(path + "/messages").json() if message["author_kind"] == "human")
+    assert found[resumed["id"]]["reply_to"] == found[parent["id"]]["reply_to"] == question["id"]
+    assert found[parent["id"]]["continued"] == {"message_id": found[resumed["id"]]["id"]}
+
+
 def test_proposed_computation_pins_topic_files_for_review_and_approval(installation, tmp_path):
     import base64
     import hashlib

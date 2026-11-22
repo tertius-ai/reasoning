@@ -1072,6 +1072,8 @@ class ReasoningNativeExecutor:
                         )
                         and remaining_tool_calls <= reserved_tool_calls
                     )
+                    # A denied call never ran; its event says so, apart from a call that ran and failed.
+                    skipped = completion_call_reserved or tool_count >= tool_limit
                     if completion_call_reserved:
                         completion_tool_reserve_denied += 1
                         tool_payload = {
@@ -1100,7 +1102,7 @@ class ReasoningNativeExecutor:
                             tool_payload = {"ok": False, "error": str(exc)}
                     events.emit(
                         AgentEventKind.TOOL_COMPLETED,
-                        {"tool_call_id": call.get("id"), "name": name, **tool_payload},
+                        {"tool_call_id": call.get("id"), "name": name, **tool_payload, **({"skipped": True} if skipped else {})},
                     )
                     _raise_if_cancelled(cancelled)
                     messages.append(

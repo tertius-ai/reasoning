@@ -193,7 +193,9 @@ removing the pinned account or granted readers. Model activity
 details can show **Latest answer checkpoint**, its remaining gap and sources.
 Retained checkpoints for interrupted work or review handoffs also appear in the
 conversation. A waiting review/delegate handoff remains an incomplete answer;
-partial replies retain their stopping reason.
+partial replies retain their stopping reason. Once a later reply continues that
+work, the checkpoint reply says so under its text, with **Show that reply**, and
+the later reply answers the same message.
 
 From a source checkout, run `make bot-connect` to pair and start a local Codex or
 Claude Code runner. Run `make bot-doctor` for read-only setup diagnostics, and

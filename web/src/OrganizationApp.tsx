@@ -28,7 +28,7 @@ import { WorkflowAttempt } from "./workflow-api";
 import { WorkflowExecutionAttempt } from "./workflow-run-api";
 import { ComputeAttempt } from "./compute-api";
 import { ReplyFiles } from "./ReplyFiles";
-import { ReplyFooter } from "./ReplyFooter";
+import { ReplyFooter, continuation } from "./ReplyFooter";
 import { ReplyBody, foldFor, useOpenReplies } from "./FoldedReply";
 import { replyParts } from "./replySummary";
 import { WorkingCard } from "./ReplyTimeline";
@@ -1314,7 +1314,7 @@ function Conversation({ organizationId, topic, members, user, canWrite, canManag
   runsNow.current = { betaRuns, threads };
   const threadKey = topic.kind !== "beta" ? "" : JSON.stringify([
     threads.map(thread => [thread.root.id, thread.root.model, thread.root.context_through_sequence, thread.active, thread.additions]),
-    betaRuns.map(run => [run.context_through_sequence, run.requested_by, run.status]),
+    betaRuns.map(run => [run.context_through_sequence, run.requested_by, run.status, run.answer_state?.next_run, run.message_id]),
   ]);
   const canReplyAgain = topic.kind === "beta" && Boolean(selectedModel) && canWrite && online && !modelAttempt;
   const undoAddition = async (message: Message, addition: ReplyAddition) => {
@@ -1390,7 +1390,8 @@ function Conversation({ organizationId, topic, members, user, canWrite, canManag
           <time dateTime={new Date(message.created_at * 1000).toISOString()} title={new Date(message.created_at * 1000).toLocaleString()}>{topic.kind === "alpha" ? new Date(message.created_at * 1000).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" }) : new Date(message.created_at * 1000).toLocaleString()}</time></header>
         {messageBody(message, view)}
         {!!message.files?.length && <ReplyFiles topicId={topic.id} files={message.files} />}
-        <ReplyFooter message={message} userId={user.id} names={memberNames} fold={view.fold} />
+        <ReplyFooter message={{ ...message, continued: continuation(message, runsNow.current.betaRuns) }} userId={user.id}
+          names={memberNames} fold={view.fold} onShowMessage={revealMessage} />
         {!message.reply_to && !!replyCounts.get(message.id) && <ThreadCount count={replyCounts.get(message.id)!} onOpen={() => setThreadFor(message.id)} />}
         {addition && <p className={"org-addition-receipt" + (addition.read_at === null && additionThread?.active ? " org-addition-waiting" : "")}
           role="status"><span aria-hidden="true">↳</span>{additionReceipt(addition, additionThread?.root.model ?? "the model", Boolean(additionThread?.active))}
@@ -1425,7 +1426,7 @@ function Conversation({ organizationId, topic, members, user, canWrite, canManag
             onForked(id);
           }} onAuthLost={onAuthLost} onMarkUnread={() => markUnread(message)} />
       </article></React.Fragment>; })}</div></> }));
-  }, [messages, reactions, workflowRunKey, topic.kind, topic.id, mentionPeople, tones, members, user.id, organizationId, canWrite, canReplyAgain, onAuthLost, focus, highlighted, excerpt, unreadFrom, threadKey, replyOpen]);
+  }, [messages, reactions, workflowRunKey, topic.kind, topic.id, mentionPeople, tones, members, user.id, organizationId, canWrite, canReplyAgain, onAuthLost, focus, highlighted, excerpt, unreadFrom, threadKey, replyOpen, revealMessage]);
   // Chosen files wait as chips above the text, each uploading on its own, and are sent with the message.
   const uploading = files.some(file => !file.markdown);
   const freshDraft = () => { if (currentDraft.current.attempted) updateDraft({ ...currentDraft.current, clientId: crypto.randomUUID(), attempted: false }); };
@@ -1487,7 +1488,8 @@ function Conversation({ organizationId, topic, members, user, canWrite, canManag
           <time dateTime={new Date(message.created_at * 1000).toISOString()}>{index ? new Date(message.created_at * 1000).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" })
             : new Date(message.created_at * 1000).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" })}</time></header>
         {messageBody(message, view)}
-        <ReplyFooter message={message} userId={user.id} names={memberNames} fold={view.fold} /></article>;
+        <ReplyFooter message={{ ...message, continued: continuation(message, betaRuns) }} userId={user.id} names={memberNames}
+          fold={view.fold} /></article>;
       })}</div>} />}
     {topic.kind === "beta" && <ForkOrigin organizationId={organizationId} topicId={topic.id} />}
     {focusMissing && <p role="status" className="org-link-notice">The linked message is unavailable. It may have been removed, or you may not have access to it.
