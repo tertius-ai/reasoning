@@ -19,6 +19,7 @@ import { AttachFilesButton, MAX_DIRECT_ATTACHMENTS, PendingFile, PendingFiles, p
 import { HeaderIcon } from "./HeaderIcon";
 import { KnowledgeLinks, KnowledgeView } from "./KnowledgeLinks";
 import { ReplyBar, ReplyPointer, ThreadCount, ThreadDialog, continuesRun, threadReplyCounts } from "./MessageReplies";
+import { forYouItems, forYouTally } from "./forYou";
 import { additionReceipt, modelName, moveBlocked, moveTarget, replyThreads, shownInReply, threadAnswering } from "./ReplyAdditions";
 import { MentionMirror, MentionSelf, MentionTag, chatTones, mentionFromHref, mentionInitials, speakerKey, speakerTone, toneClass } from "./mentions";
 import { LazyView } from "./LazyView";
@@ -186,8 +187,19 @@ function NavigationSpend({ value, ready = true }: { value?: Spend; ready?: boole
     ${((value?.actual_microusd ?? 0) / 1000000).toFixed(2)}{Boolean(value?.unknown_calls || value?.external_runs) && <span aria-label="Additional unconfirmed or external charges">*</span>}</span>;
 }
 
-export function TopicNavigation({ hierarchy, organizationId = "", userId = "", usage, selected, canCreate, canManageOrganization, onSelect, onCreateChannel, onCreateTopic, onProjectSettings, onChannelSettings, onTopicSettings }: {
+/** Mentions of you and replies to you, added up for a collapsed channel or a closed project. */
+function ForYouSum({ mentions, replies }: { mentions: number; replies: number }) {
+  if (!mentions && !replies) return null;
+  const label = forYouTally(mentions, replies) + " for you";
+  return <span className="org-for-you-sum" aria-label={label} title={label}>
+    {!!mentions && <span className="org-mention-count" aria-hidden="true">@{mentions}</span>}
+    {!!replies && <span className="org-reply-count" aria-hidden="true">↩{replies}</span>}</span>;
+}
+
+export function TopicNavigation({ hierarchy, organizationId = "", userId = "", usage, selected, canCreate, canManageOrganization, onSelect, onCreateChannel, onCreateTopic, onProjectSettings, onChannelSettings, onTopicSettings, reveal = 0 }: {
   organizationId?: string; userId?: string; usage?: NavigationUsage;
+  /** A new value opens every collapsed channel and closed project that holds a mention of you or a reply to you, and focuses the first such topic. */
+  reveal?: number;
   hierarchy: Hierarchy; selected: string | null; canCreate: boolean; canManageOrganization: boolean; onSelect: (id: string) => void;
   onCreateChannel: (projectId: string) => void; onCreateTopic: (channelId: string) => void;
   onProjectSettings: (projectId: string) => void; onChannelSettings: (channelId: string) => void; onTopicSettings: (topicId: string) => void;
@@ -200,7 +212,7 @@ export function TopicNavigation({ hierarchy, organizationId = "", userId = "", u
   const stopHold = () => { if (touchTimer.current) clearTimeout(touchTimer.current); touchTimer.current = null; };
   useEffect(() => () => { if (touchTimer.current) clearTimeout(touchTimer.current); }, []);
   const scope = pointerScope ?? focusScope;
-  const reveal = (kind: Scope["kind"], id: string, name: string) => ({
+  const revealSpend = (kind: Scope["kind"], id: string, name: string) => ({
     onPointerEnter: () => setPointerScope({ kind, id, name }), onPointerLeave: () => setPointerScope(null),
     onFocus: (event: React.FocusEvent<HTMLElement>) => {
       if (event.currentTarget.matches(":focus-visible") || window.matchMedia("(hover: none)").matches) setFocusScope({ kind, id, name });
@@ -221,16 +233,36 @@ export function TopicNavigation({ hierarchy, organizationId = "", userId = "", u
     <NavigationSpend ready={Boolean(usage)} value={usage?.[kind][id]} /></span>;
   useEffect(() => { saveNavigation(userId, organizationId, { collapsedChannels: [...collapsedChannels], collapsedProjects: [...collapsedProjects] }); }, [userId, organizationId, collapsedChannels, collapsedProjects]);
   const states = new Map(hierarchy.topic_state.map((state) => [state.topic_id, state]));
-  return <div className="org-navigation"><nav aria-label="Projects and channels" className="org-tree">
+  const forYou = (topicIds: string[]) => topicIds.reduce((sum, id) => ({ mentions: sum.mentions + (states.get(id)?.unread_mention_count ?? 0),
+    replies: sum.replies + (states.get(id)?.unread_reply_count ?? 0) }), { mentions: 0, replies: 0 });
+  // Commits to wait before focusing: the reveal's own, then the one that opens the channels and projects.
+  const tree = useRef<HTMLElement>(null), focusRevealed = useRef(0);
+  useEffect(() => {
+    if (!reveal) return;
+    const holding = hierarchy.topics.filter(topic => { const sum = forYou([topic.id]); return sum.mentions + sum.replies > 0; });
+    const channels = new Set(holding.map(topic => topic.channel_id));
+    const projects = new Set(hierarchy.channels.filter(channel => channels.has(channel.id)).map(channel => channel.project_id));
+    focusRevealed.current = holding.length ? 2 : 0;
+    setCollapsedChannels(current => new Set([...current].filter(id => !channels.has(id))));
+    setCollapsedProjects(current => new Set([...current].filter(id => !projects.has(id))));
+  }, [reveal]);
+  // After the channels and projects open, the first topic holding something for you takes focus.
+  useEffect(() => {
+    if (!focusRevealed.current || --focusRevealed.current) return;
+    tree.current?.querySelector<HTMLElement>(".org-topic[data-for-you]")?.focus();
+  });
+  return <div className="org-navigation"><nav aria-label="Projects and channels" className="org-tree" ref={tree}>
     {hierarchy.projects.map((project, projectIndex) => {
       const channels = hierarchy.channels.filter((channel) => channel.project_id === project.id);
+      const projectForYou = forYou(hierarchy.topics.filter(topic => channels.some(channel => channel.id === topic.channel_id)).map(topic => topic.id));
       const canWriteProject = canCreate || project.project_role === "owner";
       const canManageProject = canManageOrganization || project.project_role === "owner";
       return <details key={project.id} open={!collapsedProjects.has(project.id)} onToggle={(event) => {
         const open = event.currentTarget.open;
         setCollapsedProjects(current => { if (current.has(project.id) === !open) return current; const next = new Set(current); if (open) next.delete(project.id); else next.add(project.id); return next; });
       }} className={`org-project org-project-tone-${projectIndex % 6}`}>
-      <summary title={project.name} {...reveal("projects", project.id, project.name)}><span className="org-tree-label">{project.name}</span>{project.visibility === "private" && (project.project_role
+      <summary title={project.name} {...revealSpend("projects", project.id, project.name)}><span className="org-tree-label">{project.name}</span>
+        {collapsedProjects.has(project.id) && <ForYouSum {...projectForYou} />}{project.visibility === "private" && (project.project_role
         ? <span className="org-private-mark" aria-label="Private project" title="Private project · visible to its members and to organization owners and admins">· private</span>
         : <span className="org-private-mark org-admin-access" aria-label="Private project, visible to you as an organization owner or admin"
             title="Private project · you are not on its roster; you see it because you are an organization owner or admin">private · visible to you as admin</span>)}{spend("projects", project.id)}</summary>
@@ -240,21 +272,24 @@ export function TopicNavigation({ hierarchy, organizationId = "", userId = "", u
       {channels.map((channel, channelIndex) => {
         const topics = hierarchy.topics.filter((topic) => topic.channel_id === channel.id);
         const collapsed = collapsedChannels.has(channel.id);
+        const channelForYou = forYou(topics.map(topic => topic.id));
         return <section key={channel.id} className={`org-channel org-tree-tone-${channelIndex % 4}`}>
-        <div className="org-channel-heading"><button type="button" className="org-channel-name" title={`${collapsed ? "Expand" : "Collapse"} #${channel.name}`} {...reveal("channels", channel.id, "#" + channel.name)}
+        <div className="org-channel-heading"><button type="button" className="org-channel-name" title={`${collapsed ? "Expand" : "Collapse"} #${channel.name}`} {...revealSpend("channels", channel.id, "#" + channel.name)}
           aria-expanded={!collapsed} onClick={() => setCollapsedChannels((current) => {
             const next = new Set(current); if (next.has(channel.id)) next.delete(channel.id); else next.add(channel.id); return next;
-          })}><span className="org-tree-label">#{channel.name}</span>{spend("channels", channel.id)}</button>
+          })}><span className="org-tree-label">#{channel.name}</span>{collapsed && <ForYouSum {...channelForYou} />}{spend("channels", channel.id)}</button>
           <span className="org-channel-actions">{canWriteProject && <button type="button" className="org-tree-add" aria-label={`New topic in #${channel.name}`}
             title={`New topic in #${channel.name}`} onClick={() => onCreateTopic(channel.id)}>+</button>}
             {canManageProject && <button type="button" className="org-tree-more" aria-label={`Settings for #${channel.name}`} title={`Settings for #${channel.name}`} onClick={() => onChannelSettings(channel.id)}>⋯</button>}</span></div>
         {!collapsed && topics.map((topic, topicIndex) => {
-          const state = states.get(topic.id);
+          const state = states.get(topic.id), mentions = state?.unread_mention_count ?? 0, replies = state?.unread_reply_count ?? 0;
+          const mentionLabel = `${mentions} unread ${mentions === 1 ? "mention" : "mentions"} of you`, replyLabel = `${replies} unread ${replies === 1 ? "reply" : "replies"} to you`;
           return <div key={topic.id} className="org-topic-row"><button type="button" className={`org-topic org-tree-tone-${topicIndex % 4} ${state?.subscribed === false ? "org-unfollowed" : ""}`}
-            aria-current={selected === topic.id ? "page" : undefined} title={`${KIND_LABEL[topic.kind]}: ${topic.name}`} {...reveal("topics", topic.id, KIND_SYMBOL[topic.kind] + "-" + topic.name)}
-            onClick={() => onSelect(topic.id)}>
+            aria-current={selected === topic.id ? "page" : undefined} title={`${KIND_LABEL[topic.kind]}: ${topic.name}`} {...revealSpend("topics", topic.id, KIND_SYMBOL[topic.kind] + "-" + topic.name)}
+            data-for-you={mentions + replies || undefined} onClick={() => onSelect(topic.id)}>
             <span className="org-kind" aria-label={topic.kind + " topic"}>{KIND_SYMBOL[topic.kind]}</span><span className="org-topic-name">-{topic.name}</span>
-            {!!state?.unread_mention_count && <span className="org-mention-count" aria-label={`${state.unread_mention_count} unread personal mentions`} title={`${state.unread_mention_count} unread personal mentions`}>@</span>}
+            {!!mentions && <span className="org-mention-count" aria-label={mentionLabel} title={mentionLabel}>@{mentions}</span>}
+            {!!replies && <span className="org-reply-count" aria-label={replyLabel} title={replyLabel}>↩{replies}</span>}
             {!!state?.unread_count && state.subscribed && <span className="org-unread" aria-label={`${state.unread_count} unread messages`}>{state.unread_count}</span>}
             {spend("topics", topic.id)}
           </button>{canManageProject && <button type="button" className="org-tree-more" aria-label={`Settings for ${KIND_SYMBOL[topic.kind]}-${topic.name}`}
@@ -829,6 +864,19 @@ function Conversation({ organizationId, topic, members, user, canWrite, canManag
   // Model replies start folded to their summary line; these are the ones opened here.
   const [replyOpen, toggleReply] = useOpenReplies();
   const unseen = useUnseenMessages(messages, atBottom, user.id);
+  // Mentions of you and replies to you that were waiting when the topic opened, up to its newest message then. The topic
+  // still opens at its end and is read there, so a bar at its top says what is for you and steps to each; the bar and
+  // the messages' tags stay until the bar is closed.
+  const [openedRead] = useState(readThrough);
+  const [openedThrough, setOpenedThrough] = useState<number | null>(null);
+  const forYou = useMemo(() => openedThrough === null ? [] : forYouItems(messages, user.id, openedRead, openedThrough),
+    [messages, user.id, openedRead, openedThrough]);
+  const [forYouAt, setForYouAt] = useState(-1), [forYouClosed, setForYouClosed] = useState(false), [forYouSaid, setForYouSaid] = useState("");
+  const forYouShown = !forYouClosed && forYou.length > 0;
+  const forYouKey = forYouShown ? forYou.map(item => item.id).join(",") + "@" + forYouAt : "";
+  const forYouNow = useRef({ items: forYou, at: forYouAt, shown: forYouShown });
+  forYouNow.current = { items: forYou, at: forYouAt, shown: forYouShown };
+  const stepForYou = useRef((_delta: number) => {});
   // Choosing or cancelling a reply target starts a fresh attempt, so a retry never changes what a sent message answers.
   const startReply = useRef((_id: string) => {});
   startReply.current = (id: string) => {
@@ -1045,6 +1093,7 @@ function Conversation({ organizationId, topic, members, user, canWrite, canManag
         setMessages((existing) => mergeMessages(mergeMessages(existing, incoming), updates.messages.filter(message =>
           existing.some(prior => prior.id === message.id) || incoming.some(prior => prior.id === message.id))));
         setOnline(true); setLoading(false); revalidated.current = true; loaded = true; healthy = true;
+        setOpenedThrough(current => current ?? cursor.current);
         if (incoming.some((message) => message.client_id === currentDraft.current.clientId && message.author_id === user.id)) {
           updateDraft(newDraft()); setError("");
         }
@@ -1115,6 +1164,29 @@ function Conversation({ organizationId, topic, members, user, canWrite, canManag
     requestAnimationFrame(() => setHighlighted(id));
     element.scrollIntoView({ block: "center" });
   }, [organizationId, topic.id]);
+  stepForYou.current = (delta: number) => {
+    const index = forYouAt + delta, item = forYou[index];
+    if (!forYouShown || !item) return;
+    setForYouAt(index);
+    const element = viewport.current?.querySelector<HTMLElement>(`[data-message-id="${item.id}"]`), message = messages.find(entry => entry.id === item.id);
+    // The transcript follows new messages only while it is at its end; after the step it is wherever the message put it.
+    element?.scrollIntoView({ block: "center" }); element?.focus({ preventScroll: true });
+    const view = viewport.current;
+    if (view) { bottom.current = view.scrollHeight - view.scrollTop - view.clientHeight < 64; setAtBottom(bottom.current); }
+    setForYouSaid(`${item.kind === "mention" ? "Mention" : "Reply"} from ${message ? authorLabel(message, members) : "someone"}, ${index + 1} of ${forYou.length} in this topic`);
+  };
+  useEffect(() => {
+    const keyboard = (event: KeyboardEvent) => {
+      if (!event.altKey || !event.shiftKey || event.ctrlKey || event.metaKey || !["ArrowUp", "ArrowDown"].includes(event.key)) return;
+      const target = event.target instanceof HTMLElement ? event.target : null;
+      if (event.defaultPrevented || event.isComposing || !forYouNow.current.shown || target?.isContentEditable
+        || ["INPUT", "TEXTAREA", "SELECT"].includes(target?.tagName ?? "") || target?.closest("dialog")) return;
+      event.preventDefault();
+      stepForYou.current(event.key === "ArrowDown" ? 1 : -1);
+    };
+    window.addEventListener("keydown", keyboard);
+    return () => window.removeEventListener("keydown", keyboard);
+  }, []);
   const showMessage = useCallback((id: string, event: React.MouseEvent<HTMLAnchorElement>) => {
     if (event.defaultPrevented || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
     event.preventDefault();
@@ -1378,6 +1450,11 @@ function Conversation({ organizationId, topic, members, user, canWrite, canManag
   const groups = topic.kind === "alpha" ? alphaMessageGroups(visibleMessages) : visibleMessages.map(message => [message]);
   const byId = new Map(messages.map(message => [message.id, message]));
   const replyCounts = threadReplyCounts(messages);
+  const { items: forYouList, at: forYouIndex, shown: forYouOn } = forYouNow.current;
+  const forYouKinds = new Map(forYouOn ? forYouList.map(item => [item.id, item.kind]) : []), forYouCurrent = forYouOn ? forYouList[forYouIndex]?.id : undefined;
+  // Under your message: how many of its thread's replies are new to you since the topic opened.
+  const freshReplies = new Map<string, number>();
+  for (const item of forYouOn ? forYouList : []) if (item.kind === "reply") freshReplies.set(item.root, (freshReplies.get(item.root) ?? 0) + 1);
   const speaker = (message: Message) => isOwnMessage(message, user.id) ? "You" : authorLabel(message, members);
   const markUnread = (message: Message) => {
     holdRead.current = true; setUnreadFrom(message.sequence);
@@ -1401,18 +1478,21 @@ function Conversation({ organizationId, topic, members, user, canWrite, canManag
         const movable = topic.kind === "beta" && canWrite && !addition && message.author_id === user.id
           && (message.author_kind ?? "human") === "human" ? moveTarget(threads, message) : undefined;
         return <React.Fragment key={message.id}>
-        {message.sequence === unreadFrom && <div className="org-unread-divider" role="separator" aria-label="New messages"><span>New</span></div>}<article className={"org-message " + (index ? "org-message-continuation " : "") + (message.author_kind !== "assistant" && message.author_id === user.id ? "org-message-own" : "") + (message.id === highlighted ? " org-message-linked" : "")}
+        {message.sequence === unreadFrom && <div className="org-unread-divider" role="separator" aria-label="New messages"><span>New</span></div>}<article className={"org-message " + (index ? "org-message-continuation " : "") + (message.author_kind !== "assistant" && message.author_id === user.id ? "org-message-own" : "") + (message.id === highlighted ? " org-message-linked" : "")
+          + (forYouKinds.has(message.id) ? " org-message-for-you" : "") + (message.id === forYouCurrent ? " org-message-for-you-current" : "")}
         key={message.id} id={"message-" + message.sequence} data-sequence={message.sequence} data-message-id={message.id}
-        tabIndex={message.id === focus ? -1 : undefined} aria-current={message.id === highlighted ? "location" : undefined}>
+        tabIndex={message.id === focus || forYouKinds.has(message.id) ? -1 : undefined} aria-current={message.id === highlighted ? "location" : undefined}>
         {message.reply_to && <ReplyPointer original={byId.get(message.reply_to)} onOpen={() => setThreadFor(message.id)}
           label={byId.get(message.reply_to) && speaker(byId.get(message.reply_to)!)} />}
+        {forYouKinds.has(message.id) && <span className="org-for-you-tag">{forYouKinds.get(message.id) === "mention" ? "@ Mentions you" : "↩ Reply to you"}</span>}
         <header>{!index && <strong>{speaker(message)}</strong>}
           <time dateTime={new Date(message.created_at * 1000).toISOString()} title={new Date(message.created_at * 1000).toLocaleString()}>{topic.kind === "alpha" ? new Date(message.created_at * 1000).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" }) : new Date(message.created_at * 1000).toLocaleString()}</time></header>
         {messageBody(message, view)}
         {!!message.files?.length && <ReplyFiles topicId={topic.id} files={message.files} />}
         <ReplyFooter message={{ ...message, continued: continuation(message, runsNow.current.betaRuns) }} userId={user.id}
           names={memberNames} fold={view.fold} onShowMessage={revealMessage} />
-        {!message.reply_to && !!replyCounts.get(message.id) && <ThreadCount count={replyCounts.get(message.id)!} onOpen={() => setThreadFor(message.id)} />}
+        {!message.reply_to && !!replyCounts.get(message.id) && <ThreadCount count={replyCounts.get(message.id)!} fresh={freshReplies.get(message.id)}
+          onOpen={() => setThreadFor(message.id)} />}
         {addition && <p className={"org-addition-receipt" + (addition.read_at === null && additionThread?.active ? " org-addition-waiting" : "")}
           role="status"><span aria-hidden="true">↳</span>{additionReceipt(addition, additionThread?.root.model ?? "the model", Boolean(additionThread?.active))}
           {addition.read_at === null && additionThread?.active && message.author_id === user.id && canWrite && <button type="button"
@@ -1446,7 +1526,7 @@ function Conversation({ organizationId, topic, members, user, canWrite, canManag
             onForked(id);
           }} onAuthLost={onAuthLost} onMarkUnread={() => markUnread(message)} />
       </article></React.Fragment>; })}</div></> }));
-  }, [messages, reactions, workflowRunKey, topic.kind, topic.id, mentionPeople, tones, members, user.id, organizationId, canWrite, canReplyAgain, onAuthLost, focus, highlighted, excerpt, unreadFrom, threadKey, replyOpen, revealMessage]);
+  }, [messages, reactions, workflowRunKey, topic.kind, topic.id, mentionPeople, tones, members, user.id, organizationId, canWrite, canReplyAgain, onAuthLost, focus, highlighted, excerpt, unreadFrom, threadKey, replyOpen, revealMessage, forYouKey]);
   // Chosen files wait as chips above the text, each uploading on its own, and are sent with the message.
   const uploading = files.some(file => !file.markdown);
   const freshDraft = () => { if (currentDraft.current.attempted) updateDraft({ ...currentDraft.current, clientId: crypto.randomUUID(), attempted: false }); };
@@ -1538,6 +1618,21 @@ function Conversation({ organizationId, topic, members, user, canWrite, canManag
     {!atBottom && messages.length + workflowActivity.length + computeActivity.length + betaActivity.length > 0 && <NewestMessageButton unseen={unseen} onJump={() => {
       bottom.current = true; setAtBottom(true); if (viewport.current) viewport.current.scrollTop = viewport.current.scrollHeight;
     }} />}
+    {forYouShown && (() => {
+      const current = forYou[forYouAt], author = current && messages.find(message => message.id === current.id);
+      const mentions = forYou.filter(item => item.kind === "mention").length;
+      return <div className="org-for-you-bar" role="toolbar" aria-label="Mentions and replies in this topic"
+        onKeyDown={event => { if (event.key === "Escape") { event.stopPropagation(); setForYouClosed(true); viewport.current?.focus(); } }}>
+        <span className="org-for-you-bar-text">{current
+          ? <><b aria-hidden="true">{current.kind === "mention" ? "@" : "↩"}</b>{current.kind === "mention" ? "Mention" : "Reply"} from {author ? authorLabel(author, members) : "someone"}
+            <small>{forYouAt + 1} of {forYou.length}</small></>
+          : <><b aria-hidden="true">{mentions ? "@" : "↩"}</b>{forYouTally(mentions, forYou.length - mentions)} for you here</>}</span>
+        <button type="button" aria-label="Previous mention or reply" title="Previous · Alt+Shift+↑" disabled={forYouAt <= 0} onClick={() => stepForYou.current(-1)}>↑</button>
+        <button type="button" aria-label="Next mention or reply" title="Next · Alt+Shift+↓" disabled={forYouAt >= forYou.length - 1} onClick={() => stepForYou.current(1)}>↓</button>
+        <button type="button" aria-label="Close" title="Close · Esc" onClick={() => setForYouClosed(true)}>×</button>
+      </div>;
+    })()}
+    <span className="org-visually-hidden" role="status">{forYouSaid}</span>
     </div>
     {!online && <p role="status" className="org-reconnecting">Reconnecting…</p>}
     {error && <p role="alert" className="org-error org-conversation-error">{error}</p>}
@@ -2039,7 +2134,8 @@ export function OrganizationApp({ user, onAccount, onAuthenticated, onSignedOut,
       }
       if (creation || admin) return;
       if (event.key === "Escape") { setSearch(""); setResults(null); }
-      if (event.altKey && ["ArrowUp", "ArrowDown"].includes(event.key) && hierarchy.topics.length) {
+      // Alt+Shift+arrows step through mentions and replies inside the topic instead.
+      if (event.altKey && !event.shiftKey && ["ArrowUp", "ArrowDown"].includes(event.key) && hierarchy.topics.length) {
         event.preventDefault();
         const index = hierarchy.topics.findIndex((item) => item.id === selection?.topic);
         const next = (index + (event.key === "ArrowDown" ? 1 : -1) + hierarchy.topics.length) % hierarchy.topics.length;
@@ -2093,6 +2189,12 @@ export function OrganizationApp({ user, onAccount, onAuthenticated, onSignedOut,
   // Shown on the People toggle, so unread direct messages are visible while the panel is closed.
   const directTotal = directUnreadTotal(directConversations);
   const unreadTopics = hierarchy.topic_state.reduce((sum, state) => sum + (state.subscribed ? state.unread_count : 0), 0);
+  // Mentions of you and replies to you count in every topic, followed or not; the header names them and the navigation
+  // button carries their total while the sidebar is closed.
+  const forYouMentions = hierarchy.topic_state.reduce((sum, state) => sum + (state.unread_mention_count ?? 0), 0);
+  const forYouReplies = hierarchy.topic_state.reduce((sum, state) => sum + (state.unread_reply_count ?? 0), 0);
+  const forYouTotal = forYouMentions + forYouReplies;
+  const [revealForYou, setRevealForYou] = useState(0);
   const openDirect = (memberId: string) => {
     const existing = directConversations.find(item => item.other_user.id === memberId);
     if (existing) { showDirect(existing.id); return; }
@@ -2116,8 +2218,11 @@ export function OrganizationApp({ user, onAccount, onAuthenticated, onSignedOut,
   return <ReferenceContext.Provider value={references}><MentionSelf.Provider value={user.id}><div className={"org-app org-tree-tone-" + Math.max(0, hierarchy.topics.filter(value => value.channel_id === topic?.channel_id).findIndex(value => value.id === topic?.id)) % 4}>
     {/* With the sidebar open, the bar splits at the sidebar's edge so the room name starts where the chat does. */}
     <header className="org-appbar org-topic-color"><div className={"org-appbar-brand" + (navOpen ? " org-appbar-brand-open" : "")}><button type="button" className="org-icon-button org-nav-toggle" aria-label="Toggle project navigation"
-      title="Toggle project navigation · Ctrl/⌘B" aria-controls="org-project-navigation" aria-expanded={navOpen} onClick={() => setNavOpen(open => !open)}>
-      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2" /><path d="M9 4v16" /></svg></button>
+      title={"Toggle project navigation · Ctrl/⌘B" + (forYouTotal && !navOpen ? ` · ${forYouTally(forYouMentions, forYouReplies)} for you` : "")}
+      aria-controls="org-project-navigation" aria-expanded={navOpen} aria-describedby={forYouTotal && !navOpen ? "org-nav-for-you" : undefined} onClick={() => setNavOpen(open => !open)}>
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2" /><path d="M9 4v16" /></svg>
+      {forYouTotal > 0 && !navOpen && <span className="org-nav-for-you" aria-hidden="true">{forYouTotal > 99 ? "99+" : forYouTotal}</span>}</button>
+      {forYouTotal > 0 && !navOpen && <span id="org-nav-for-you" className="org-visually-hidden">{forYouTally(forYouMentions, forYouReplies)} for you</span>}
       <Brand />{organizationId && <ProviderDailySpend key={organizationId} organizationId={organizationId} onAuthLost={authLost} />}</div>
       {knowledgeView ? <h1 className="org-workspace-title">{knowledgeView === "journal" ? "Research blog editor" : knowledgeView === "ledger" ? "Ledger" : "Bibliography"}</h1>
         : directConversation && organization ? <DirectTitle key={directConversation.id} organizationId={organization.id} conversation={directConversation} members={members}
@@ -2172,7 +2277,10 @@ export function OrganizationApp({ user, onAccount, onAuthenticated, onSignedOut,
         {/* Like the People header: the organization, a summary line, then actions. */}
         <header><div className="org-sidebar-title"><strong className="org-organization-name" title={organization?.name}>{organization?.name ?? "Organizations"}</strong>
           {organization && <small>{[organization.role, hierarchy.projects.length + (hierarchy.projects.length === 1 ? " project" : " projects"),
-            unreadTopics ? unreadTopics + " unread" : ""].filter(Boolean).join(" · ")}</small>}</div>
+            unreadTopics ? unreadTopics + " unread" : ""].filter(Boolean).join(" · ")}</small>}
+          {organization && forYouTotal > 0 && <button type="button" className="org-for-you-total" title="Show where in the projects"
+            aria-label={`${forYouTally(forYouMentions, forYouReplies)} for you: show where`} onClick={() => setRevealForYou(value => value + 1)}>
+            {forYouTally(forYouMentions, forYouReplies)}</button>}</div>
           <span className="org-sidebar-heading-actions"><span role="status" className={online ? "org-connected" : "org-offline"}>{online ? "" : "Offline"}</span>
           {canCreate && <button type="button" className="org-tree-add org-sidebar-action" aria-label="New project" title="New project" onClick={() => beginCreation("project")}><HeaderIcon name="plus" /></button>}
           {organization && <button type="button" className="org-sidebar-action" aria-label="Organization information" title="Organization information"
@@ -2181,7 +2289,7 @@ export function OrganizationApp({ user, onAccount, onAuthenticated, onSignedOut,
           canManageOrganization={Boolean(organization && ["owner", "admin"].includes(organization.role))} onSelect={(id) => select(id)}
           onCreateChannel={(projectId) => beginCreation("channel", projectId)} onCreateTopic={(channelId) => beginCreation("topic", channelId)}
           onProjectSettings={(id) => setEntitySettings({ kind: "project", id })} onChannelSettings={(id) => setEntitySettings({ kind: "channel", id })}
-          onTopicSettings={(id) => setEntitySettings({ kind: "topic", id })} />
+          onTopicSettings={(id) => setEntitySettings({ kind: "topic", id })} reveal={revealForYou} />
         {!hierarchy.projects.length && organization && <p className="org-tree-empty">{organization.role === "viewer" ? "Projects will appear here." : "Create a project to begin."}</p>}
         <footer><div className="org-account-row"><AccountMenu user={user} organization={organization} organizations={organizations} canCreateOrganization={canCreateOrganization}
           onSwitch={switchOrganization} onAccount={() => setInformation("user")} onOrganization={() => setInformation("organization")}

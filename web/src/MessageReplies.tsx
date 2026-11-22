@@ -63,11 +63,11 @@ export function threadReplyCounts(messages: Pick<Message, "id" | "reply_to">[]):
   return counts;
 }
 
-/** Under a thread's first message: how many replies it has. Opens the whole thread. */
-export function ThreadCount({ count, onOpen }: { count: number; onOpen: () => void }) {
+/** Under a thread's first message: how many replies it has, and how many of them are new replies to you. Opens the whole thread. */
+export function ThreadCount({ count, fresh = 0, onOpen }: { count: number; fresh?: number; onOpen: () => void }) {
   const label = `${count} ${count === 1 ? "reply" : "replies"}`;
-  return <button type="button" className="org-thread-count" onClick={onOpen} title="Show the whole thread"
-    aria-label={`${label}: show the whole thread`}><span aria-hidden="true">↩</span>{label}</button>;
+  return <button type="button" className={"org-thread-count" + (fresh ? " org-thread-count-fresh" : "")} onClick={onOpen} title="Show the whole thread"
+    aria-label={`${label}${fresh ? `, ${fresh} new to you` : ""}: show the whole thread`}><span aria-hidden="true">↩</span>{label}{fresh ? ` · ${fresh} new` : ""}</button>;
 }
 
 /** The pointer above a reply; a curve in the gutter joins it to the speaker's dot. Opens the whole thread. */

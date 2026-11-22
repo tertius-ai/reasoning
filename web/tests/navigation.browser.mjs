@@ -50,7 +50,9 @@ test("phone toolbar retains every action and scoped navigation survives refresh"
     const readout = page.locator(".org-inline-spend[data-visible=true]");
     await page.locator(".org-brand").hover();
     assert.equal(await readout.count(), 0);
-    assert.equal(await second().locator(".org-mention-count").innerText(), "@");
+    assert.equal(await second().locator(".org-mention-count").innerText(), "@2");
+    assert.equal(await second().locator(".org-mention-count").getAttribute("aria-label"), "2 unread mentions of you");
+    assert.equal(await page.locator(".org-for-you-total").innerText(), "2 mentions");
     assert.ok(await second().evaluate(element => parseFloat(getComputedStyle(element).paddingLeft) > 20));
     const before = await second().boundingBox();
     for (const [row, name] of [[project().locator("summary"), "Project"], [page.getByRole("button", { name: /^#channel/ }), "#channel"], [second(), "α-Second"]]) {
@@ -94,7 +96,10 @@ test("phone toolbar retains every action and scoped navigation survives refresh"
     await navToggle.click(); assert.equal(await page.locator(".org-sidebar").isVisible(), false);
     assert.equal(await navToggle.isVisible(), true, "navigation toggle survives closing navigation");
     await navToggle.click(); assert.equal(await page.locator(".org-sidebar").isVisible(), true);
+    assert.equal(await navToggle.locator(".org-nav-for-you").count(), 0, "no count on the button while the sidebar is open");
     await page.keyboard.press("Control+b"); assert.equal(await page.locator(".org-sidebar").isVisible(), false);
+    assert.equal(await navToggle.locator(".org-nav-for-you").innerText(), "2");
+    assert.equal(await navToggle.evaluate(element => document.getElementById(element.getAttribute("aria-describedby")).textContent), "2 mentions for you");
     await page.keyboard.press("Meta+b"); assert.equal(await page.locator(".org-sidebar").isVisible(), true);
     await page.keyboard.press("Escape"); assert.equal(await page.locator(".org-sidebar").isVisible(), true);
     const peopleToggle = page.getByLabel("Show online people and bots", { exact: true });
@@ -139,14 +144,24 @@ test("phone toolbar retains every action and scoped navigation survives refresh"
     await page.waitForFunction(() => JSON.parse(localStorage.getItem("reasoning.navigation.v1/alice/org")).collapsedProjects.includes("project"));
     await page.reload(); await project().waitFor();
     assert.equal(await project().getAttribute("open"), null);
+    assert.equal(await project().locator("summary .org-for-you-sum").innerText(), "@2", "a closed project adds up what it holds for you");
     assert.match(await page.locator(".org-topic-menu h1").innerText(), /Second/);
     await project().locator("summary").click();
-    assert.equal(await page.getByRole("button", { name: /^#channel/ }).getAttribute("aria-expanded"), "false");
+    const channel = page.getByRole("button", { name: /^#channel/ });
+    assert.equal(await channel.getAttribute("aria-expanded"), "false");
+    assert.match(await channel.innerText(), /@2/, "so does a collapsed channel");
+    assert.equal(await channel.locator(".org-for-you-sum").getAttribute("aria-label"), "2 mentions for you");
+    await page.getByRole("button", { name: "2 mentions for you: show where", exact: true }).click();
+    await page.locator('.org-channel-name[aria-expanded="true"]').waitFor();
+    assert.equal(await second().evaluate(element => element === document.activeElement), true, "the first topic holding them is focused");
+    await channel.click();
     for (const width of [320, 375]) {
       await page.setViewportSize({ width, height: 700 });
       await navToggle.click(); assert.equal(await page.locator(".org-sidebar").isVisible(), true);
       await page.keyboard.press("Escape"); assert.equal(await page.locator(".org-sidebar").isVisible(), true);
       await navToggle.click(); assert.equal(await page.locator(".org-sidebar").isVisible(), false);
+      const badge = await navToggle.locator(".org-nav-for-you").boundingBox();
+      assert.ok(badge.x >= 0 && badge.y >= 0, "the count on the closed sidebar's button stays on screen");
       await page.getByLabel("More topic actions", { exact: true }).click();
       for (const label of ["Search organization messages", "Switch to dark mode", "Show online people and bots", "Copy topic JSON", "Open ledger", "Open bibliography", "Open research blog", "Help"]) {
         const action = page.getByLabel(label, { exact: true });

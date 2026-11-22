@@ -44,6 +44,43 @@ def test_read_state_subscription_and_mentions_survive_restart(installation):
     assert topic_state(owner_client, org, topic)["unread_count"] == 2
 
 
+def test_unread_replies_count_replies_to_you_and_to_answers_you_asked_for(installation):
+    config, store, owner_client, owner = installation
+    org = owner["organization_id"]
+    topic = structure(owner_client, org)[2][0]["id"]
+    _, member, user = invited(installation)
+    path = f"/api/organizations/{org}/topics/{topic}/messages"
+
+    def post(client, content, client_id, reply_to=None):
+        response = client.post(path, json={"content": content, "client_id": client_id, **({"reply_to": reply_to} if reply_to else {})})
+        assert response.status_code == 201, response.text
+        return response.json()
+
+    question = post(owner_client, "Is the count right?", "question")
+    theirs = post(member, "My own note", "theirs")
+    answer, bot = "a" * 32, "b" * 32
+    insert = ("INSERT INTO messages(id,organization_id,topic_id,author_id,content,client_id,created_at,author_kind,sender_kind,reply_to) "
+              "VALUES(?,?,?,?,?,?,1,?,?,?)")
+    with store.transaction(write=True) as db:
+        # A model's answer is stored under the person who asked for it and replies to their question.
+        db.execute(insert, (answer, org, topic, owner["user_id"], "Yes.", "assistant-1", "assistant", "assistant", question["id"]))
+        db.execute(insert, (bot, org, topic, user["user_id"], "Checked.", "bot-1", "human", "bot", question["id"]))
+    post(member, "It matches my count.", "reply", question["id"])
+    post(member, "Agreed with the answer.", "on-answer", answer)
+    post(member, f"@[{owner['user_id']}] see above", "mention-reply", question["id"])
+    post(owner_client, "Thanks.", "own-reply", question["id"])
+    post(owner_client, "Replying to the member.", "to-member", theirs["id"])
+    state = topic_state(owner_client, org, topic)
+    # The bot's reply, the reply to the question and the reply to the answer; not the answer itself, not the reply that
+    # mentions the owner (a mention), and not the owner's own reply.
+    assert state["unread_reply_count"] == 3
+    assert state["unread_mention_count"] == 1
+    assert topic_state(member, org, topic)["unread_reply_count"] == 1
+    last = post(member, "Last word.", "last")
+    assert owner_client.put(f"/api/organizations/{org}/topics/{topic}/read", json={"sequence": last["sequence"]}).status_code == 204
+    assert topic_state(owner_client, org, topic)["unread_reply_count"] == 0
+
+
 def test_invalid_read_cursors_and_cross_topic_preferences_fail(installation):
     _, _, client, owner = installation
     org = owner["organization_id"]
