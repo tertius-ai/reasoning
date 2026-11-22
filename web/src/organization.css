@@ -810,6 +810,22 @@ a.org-reference:hover, a.org-reference:focus-visible { text-decoration: underlin
 .org-compute-detail pre { max-height: 260px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; font: 12px/1.5 var(--font-mono); }
 .org-compute-detail dd { margin-left: 0; overflow-wrap: anywhere; font: 11px var(--font-mono); }
 .org-compute-enrollment { border: 1px solid var(--border); padding: 12px; margin-bottom: 15px; }
+.org-lean-environments { margin-top: 24px; }
+.org-lean-environments form { margin-bottom: 8px; }
+.org-lean-environment-list { list-style: none; padding: 0; margin: 12px 0 0; }
+.org-lean-environment { border-top: 1px solid var(--border); padding: 12px 0; }
+.org-lean-environment > header { display: flex; flex-wrap: wrap; align-items: baseline; gap: 10px; font-size: 13px; }
+.org-lean-environment > small, .org-lean-sources small { display: block; color: var(--muted); font-size: 11px; overflow-wrap: anywhere; }
+.org-lean-status { font-size: 11px; color: var(--muted); }
+.org-lean-status-requested { color: var(--amber); font-weight: 500; }
+.org-lean-sources-wrap { overflow-x: auto; margin: 8px 0; }
+.org-lean-sources { width: 100%; border-collapse: collapse; font-size: 12px; }
+.org-lean-sources th, .org-lean-sources td { padding: 6px 8px; border-bottom: 1px solid var(--border); text-align: left; vertical-align: top; }
+.org-lean-sources th { font-size: 11px; font-weight: 500; color: var(--muted); }
+.org-lean-sources td:first-child { white-space: nowrap; }
+.org-lean-sources a, .org-lean-sources code { overflow-wrap: anywhere; }
+.org-lean-sources code { font: 11px var(--font-mono); }
+.org-lean-environment-actions { display: flex; flex-wrap: wrap; gap: 8px; }
 .org-invite-link { margin-top: 18px; }
 .org-invite-link input { font-family: var(--font-mono); font-size: 11px; }
 .org-search-results { padding: 24px; overflow-y: auto; }

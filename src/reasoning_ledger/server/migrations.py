@@ -690,3 +690,7 @@ MIGRATIONS += (SIDE_CHAT_SCHEMA,)
 from .side_chat_layout_schema import SCHEMA as SIDE_CHAT_LAYOUT_SCHEMA  # noqa: E402
 
 MIGRATIONS += (SIDE_CHAT_LAYOUT_SCHEMA,)
+
+from .compute_environments_schema import SCHEMA as COMPUTE_ENVIRONMENTS_SCHEMA  # noqa: E402
+
+MIGRATIONS += (COMPUTE_ENVIRONMENTS_SCHEMA,)

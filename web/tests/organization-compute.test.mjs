@@ -221,3 +221,42 @@ test("a job's pinned input files show their sandbox path, size and checksum", ()
   assert.match(markup, new RegExp(`SHA-256 ${sha}`));
   assert.equal(renderToStaticMarkup(React.createElement(components.ComputeInputFiles, {})), "");
 });
+
+test("Lean environment requests send both project files unchanged and bound their size", () => {
+  const manifest = JSON.stringify({ version: "1.1.0", packages: [] });
+  assert.deepEqual(api.captureLeanEnvironmentRequest("leanprover/lean4:v4.24.0\n", manifest),
+    { lean_toolchain: "leanprover/lean4:v4.24.0\n", lake_manifest: manifest });
+  assert.throws(() => api.captureLeanEnvironmentRequest(" ", manifest), /lean-toolchain/);
+  assert.throws(() => api.captureLeanEnvironmentRequest("leanprover/lean4:v4.24.0", "\n"), /lake-manifest\.json/);
+  assert.throws(() => api.captureLeanEnvironmentRequest("x".repeat(129), manifest), /128 bytes/);
+  assert.throws(() => api.captureLeanEnvironmentRequest("leanprover/lean4:v4.24.0", "é".repeat(16 * 1024 + 1)), /32 KiB/);
+});
+
+test("an approval lists every source by URL and exact revision as untrusted text", async () => {
+  const environments = await server.ssrLoadModule("/src/LeanEnvironments.tsx");
+  const revision = "1fe0a51a" + "0".repeat(32);
+  const environment = {
+    id: "d".repeat(32), organization_id: org, key: "e".repeat(64), status: "requested",
+    specification: { format: 1, toolchain: "leanprover/lean4:v4.34.0-rc1", packages: [
+      { name: "mathlib", url: "https://github.com/leanprover-community/mathlib4", rev: revision, sub_dir: null },
+      { name: "<b>Sub</b>", url: "https://github.com/o/monorepo", rev: "c".repeat(40), sub_dir: "lean/Sub" }] },
+    sources: [
+      { kind: "toolchain", name: "Lean", url: "https://github.com/leanprover/lean4/releases/tag/v4.34.0-rc1", revision: "v4.34.0-rc1", sub_dir: null },
+      { kind: "package", name: "<b>Sub</b>", url: "https://github.com/o/monorepo", revision: "c".repeat(40), sub_dir: "lean/Sub" },
+      { kind: "package", name: "mathlib", url: "https://github.com/leanprover-community/mathlib4", revision, sub_dir: null }],
+    requested_by: user, requested_at: 1, decided_by: null, decided_at: null,
+  };
+  const markup = renderToStaticMarkup(React.createElement(environments.LeanEnvironmentSources, { environment }));
+  assert.match(markup, /Lean toolchain/);
+  assert.match(markup, /href="https:\/\/github.com\/leanprover\/lean4\/releases\/tag\/v4.34.0-rc1"/);
+  assert.match(markup, new RegExp(`<code>${revision}</code>`));
+  assert.match(markup, /href="https:\/\/github.com\/leanprover-community\/mathlib4"/);
+  assert.match(markup, /Sub-directory lean\/Sub/);
+  assert.match(markup, /&lt;b&gt;Sub&lt;\/b&gt;/); assert.doesNotMatch(markup, /<b>Sub/);
+  assert.equal((markup.match(/rel="noreferrer noopener"/g) ?? []).length, 3);
+  const section = renderToStaticMarkup(React.createElement(environments.LeanEnvironments, { organizationId: org, onAuthLost: () => {} }));
+  assert.match(section, /Lean environments/); assert.match(section, /lean-toolchain/); assert.match(section, /lake-manifest\.json/);
+  assert.match(section, /Approve only sources you trust/); assert.match(section, /not available yet/);
+  assert.match(section, /Review sources/); assert.match(section, /Loading Lean environments/);
+  assert.equal(api.LEAN_ENVIRONMENT_STATUS.requested, "Waiting for an administrator");
+});

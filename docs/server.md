@@ -593,6 +593,9 @@ Use the prefix `/api/organizations/{organization_id}` for organization resources
 | `{prefix}/topics/{topic_id}/side-chat/bring` | POST | Post your words and chosen side exchanges to the topic as one message from you, shown as a folded group; it may answer a topic message |
 | `{prefix}/compute-configuration` | GET | Approved compute images, organization policy, and quota balance |
 | `{prefix}/compute-policy` | PUT | Administrator compute admission/concurrency limits |
+| `{prefix}/compute-environments` | GET, POST | The organization's Lean environments; members with write access request one from a project's `lean-toolchain` and `lake-manifest.json`, and an existing key returns its record |
+| `{prefix}/compute-environments/{environment_id}` | GET | One Lean environment: its key, specification, sources and decision |
+| `{prefix}/compute-environments/{environment_id}/decision` | PUT | Administrator approves or declines exactly the sources of the named key |
 | `{prefix}/topics/{topic_id}/compute-jobs` | GET, POST | Gamma compute job history and idempotent submission |
 | `{prefix}/compute-jobs/{job_id}` | GET | Durable compute state and captured program/evidence |
 | `{prefix}/compute-jobs/{job_id}/events` | GET | Exclusive-cursor compute logs and state replay |
