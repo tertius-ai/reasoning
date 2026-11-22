@@ -16,6 +16,7 @@ import { replyExcerpt } from "./MessageReplies";
 import { modelName, replyTimeline } from "./ReplyAdditions";
 import { ReplyFooter } from "./ReplyFooter";
 import { ReplyBody, foldFor, useOpenReplies } from "./FoldedReply";
+import { useSideChatFrame } from "./SideChatFrame";
 import { replyParts } from "./replySummary";
 import { ReplyTimeline } from "./ReplyTimeline";
 import { type AboutDraft, type AnswerTarget, postTime } from "./SideChatGroup";
@@ -250,7 +251,7 @@ function BringMenu({ messages, reply, answer: suggested, people, tones, busy, on
 }
 
 export function SideChat({ organizationId, topic, userId, canWrite, model, effort, maxTokens, people, tones, answer, onClose, onBrought,
-  onShowPost, onAuthLost, renderMarkdown, onFocused, hidden = false, about, onAbout, focusMessage, onShowAbout }: {
+  onShowPost, onAuthLost, renderMarkdown, onFocused, hidden = false, about, onAbout, focusMessage, onShowAbout, mainUnread = 0 }: {
   organizationId: string; topic: Topic; userId: string; canWrite: boolean;
   /** The conversation's chosen reply model and effort, which the side chat asks; side chats answer with OpenRouter models. */
   model: string; effort: string | null; maxTokens: number | null;
@@ -272,6 +273,8 @@ export function SideChat({ organizationId, topic, userId, canWrite, model, effor
   onFocused?: () => void;
   /** Shows the topic message a question was about. */
   onShowAbout?: (messageId: string) => void;
+  /** Messages posted in the main chat while the side chat hides it, counted on “Show main chat”. */
+  mainUnread?: number;
 }) {
   const root = topicPath(organizationId, topic.id) + "/side-chat";
   const [messages, setMessages] = useState<SideMessage[]>([]);
@@ -291,6 +294,8 @@ export function SideChat({ organizationId, topic, userId, canWrite, model, effor
   const [now, setNow] = useState(() => Date.now());
   const latest = useRef(0), clientId = useRef(crypto.randomUUID()), poller = useRef<{ wake(): void } | null>(null);
   const viewport = useRef<HTMLDivElement>(null), textarea = useRef<HTMLTextAreaElement>(null), atEnd = useRef(true);
+  const frameRef = useRef<HTMLElement>(null);
+  const frame = useSideChatFrame({ user: userId, aside: frameRef, mainUnread });
   const failed = (cause: unknown) => {
     if (aborted(cause)) return;
     if (cause instanceof ApiError && cause.status === 401) onAuthLost(); else setError(errorMessage(cause));
@@ -432,10 +437,13 @@ export function SideChat({ organizationId, topic, userId, canWrite, model, effor
       if (cause instanceof ApiError && cause.status === 409) reload();
     } finally { setBusy(false); }
   };
-  return <aside className="org-side-chat" aria-label="Side chat" hidden={hidden}>
-    <header>
+  return <aside ref={frameRef} id="org-side-chat" className={"org-side-chat" + frame.className} style={frame.style} aria-label="Side chat"
+    hidden={hidden} role={frame.floating ? "dialog" : undefined} aria-modal={frame.floating ? false : undefined} onKeyDown={frame.onKeyDown}>
+    {frame.before}
+    <header onPointerDown={frame.onHeaderPointerDown}>
       <div><h2>Side chat</h2><small>Private · linked to {topic.name}</small></div>
-      <button type="button" className="org-icon-button" aria-label="Close side chat" title="Close side chat" onClick={onClose}>×</button>
+      <span className="org-side-tools">{frame.tools}
+        <button type="button" className="org-icon-button" aria-label="Close side chat" title="Close side chat" onClick={onClose}>×</button></span>
     </header>
     <div className="org-side-transcript" ref={viewport} tabIndex={0} aria-label="Side chat messages" onScroll={event => {
       const view = event.currentTarget;
@@ -523,5 +531,6 @@ export function SideChat({ organizationId, topic, userId, canWrite, model, effor
       <button type="submit" className="org-composer-button org-side-send" aria-label={adding ? "Add to the reply" : "Ask privately"}
         title={adding ? "Add · Enter" : "Ask · Enter"} disabled={!canWrite || sending || !text.trim() || Boolean(unsupported)}><ReturnIcon /></button>
     </form>
+    {frame.after}
   </aside>;
 }

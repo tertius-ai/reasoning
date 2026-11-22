@@ -1,10 +1,63 @@
 /* Copyright Benjamin Antieau and Deven Manam. SPDX-License-Identifier: Apache-2.0 */
 /* Your private side chat beside a topic, and the folded groups that side chats bring into a topic. */
-.org-conversation-row { flex: 1; min-height: 0; display: flex; }
+.org-conversation-row { position: relative; flex: 1; min-height: 0; display: flex; }
 .org-conversation-row > .org-conversation { flex: 1; min-width: 0; height: auto; }
-.org-side-chat { width: 360px; flex: none; display: flex; flex-direction: column; min-height: 0; border-left: 1px solid var(--border); background: var(--surface); }
+/* Beside the topic the width is your saved share of the conversation area, between a 360 px column and leaving the
+   topic a 360 px column (`sideChatLayout.ts`). */
+.org-side-chat { position: relative; width: clamp(360px, calc(var(--side-chat-share, 0) * 100%), max(360px, calc(100% - 360px))); flex: none;
+  display: flex; flex-direction: column; min-height: 0; border-left: 1px solid var(--border); background: var(--surface); }
 .org-side-chat > header { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 12px 10px 10px 16px; border-bottom: 1px solid var(--border); }
 .org-side-chat > header div { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.org-side-chat > header > div { flex: 1; }
+.org-side-tools { display: flex; flex: none; align-items: center; gap: 2px; }
+/* In Full, Expand becomes the way back: its symbol, “Show main chat”, what was posted there since, and Esc. */
+.org-app .org-icon-button.org-side-show-main { width: auto; gap: 6px; padding: 0 8px 0 7px; border: 1px solid color-mix(in srgb, var(--blue) 45%, transparent);
+  border-radius: var(--radius-pill); background: color-mix(in srgb, var(--blue) 12%, transparent); color: var(--blue); font: 500 12.5px var(--font-sans); white-space: nowrap; }
+.org-app .org-icon-button.org-side-show-main:hover { background: color-mix(in srgb, var(--blue) 20%, transparent); }
+.org-side-show-main .org-unread { background: color-mix(in srgb, var(--blue) 24%, transparent); color: var(--blue); }
+.org-side-show-main kbd { padding: 0 4px; border: 1px solid color-mix(in srgb, var(--blue) 35%, transparent); border-radius: 4px;
+  color: color-mix(in srgb, var(--blue) 70%, var(--muted)); font: 10px/1.5 var(--font-mono); }
+.org-side-float-button[aria-pressed="true"] { color: var(--blue); }
+/* The left edge drags the width; a grip shows on hover and focus, and guides name the snap points while it moves. */
+.org-side-edge { position: absolute; inset: 0 auto 0 -5px; z-index: 6; width: 10px; cursor: col-resize; touch-action: none; }
+.org-side-edge::after { content: ""; position: absolute; inset: 0 auto 0 4.5px; width: 1px; background: transparent; }
+.org-side-edge:hover::after, .org-side-edge:focus-visible::after, .org-side-edge:active::after { background: var(--blue); }
+.org-side-edge:focus-visible { outline: none; }
+.org-side-edge > span { position: absolute; top: 50%; left: 0; width: 10px; height: 34px; margin-top: -17px; border: 1px solid color-mix(in srgb, var(--blue) 55%, transparent);
+  border-radius: var(--radius-pill); background: var(--surface-raised); opacity: 0; }
+.org-side-edge > span::before { content: ""; position: absolute; inset: 9px 3px; background: radial-gradient(circle, var(--blue) 1px, transparent 1.4px) center / 4px 5px; }
+.org-side-edge:hover > span, .org-side-edge:focus-visible > span, .org-side-edge:active > span { opacity: 1; }
+.org-side-guides { position: absolute; inset: 0 0 0 auto; z-index: 5; pointer-events: none; }
+.org-side-guides > div { position: absolute; top: 0; bottom: 0; width: 0; border-left: 1px dashed color-mix(in srgb, var(--blue) 45%, transparent); }
+.org-side-guides > div > span { position: absolute; top: 56px; left: 6px; padding: 2px 8px; border: 1px solid var(--border-strong); border-radius: var(--radius-pill);
+  background: var(--surface-raised); color: var(--muted); font: 500 11px/1.5 var(--font-mono); white-space: nowrap; }
+.org-side-guides > .org-side-guide-on { border-left: 1px solid var(--blue); }
+.org-side-guides > .org-side-guide-on > span { border-color: color-mix(in srgb, var(--blue) 55%, transparent); color: var(--blue); }
+.org-side-tip { position: fixed; z-index: 60; padding: 3px 9px; border: 1px solid var(--border-strong); border-radius: 6px; background: var(--surface-raised);
+  box-shadow: var(--shadow-overlay); color: var(--foreground); font: 12px/1.4 var(--font-sans); white-space: nowrap; pointer-events: none; }
+/* A wide side chat keeps a reading column, as the topic keeps its 900 px column. */
+.org-side-wide .org-side-transcript { padding-inline: max(10px, calc((100% - 820px) / 2)); }
+.org-side-wide > .org-side-composer, .org-side-wide > .org-side-about-bar, .org-side-wide > .org-side-notice, .org-side-wide > .org-side-error,
+.org-side-wide > .org-side-unsupported { margin-inline: max(12px, calc((100% - 820px) / 2)); }
+/* Full: the side chat takes the conversation area; the main chat is hidden until “Show main chat”. */
+.org-side-full-row > .org-conversation { display: none; }
+.org-side-chat.org-side-full { flex: 1; width: auto; border-left: 0; }
+/* Floating: over the topic, moved by its title bar and resized from any edge or corner. */
+.org-side-chat.org-side-float { position: absolute; z-index: 24; inset: auto; border: 1px solid var(--border-strong); border-radius: var(--radius-card);
+  box-shadow: var(--shadow-overlay); overflow: hidden; }
+.org-side-float > header { cursor: move; user-select: none; }
+.org-side-float > header button { cursor: pointer; }
+.org-side-resize { position: absolute; z-index: 9; touch-action: none; }
+.org-side-resize-n, .org-side-resize-s { left: 12px; right: 12px; height: 6px; cursor: ns-resize; }
+.org-side-resize-n { top: 0; } .org-side-resize-s { bottom: 0; }
+.org-side-resize-e, .org-side-resize-w { top: 12px; bottom: 12px; width: 6px; cursor: ew-resize; }
+.org-side-resize-e { right: 0; } .org-side-resize-w { left: 0; }
+.org-side-resize-ne, .org-side-resize-nw, .org-side-resize-se, .org-side-resize-sw { width: 14px; height: 14px; }
+.org-side-resize-ne { top: 0; right: 0; cursor: nesw-resize; } .org-side-resize-sw { bottom: 0; left: 0; cursor: nesw-resize; }
+.org-side-resize-nw { top: 0; left: 0; cursor: nwse-resize; } .org-side-resize-se { right: 0; bottom: 0; cursor: nwse-resize; }
+.org-side-resize-se::after { content: ""; position: absolute; right: 3px; bottom: 3px; width: 7px; height: 7px;
+  border-right: 1.5px solid var(--border-strong); border-bottom: 1.5px solid var(--border-strong); border-bottom-right-radius: 3px; }
+.org-side-grabber { display: none; }
 .org-side-chat > header h2 { margin: 0; font-size: 13px; font-weight: 600; }
 .org-side-chat > header small { overflow: hidden; color: var(--muted); font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
 .org-side-transcript { flex: 1; min-height: 0; display: flex; flex-direction: column; padding: 8px 10px 12px; overflow: auto; overscroll-behavior: contain; }
@@ -91,6 +144,23 @@
 .org-side-about-bar > span:nth-child(2) { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .org-side-about-bar strong { color: var(--blue); font-weight: 500; }
 .org-side-about-bar button { flex: none; width: 22px; height: 22px; padding: 0; border: none; border-radius: 6px; background: transparent; color: var(--muted); font-size: 15px; line-height: 1; cursor: pointer; }
+/* A narrower window: beside the topic, the side chat floats over it, at a share of the window that keeps 48 px of the topic. */
 @media (max-width: 1000px) {
-  .org-side-chat { position: fixed; inset: 44px 0 0 auto; z-index: 23; width: min(360px, 92vw); box-shadow: var(--shadow-overlay); }
+  .org-side-chat { position: fixed; inset: 44px 0 0 auto; z-index: 23; width: clamp(min(360px, 92vw), calc(var(--side-chat-share, 0) * 100vw), calc(100vw - 48px));
+    box-shadow: var(--shadow-overlay); }
+  .org-side-chat.org-side-full { position: relative; inset: auto; z-index: auto; box-shadow: none; }
+  .org-side-chat.org-side-float { position: absolute; inset: auto; }
+}
+/* A phone: a sheet from the bottom whose grab bar sets its height; at full height it hides the main chat. */
+@media (max-width: 700px) {
+  .org-side-chat.org-side-sheet { inset: auto 0 0 0; width: 100%; height: calc(var(--side-sheet-height, .6) * (100vh - 44px));
+    height: calc(var(--side-sheet-height, .6) * (100dvh - 44px)); border-left: 0; border-top: 1px solid var(--border-strong); border-radius: 16px 16px 0 0; }
+  .org-side-chat.org-side-sheet.org-side-full { flex: none; border-radius: 0; }
+  .org-side-sheet > header { padding-top: 18px; }
+  .org-side-sheet > header small { max-width: 46vw; }
+  .org-side-grabber { position: absolute; top: 0; left: 0; right: 0; z-index: 6; display: block; height: 18px; cursor: ns-resize; touch-action: none; }
+  .org-side-grabber > span { position: absolute; top: 7px; left: 50%; width: 36px; height: 4px; margin-left: -18px; border-radius: 2px; background: var(--border-strong); }
+  .org-side-grabber:focus-visible { outline: none; }
+  .org-side-grabber:focus-visible > span, .org-side-grabber:hover > span { background: var(--blue); }
+  .org-brought-panel { width: min(360px, 92vw); }
 }

@@ -28,6 +28,8 @@ export type KnowledgeEntry = {
 export type TopicState = {
   topic_id: string; subscribed: boolean; last_read_sequence: number; last_message_sequence: number;
   unread_count: number; unread_mention_count: number;
+  /** Whether your side chat is open in the topic; kept per topic with your account. */
+  side_chat_open?: boolean;
 };
 /** The signed-in member's view of one of their direct conversations. */
 export type DirectConversation = {

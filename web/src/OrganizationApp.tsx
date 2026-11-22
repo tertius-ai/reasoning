@@ -33,6 +33,7 @@ import { ReplyBody, foldFor, useOpenReplies } from "./FoldedReply";
 import { replyParts } from "./replySummary";
 import { WorkingCard } from "./ReplyTimeline";
 import { type AboutDraft, BroughtPanel, SideChatCard, answerTarget, groupTitle } from "./SideChatGroup";
+import { PHONE, hidesMainChat, useMedia, useSideChatLayout } from "./sideChatLayout";
 import { normalizeMathDelimiters, rehypeMath } from "./markdownMath";
 import { catalogModel, keptReplyModel, modelOptionGroups } from "./modelRecommendations";
 import { EffortPicker, ModelPicker, compactTokens } from "./ModelBrowser";
@@ -718,7 +719,7 @@ function PresenceSidebar({ organizationId, open, onClose, onAuthLost, userId, on
   </aside>;
 }
 
-function Conversation({ organizationId, topic, members, user, canWrite, canManage, draft, updateDraft, files, changeFiles, anchor, focus, onLinkSeen, referenceTargets = [], menuTarget = null, onPreference, onForked, onAuthLost, modelAttempt, onModelAttempt, computeAttempt, onComputeAttempt, workflowAttempt, onWorkflowAttempt, workflowExecutionAttempt, onWorkflowExecutionAttempt, sideChat = false, onCloseSideChat, onOpenSideChat }: {
+function Conversation({ organizationId, topic, members, user, canWrite, canManage, draft, updateDraft, files, changeFiles, anchor, focus, onLinkSeen, referenceTargets = [], menuTarget = null, onPreference, onForked, onAuthLost, modelAttempt, onModelAttempt, computeAttempt, onComputeAttempt, workflowAttempt, onWorkflowAttempt, workflowExecutionAttempt, onWorkflowExecutionAttempt, sideChat = false, onCloseSideChat, onOpenSideChat, readThrough = 0 }: {
   organizationId: string; topic: Topic; members: Member[]; user: Account; canWrite: boolean; canManage: boolean;
   draft: Draft; updateDraft: (draft: Draft) => void; anchor: number | null;
   /** Files waiting to be sent with this topic's draft; `changeFiles` always changes this topic's, even after a switch. */
@@ -739,6 +740,8 @@ function Conversation({ organizationId, topic, members, user, canWrite, canManag
   workflowExecutionAttempt?: WorkflowExecutionAttempt; onWorkflowExecutionAttempt: (attempt?: WorkflowExecutionAttempt) => void;
   /** Whether your private side chat is open beside this AI chat. */
   sideChat?: boolean; onCloseSideChat?: () => void; onOpenSideChat?: () => void;
+  /** The topic's read position, from the topic list. */
+  readThrough?: number;
 }) {
   // A recent visit's messages and cursors render at once; the poll then fetches only what changed.
   const snapshotKey = anchor === null && !focus ? `${user.id}/${organizationId}/${topic.id}` : "";
@@ -1123,6 +1126,23 @@ function Conversation({ organizationId, topic, members, user, canWrite, canManag
   const [askAbout, setAskAbout] = useState<AboutDraft | null>(null);
   const [sideFocus, setSideFocus] = useState<{ id: string; nonce: number } | null>(null);
   useEffect(() => { if (sideChat) setExcerpt(null); }, [sideChat]);
+  // While your side chat hides the main chat (Full, or a full-height sheet on a phone), the main chat marks nothing read,
+  // and what others post there is counted on “Show main chat”.
+  const sideLayout = useSideChatLayout(user.id), phoneWidth = useMedia(PHONE);
+  const sideShown = sideChat && topic.kind === "beta" && Boolean(onCloseSideChat)
+    && !(excerpt && messages.some(item => item.id === excerpt && item.side_chat));
+  const mainHidden = sideShown && hidesMainChat(sideLayout, phoneWidth);
+  const mainUnread = mainHidden ? messages.filter(message => message.sequence > readThrough && !isOwnMessage(message, user.id)).length : 0;
+  // The topic beside a wide side chat can be narrow on a wide window; it then takes the narrow layout.
+  const conversation = useRef<HTMLElement>(null);
+  const [narrowTopic, setNarrowTopic] = useState(false);
+  useEffect(() => {
+    const element = conversation.current;
+    if (!element) return;
+    const observer = new ResizeObserver(() => setNarrowTopic(element.getBoundingClientRect().width < 560));
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, []);
 
   // One permission-scoped request reads reactions for every newly loaded message; a reaction change then
   // updates only its own message.
@@ -1145,14 +1165,14 @@ function Conversation({ organizationId, topic, members, user, canWrite, canManag
   useEffect(() => {
     const mark = () => {
       const sequence = messages.at(-1)?.sequence ?? 0;
-      if (holdRead.current || !bottom.current || document.visibilityState !== "visible" || !document.hasFocus() || sequence <= acknowledged.current) return;
+      if (holdRead.current || mainHidden || !bottom.current || document.visibilityState !== "visible" || !document.hasFocus() || sequence <= acknowledged.current) return;
       void request(root + "/read", { method: "PUT", body: { sequence } }).then(() => {
         acknowledged.current = Math.max(acknowledged.current, sequence); onPreference();
       }).catch((cause) => { if (cause instanceof ApiError && cause.status === 401) onAuthLost(); });
     };
     mark(); window.addEventListener("focus", mark); document.addEventListener("visibilitychange", mark);
     return () => { window.removeEventListener("focus", mark); document.removeEventListener("visibilitychange", mark); };
-  }, [messages, atBottom, root, onAuthLost]);
+  }, [messages, atBottom, root, onAuthLost, mainHidden]);
 
   const chooseCommand = (command: TopicCommand) => {
     updateDraft(newDraft()); setMention(null); setReference(null);
@@ -1455,7 +1475,9 @@ function Conversation({ organizationId, topic, members, user, canWrite, canManag
   // The plus sits under the box beside the model picker in AI chats, and inside the box on its left everywhere else.
   const attach = <span ref={attachmentControl} className="org-composer-attach"><AttachFilesButton
     disabled={!canWrite || sending || (topic.kind === "beta" && !!modelAttempt)} onFiles={attachFiles} dataFiles /></span>;
-  return <MediaScope.Provider value={{ organizationId, topicId: topic.id, canWrite }}><div className="org-conversation-row"><section className="org-conversation" aria-label="Topic conversation">
+  return <MediaScope.Provider value={{ organizationId, topicId: topic.id, canWrite }}><div className={"org-conversation-row" + (mainHidden && !phoneWidth ? " org-side-full-row" : "")}
+    style={{ "--side-chat-share": String(sideLayout.desktop.width ?? 0) } as React.CSSProperties}><section ref={conversation}
+    className={"org-conversation" + (narrowTopic ? " org-conversation-narrow" : "")} aria-label="Topic conversation">
     {texOpen && <TexRequestDialog bots={botModels} names={botNames} onClose={() => setTexOpen(false)} onPrepare={(source, bot) => {
       const label = `@${botNames[bot.bot_id] ?? bot.name}`;
       updateDraft({ text: label + " " + texRequest(source), clientId: crypto.randomUUID(), attempted: false,
@@ -1643,7 +1665,7 @@ function Conversation({ organizationId, topic, members, user, canWrite, canManag
     people={sidePeople} tones={tones} answer={answer} hidden={Boolean(excerptPost)} about={askAbout} onAbout={setAskAbout}
     focusMessage={sideFocus} onFocused={() => setSideFocus(null)} onShowAbout={showAbout}
     maxTokens={modelCatalog?.models.find(model => model.id === selectedModel)?.max_completion_tokens ?? null}
-    onBrought={brought} onShowPost={showMessage} renderMarkdown={renderSideMarkdown} /></LazyView>}
+    onBrought={brought} onShowPost={showMessage} renderMarkdown={renderSideMarkdown} mainUnread={mainUnread} /></LazyView>}
   </div></MediaScope.Provider>;
 }
 
@@ -1845,8 +1867,8 @@ export function OrganizationApp({ user, onAccount, onAuthenticated, onSignedOut,
     return () => window.removeEventListener("resize", resize);
   }, []);
   const [presenceOpen, setPresenceOpen] = useState(() => typeof window !== "undefined" && window.innerWidth > 1100);
-  // Your private side chat beside an AI chat; it stays open as you move between AI chats.
-  const [sideChatOpen, setSideChatOpen] = useState(false);
+  // Whether your private side chat is open is kept per topic with your account; a choice made here shows at once.
+  const [sideChatChoices, setSideChatChoices] = useState<Record<string, boolean>>({});
   useEffect(() => {
     const narrow = window.matchMedia("(max-width: 1100px)");
     const closeOnNarrowScreen = () => { if (narrow.matches) setPresenceOpen(false); };
@@ -1869,6 +1891,17 @@ export function OrganizationApp({ user, onAccount, onAuthenticated, onSignedOut,
   const channel = hierarchy.channels.find((item) => item.id === topic?.channel_id);
   const selectedProject = hierarchy.projects.find((item) => item.id === channel?.project_id);
   const canWriteSelected = Boolean(organization && (organization.role !== "viewer" || selectedProject?.project_role === "owner"));
+  const topicState = topic ? hierarchy.topic_state.find(item => item.topic_id === topic.id) : undefined;
+  const sideChatOpen = Boolean(topic && (sideChatChoices[topic.id] ?? topicState?.side_chat_open));
+  const setSideChatOpen = (open: boolean) => {
+    if (!organization || !topic) return;
+    const id = topic.id;
+    setSideChatChoices(current => ({ ...current, [id]: open }));
+    void request(topicPath(organization.id, id) + "/side-chat", { method: "PUT", body: { open } }).catch(cause => {
+      setSideChatChoices(current => ({ ...current, [id]: !open }));
+      if (cause instanceof ApiError && cause.status === 401) authLost(); else setError(errorMessage(cause));
+    });
+  };
   const draftKey = user && organization && topic ? user.id + "/" + organization.id + "/" + topic.id : "";
   const draft = drafts[draftKey] ?? { text: "", clientId: "", attempted: false };
   const preferenceRefresh = useCallback(() => setRefresh((value) => value + 1), []);
@@ -2112,7 +2145,7 @@ export function OrganizationApp({ user, onAccount, onAuthenticated, onSignedOut,
         onClick={() => setPresenceOpen((value) => !value)}><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" aria-hidden="true"><circle cx="9" cy="7" r="3"/><path d="M3 21v-3a6 6 0 0 1 12 0v3M17 4a3 3 0 0 1 0 6M21 21v-3a6 6 0 0 0-3-5"/></svg>
         {directTotal > 0 && <span className="org-unread org-presence-unread" aria-hidden="true">{directTotal}</span>}</button>}
       {organization && topic?.kind === "beta" && <button type="button" className="org-icon-button org-side-chat-toggle" aria-label="Side chat"
-        title="Side chat · ask the model privately" aria-expanded={sideChatOpen} onClick={() => setSideChatOpen(value => !value)}>
+        title="Side chat · ask the model privately" aria-expanded={sideChatOpen} onClick={() => setSideChatOpen(!sideChatOpen)}>
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" aria-hidden="true">
           <path d="M3 5.5A2.5 2.5 0 0 1 5.5 3h8A2.5 2.5 0 0 1 16 5.5v5a2.5 2.5 0 0 1-2.5 2.5H9l-3.5 3v-3A2.5 2.5 0 0 1 3 10.5z" />
           <path d="M19 8.5h.5A1.5 1.5 0 0 1 21 10v5.5a1.5 1.5 0 0 1-1.5 1.5H19v3l-3.5-3H12a1.5 1.5 0 0 1-1.5-1.5V16" /></svg></button>}
@@ -2180,7 +2213,8 @@ export function OrganizationApp({ user, onAccount, onAuthenticated, onSignedOut,
           onForked={(id) => { void request<Hierarchy>(organizationPath(organization.id) + "/hierarchy").then((tree) => {
             setHierarchy(tree); select(id); preferenceRefresh();
           }).catch((cause) => setError(errorMessage(cause))); }} onAuthLost={authLost}
-          sideChat={sideChatOpen} onCloseSideChat={() => setSideChatOpen(false)} onOpenSideChat={() => setSideChatOpen(true)} />
+          sideChat={sideChatOpen} onCloseSideChat={() => setSideChatOpen(false)} onOpenSideChat={() => setSideChatOpen(true)}
+          readThrough={topicState?.last_read_sequence ?? 0} />
           : <section className="org-empty"><h1>{organization ? "A place to reason together" : "Choose or create an organization"}</h1>
             <p>{organization ? "Projects hold channels, and channels hold focused conversations." : "Organizations keep their own conversations, members, and provider keys."}</p>
             {canCreate && <button onClick={() => hierarchy.channels.length ? beginCreation("topic", hierarchy.channels[0].id)

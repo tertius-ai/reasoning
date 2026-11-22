@@ -541,6 +541,7 @@ Use the prefix `/api/organizations/{organization_id}` for organization resources
 | `{prefix}/references` | GET | Access-checked current names of referenced topics and projects |
 | `{prefix}/topics/{topic_id}/subscription` | PUT | Current member's topic following preference |
 | `{prefix}/topics/{topic_id}/read` | PUT | Current member's monotonic read cursor |
+| `{prefix}/topics/{topic_id}/side-chat` | PUT | Whether the current member's side chat is open in this topic (`open`), returned as `side_chat_open` in the topic state |
 | `{prefix}/direct-conversations` | GET, POST | The current member's [direct conversations](#direct-messages) with unread state; open or create one with another human member |
 | `{prefix}/direct-conversations/{conversation_id}` | GET | One direct conversation's summary, for its participants only |
 | `{prefix}/direct-conversations/{conversation_id}/messages` | GET, POST | Direct-message history and submission, with the topic message cursors and limits |
@@ -785,6 +786,11 @@ read in `additions`. `DELETE …/side-chat/additions/{message_id}` takes back an
 reply has not read; it stays in the side chat as a message of its own. Bringing an exchange
 brings the added messages its answer read.
 
+The side chat's layout belongs to the member's account (`/api/auth/side-chat`), and whether it is
+open is kept per topic with the member's read cursor (`PUT …/side-chat` with `open`; the hierarchy's
+topic state carries `side_chat_open`). While the side chat fills the conversation area, the client
+marks nothing in the hidden conversation read.
+
 `POST …/side-chat/bring` with `message_ids` (1–50 of your side messages, at least one of them
 an answer), optional `words` (at most 4,000 characters; mentions notify as in any message),
 optional `reply_to` (a message of the same topic) and `client_id` posts one topic message from
@@ -989,6 +995,10 @@ collections. The channel's `/bot-models` endpoint lists following-access bot
 routes eligible for a new topic; creation rechecks those grants atomically.
 `GET /api/auth/model-favorites` and `PUT /api/auth/model-favorites` read and toggle
 the signed-in person's server-stored favorites across devices and organizations.
+`GET /api/auth/side-chat` and `PUT /api/auth/side-chat` read and replace the signed-in person's
+side chat layout in the same way: `desktop` holds `mode` (`side`, `full` or `float`), `width` (a share
+of the conversation area, or null for a 360 px column) and `floating` (`x`, `y`, `w`, `h` as shares, or
+null); `phone` holds the sheet's `height` as a share of the screen (0.2–1).
 The composer selects one available model per message, leads with mathematics
 recommendations, and exposes the complete chat-model catalog. Choosing a model
 with advertised reasoning-effort levels opens a compact keyboard-accessible

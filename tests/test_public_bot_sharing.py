@@ -233,6 +233,8 @@ def test_existing_bots_keep_their_runner_sharing_when_migrated(fixture, runner_f
         db.execute("DROP TABLE bot_invokers")
         db.execute("DROP TABLE bot_sharing")
         # Later migrations are undone as well, so the upgrade replays them after bot sharing.
+        db.execute("DROP TABLE user_side_chat_layouts")
+        db.execute("ALTER TABLE topic_subscriptions DROP COLUMN side_chat_open")
         db.execute("DROP TABLE side_chat_brought_messages")
         db.execute("DROP TABLE side_chat_brought")
         db.execute("DROP TABLE side_chat_runs")

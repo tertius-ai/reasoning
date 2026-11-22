@@ -822,6 +822,13 @@ a.org-reference:hover, a.org-reference:focus-visible { text-decoration: underlin
 .org-search-results p { white-space: pre-wrap; overflow-wrap: anywhere; margin: 6px 0; max-height: 110px; overflow: hidden; }
 .org-visually-hidden { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
 .org-nav-backdrop { display: none; }
+/* A topic narrowed by a wide side chat on a wide window takes the narrow conversation layout. */
+.org-conversation-narrow .org-transcript { padding: 14px; }
+.org-conversation-narrow .org-composer { margin: 0 12px 12px; }
+.org-conversation-narrow .org-composer-controls, .org-conversation-narrow .org-composer-model { flex-wrap: wrap; }
+.org-conversation-narrow .org-model-menu { max-width: calc(100% - 70px); position: static; }
+.org-conversation-narrow .org-model-menu > summary { max-width: 100%; }
+.org-conversation-narrow .org-model-options { left: 0; right: 0; width: auto; }
 @media (max-width: 1000px) {
   .org-sidebar { width: 235px; }
   .org-presence { position: fixed; inset: 44px 0 0 auto; z-index: 22; width: min(280px, 88vw); box-shadow: var(--shadow-overlay); }
