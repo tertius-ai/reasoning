@@ -109,3 +109,14 @@ def test_image_addition_needs_an_installed_release_that_has_the_host_operation(p
     with pytest.raises(InstallError, match="invalid Modal image addition"):
         owned_modal_remote(config, document, directory, bundle, {**addition, "images": [IMAGE]}, "extend", command=command)
     assert calls == [] and len(provider.writes) == writes
+
+
+def test_the_environment_probe_needs_an_installed_release_that_has_the_host_operation(prepared):
+    config, document, directory, bundle, value, command, calls, _, provider, _ = prepared
+    request = {"format": 1, "release_id": value["release_id"], "public_url": value["public_url"]}
+    writes = len(provider.writes)
+    with pytest.raises(InstallError, match="can probe Lean environments"):
+        owned_modal_remote(config, document, directory, bundle, request, "environment-probe", command=command)
+    with pytest.raises(InstallError, match="invalid Lean environment probe request"):
+        owned_modal_remote(config, document, directory, bundle, {**request, "workers": []}, "environment-probe", command=command)
+    assert calls == [] and len(provider.writes) == writes

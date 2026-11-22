@@ -858,6 +858,11 @@ def main(argv: list[str] | None = None) -> int:
     verify = commands.add_parser("verify-images", help="verify remote enrollment and local daemon/image metadata without claiming a job")
     verify.add_argument("--catalog", required=True, type=Path)
     verify.add_argument("--docker-socket", type=Path, default=Path("/var/run/docker.sock"))
+    probe = commands.add_parser(
+        "probe-environment-mount",
+        help="start two small Modal VMs to check that a sealed Lean environment mounts read-only into a job (paid)")
+    probe.add_argument("--modal-profile", required=True, type=Path)
+    probe.add_argument("--catalog", required=True, type=Path)
     drain = commands.add_parser("drain", help="stop new claims without interrupting active work or stopping a service")
     retire = commands.add_parser("retire", help="irreversibly retire a stopped worker after cleanup and retained result delivery")
     for command in (drain, retire):
@@ -884,6 +889,17 @@ def main(argv: list[str] | None = None) -> int:
         config = enrollment(raw["server_url"], raw)
         if args.command in {"drain", "retire"} and args.confirm_worker != config["id"]:
             raise WorkerFault("confirm_worker_mismatch")
+        if args.command == "probe-environment-mount":
+            from .compute_environment_probe import run_probe
+
+            # The relay's own profile and catalog; the probe never contacts the server or claims a job.
+            profile = json.loads(read_private(args.modal_profile, 16384))
+            read_private(args.catalog, 65536)
+            images = load_catalog(args.catalog)
+            if profile.get("resources") != config["resources"] or set(images) != set(config["image_ids"]):
+                raise WorkerFault("enrollment_mismatch")
+            print(json.dumps(run_probe(args.data_dir, config["id"], profile, images), sort_keys=True))
+            return 0
         client = WorkerClient(config)
         if args.command == "drain":
             verify_identity(config, client)

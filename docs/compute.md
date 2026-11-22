@@ -145,6 +145,46 @@ provides operation names, schemas and examples without launching a job;
 artifact. Native beta models use the topic's Compute grant and explicit allowance
 or exact-action approval. Bot submissions require the bot owner's approval.
 
+## Check that Lean environments mount read-only
+
+A Lean environment holds a Lean project's toolchain and compiled dependencies.
+It is prepared once and then shared, read-only, by the organization's jobs, which
+see it at `/opt/lean-env`. The relay code can run a job with a sealed environment
+from a Modal Volume (see [Modal VM compute](#modal-vm-compute)); preparing
+environments and naming one in a job are not available yet.
+`make compute-environment-probe` checks that mount on a live Modal run.
+
+1. If the relays do not run the installed release's relay code, run
+   `make compute-relays-update` first. The relays may keep taking jobs.
+2. Run `make compute-environment-probe` and type the confirmation. Inside a
+   temporary SSH window, the chat host runs the probe as the relay account, with
+   the first relay's own Modal profile and catalog. Modal credentials stay on the
+   host.
+3. The probe creates a version 2 Modal Volume, which Modal deletes when the probe
+   ends, and starts two VMs of 1 CPU and 1 GiB each:
+   - The first mounts the whole Volume writable. It writes a 256 MiB file, a small
+     executable script, and a world-writable directory and file into
+     `/probe-environment`, writes a marker into a sibling directory, and commits
+     the Volume with `sync`.
+   - The second runs an ordinary job on the relay's job path, with the first
+     catalog image that runs Python. Its VM mounts only `/probe-environment`,
+     read-only, at `/mnt/lean-env`, and Docker binds that directory read-only at
+     `/opt/lean-env` into the job's container. The job program runs as UID 10001.
+     It reads and hashes the file, runs the script, and tries ten kinds of write
+     in the world-writable directory.
+4. The mount is proved read-only when the job succeeds, both mounts are
+   read-only, the hash matches, the script runs, the sibling directory is not
+   visible, and every write fails with `EROFS`. `EROFS` means a read-only file
+   system, not a permission error. The command prints what each VM showed,
+   including the read speed from the Volume, and saves the receipt in
+   `DEPLOY_STATE/compute-environment-probe/`.
+
+The probe claims no job and records nothing on the server. It keeps the job VM's
+journal in `environment-probe/` inside the relay's state directory. If that VM's
+end was not verified, the next probe terminates it first, and stops if it cannot.
+An unverified end of the writer VM is reported in the receipt; that VM stops at
+its Modal lifetime of 720 seconds.
+
 ## Compiling LaTeX to PDF
 
 The `tex` image compiles LaTeX offline with TeX Live 2021 (see
@@ -301,6 +341,16 @@ builder. The supervisor's package layer is not a fully pinned/audited CAS releas
 Only the selected public CAS image is pulled by digest; private registry
 credentials are not supported by this path.
 
+A job may carry a sealed Lean environment, which is one directory of a Modal
+Volume. Its VM mounts only that directory, read-only, at `/mnt/lean-env`. After
+Docker is ready and before the image download, the relay reads
+`/proc/self/mountinfo` in the VM. It stops the job with `environment_writable`
+unless that mount or its filesystem is read-only. Docker then binds the
+directory read-only, with private propagation, at `/opt/lean-env` in the job's
+container. Container verification accepts exactly that bind and no other host
+path. [`make compute-environment-probe`](#check-that-lean-environments-mount-read-only)
+checks all of this on a live run.
+
 Modal token ID/secret and the scoped worker enrollment remain on the relay.
 No provider keys, owner sessions, registry credentials, server filesystem,
 or Docker socket from the chat host are sent into submitted programs. The
@@ -339,8 +389,10 @@ Each relay keeps `modal-last-attempt.json` in its private data directory. It
 records the latest attempt's job, worker, attempt and sandbox IDs, current stage,
 execution outcome, safe error code and exception class, update timestamp, and whether VM cleanup was
 verified. The receipt survives ordinary job settlement; the next attempt replaces
-it. Stages distinguish VM creation, Docker client setup/readiness, image download,
-and execution/result collection. Startup failures also produce one short line in
+it. Stages distinguish VM creation, Docker client setup/readiness, the Lean
+environment mount check, image download, and execution/result collection. For a
+job with a Lean environment, the receipt also records the VM mount's filesystem
+and options. Startup failures also produce one short line in
 the job output, without provider error bodies, credentials, or submitted source.
 Image downloads use Docker's quiet mode and a bounded transport. A fresh VM
 downloads the whole image, several GB for the research images, so the download may
@@ -902,7 +954,8 @@ malicious host falsifying metadata. The ID comes from
 It verifies the actual immutable image, Linux amd64 platform, capability/SBOM
 hashes, source revision, installed entry point, and resource maximums before
 execution. Containers have a read-only root, denied network, private namespaces,
-no devices or host binds, dropped capabilities, no-new-privileges, CPU/RAM/PID
+no devices, no host binds except a job's sealed Lean environment (bound
+read-only at `/opt/lean-env`), dropped capabilities, no-new-privileges, CPU/RAM/PID
 limits, and bounded noexec/nosuid/nodev writable tmpfs. Tmpfs consumes the RAM
 allocation as well as the scratch allowance. The job runs as numeric UID/GID
 10001, distinct from its non-root UID/GID 10002 supervisor. Images must support

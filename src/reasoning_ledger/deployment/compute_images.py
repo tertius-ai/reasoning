@@ -226,6 +226,88 @@ def run_refresh_relays(directory: Path, command, *, detect_public_ipv4=None, rem
         return {**result, "ssh_closed": True}
 
 
+def describe_probe(receipt):
+    """Plain lines for the operator: the verdict, then what each VM showed."""
+    probe = receipt["probe"]
+    lines = [f"Relay used: {receipt['relay']}"]
+    if probe.get("error"):
+        lines.append(f"The probe stopped during {probe['error']['stage']} ({probe['error']['exception_type']}).")
+    writer, reader, container = probe.get("writer") or {}, probe.get("reader") or {}, probe.get("container") or {}
+    if writer.get("mount"):
+        lines.append(f"Writer VM: the Volume is a {writer['mount']['filesystem']} mount; writing and committing took "
+                     f"{writer.get('seconds')} s.")
+    if reader.get("environment_mount"):
+        mount = reader["environment_mount"]
+        lines.append(f"Job VM: the environment is a {mount['filesystem']} mount with options {mount['mount_options']} "
+                     f"({'read-only' if mount['read_only'] else 'WRITABLE'}); the job {reader.get('status')} in "
+                     f"{reader.get('seconds')} s.")
+    if container:
+        lines.append(f"Container: mount options {(container.get('mount') or {}).get('options')}; read "
+                     f"{probe.get('data_bytes', 0) // 1024**2} MiB at {container.get('read_mib_per_second')} MiB/s; "
+                     f"execute: {container.get('exec')}; writes: "
+                     + ", ".join(f"{name} {value}" for name, value in sorted((container.get("writes") or {}).items())) + ".")
+    if probe["failures"]:
+        lines.append("Not proved:")
+        lines.extend("  - " + item for item in probe["failures"])
+    else:
+        lines.append("Proved: a Modal Volume mounts read-only into the job VM and into the job's container, and the job "
+                     "cannot write to it.")
+    return lines
+
+
+def run_environment_probe(directory: Path, command, *, detect_public_ipv4=None, remote=owned_modal_remote):
+    """Check on a live Modal run that a sealed Lean environment mounts read-only into a job.
+
+    One relay on the chat host starts two small VMs with its own Modal credentials and a temporary Volume that Modal
+    deletes afterwards; see reasoning_ledger.server.compute_environment_probe. The relays keep running. The receipt is
+    printed and saved in DEPLOY_STATE/compute-environment-probe.
+    """
+    with locked_directory(directory.absolute()) as state:
+        current = current_binding(state)
+        bundle = archived_release(state, current["release_id"])
+        manifest, release, checksum = inspect_bundle(bundle, current["bundle_sha256"])
+        if release != current["release_id"] or checksum != current["bundle_sha256"]:
+            raise InstallError("synchronize the installed release before probing Lean environments")
+        if "modal-environment-probe-v1" not in manifest.get("installation_features", []):
+            raise InstallError("upgrade the server to a release that can probe Lean environments (make upgrade), then retry")
+        config_path, plan_path, ownership = state / "setup.json", state / "plan.json", state / "ownership"
+        config, document = read_document(config_path), read_document(plan_path)
+        origin = public_origin(operator_origin(config, document, current))
+        print(f"Site: {origin}\nRelease: {release}")
+        print("One Modal relay on the chat host starts two small VMs on the relays' Modal account (1 CPU and 1 GiB each,")
+        print("a few minutes in all) and a temporary Modal Volume of 256 MiB that Modal deletes afterwards. No job, topic")
+        print("or organization data is involved, and the relays keep running. The relays must run this release's relay")
+        print("code (make compute-relays-update).")
+        approve("Run the Lean environment probe?", "probe environments " + origin)
+        plan_id = document["plan_id"] if "plan_id" in document else read_document(state / "setup-completion.json")["plan_id"]
+        cidr = temporary_ssh_cidr(detect_public_ipv4)
+        try:
+            config, opened = _ssh_action(
+                command, state, config_path, config, plan_path, plan_id, ownership, ["--open-cidr", cidr, "--wait-seconds", 60]
+            )
+            if opened.get("phase") != "open":
+                raise InstallError("temporary SSH access is unverified")
+            result = remote(config, document, ownership, bundle, {"format": 1, "release_id": release, "public_url": origin},
+                            "environment-probe")
+            if (not isinstance(result, dict) or result.get("release_id") != release or not isinstance(result.get("probe"), dict)
+                    or not isinstance(result["probe"].get("failures"), list)):
+                raise InstallError("Lean environment probe receipt is invalid")
+        finally:
+            config, closed = close_ssh_with_token_recovery(
+                lambda arguments: _invoke(command, arguments), state, config_path, config, plan_path, ownership, plan_id,
+                document["plan"],
+            )
+            if closed.get("phase") != "closed":
+                raise InstallError("SSH closure is unverified; run make doctor with the same deployment state")
+        work = state / "compute-environment-probe"
+        with locked_directory(work):
+            write_document(work / f"{time.strftime('%Y%m%dT%H%M%SZ', time.gmtime())}-{secrets.token_hex(4)}.json", result,
+                           new=True)
+        for line in describe_probe(result):
+            print(line)
+        return {**result, "ssh_closed": True}
+
+
 def relay_limits(configuration, workers):
     """The organization's live Modal relay workers, and every installed image with its maximum resources."""
     try:

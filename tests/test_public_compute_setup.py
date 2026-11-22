@@ -422,3 +422,70 @@ def test_relay_limits_refuse_a_release_without_the_host_operation_before_any_pro
     with pytest.raises(InstallError, match="make upgrade"):
         compute_images.run_relay_limits(state, None, remote=lambda *_: pytest.fail("must not reach the host"), transport=transport)
     assert calls == [] and prompts == []
+
+
+PROBED = {"format": 1, "image_id": "research-cpu", "data_bytes": 256 * 1024**2, "error": None, "failures": [],
+          "writer": {"mount": {"filesystem": "fuse"}, "seconds": 41.0},
+          "reader": {"status": "succeeded", "seconds": 150.2,
+                     "environment_mount": {"filesystem": "fuse", "mount_options": "ro,relatime", "read_only": True}},
+          "container": {"mount": {"options": "ro,relatime"}, "read_mib_per_second": 120.5, "exec": "environment-exec-ok",
+                        "writes": {"create": "EROFS", "unlink": "EROFS"}}}
+
+
+@pytest.fixture
+def probing(relays):
+    compute_images, state, calls, features = relays
+    features["installation_features"].append("modal-environment-probe-v1")
+    requests = []
+
+    def remote(config, document, ownership, bundle, payload, operation):
+        requests.append((payload, operation))
+        calls.append("remote")
+        return {"release_id": payload["release_id"], "relay": "c" * 32, "probe": PROBED}
+
+    return compute_images, state, calls, features, requests, remote
+
+
+def test_environment_probe_asks_consent_then_runs_on_the_host_inside_one_ssh_window(probing, capsys):
+    compute_images, state, calls, _, requests, remote = probing
+    result = compute_images.run_environment_probe(state, None, remote=remote)
+    assert calls == ["probe environments https://chat.example.org", "open", "remote", "close"]
+    assert requests == [({"format": 1, "release_id": "a" * 64, "public_url": "https://chat.example.org"}, "environment-probe")]
+    assert result["ssh_closed"] is True and result["probe"] == PROBED
+    saved = [path for path in (state / "compute-environment-probe").iterdir() if path.suffix == ".json"]
+    assert len(saved) == 1 and read_document(saved[0])["probe"] == PROBED
+    output = capsys.readouterr().out
+    assert "Proved: a Modal Volume mounts read-only into the job VM" in output
+    assert "read 256 MiB at 120.5 MiB/s" in output and "create EROFS, unlink EROFS" in output
+
+
+def test_environment_probe_reports_each_shortfall(probing, capsys):
+    compute_images, state, calls, _, _, _ = probing
+    shortfall = {**PROBED, "failures": ["the VM mount is not read-only"],
+                 "reader": {**PROBED["reader"], "environment_mount": {**PROBED["reader"]["environment_mount"], "read_only": False}}}
+    compute_images.run_environment_probe(
+        state, None, remote=lambda *args: {"release_id": "a" * 64, "relay": "c" * 32, "probe": shortfall})
+    output = capsys.readouterr().out
+    assert "Not proved:\n  - the VM mount is not read-only" in output and "(WRITABLE)" in output
+
+
+def test_environment_probe_refuses_a_release_without_it_before_any_prompt(probing):
+    compute_images, state, calls, features, _, _ = probing
+    features["installation_features"].remove("modal-environment-probe-v1")
+    with pytest.raises(InstallError, match="make upgrade"):
+        compute_images.run_environment_probe(state, None, remote=lambda *_: pytest.fail("must not reach the host"))
+    assert calls == []
+
+
+@pytest.mark.parametrize("answer", [None, {"release_id": "a" * 64, "probe": {"format": 1}}, "fail"])
+def test_environment_probe_closes_ssh_when_the_host_fails_or_answers_badly(probing, answer):
+    compute_images, state, calls, _, _, _ = probing
+
+    def remote(*_):
+        if answer == "fail":
+            raise InstallError("update the Modal relays to the installed release first")
+        return answer
+
+    with pytest.raises(InstallError):
+        compute_images.run_environment_probe(state, None, remote=remote)
+    assert calls[-1] == "close" and not (state / "compute-environment-probe").exists()
