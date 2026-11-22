@@ -188,11 +188,12 @@ async function imagePreview(file: File): Promise<string> {
 
 export function extractionLabel(value?: Extraction | null): string {
   if (value?.status === "ready") return `Text available for research${value.total_pages ? ` · ${value.pages_read}/${value.total_pages} pages` : ""}. Formulas and figures may need direct inspection.`;
-  if (value?.status === "partial") return "Only part of this PDF is readable as text. Check coverage or provide its TeX/text source.";
+  if (value?.status === "partial" && value.error === "time_limit") return `Text extraction reached its time limit${value.total_pages ? ` after ${value.pages_read ?? 0} of ${value.total_pages} pages` : ""}; that text is available for research. Provide a TeX/text source for the rest.`;
+  if (value?.status === "partial") return `Only part of this PDF is readable as text${value.total_pages ? ` · ${value.pages_read ?? 0}/${value.total_pages} pages` : ""}. Check coverage or provide its TeX/text source.`;
   if (value?.error === "password_required") return "This PDF needs a password. Upload an unlocked copy or its TeX/text source.";
   if (value?.error === "extractor_busy") return "PDF uploaded. Text extraction is busy; retry in a moment.";
   if (value?.error === "no_text") return "No text was found in this PDF. Scanned pages need OCR or a TeX/text source.";
-  if (["extraction_timeout", "resource_limit"].includes(value?.error ?? "")) return "PDF uploaded. Text extraction reached its resource limit; retry or provide a smaller document or text source.";
+  if (["extraction_timeout", "resource_limit", "time_limit"].includes(value?.error ?? "")) return "PDF uploaded. Text extraction reached its resource limit; retry or provide a smaller document or text source.";
   return "PDF uploaded, but readable text is unavailable. Retry extraction or provide OCR, TeX, or text source.";
 }
 
