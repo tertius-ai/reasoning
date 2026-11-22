@@ -1214,6 +1214,18 @@ class Store:
                 steps = run_activity(db, reply["organization_id"], reply["id"])
                 if steps:
                     result["steps"] = steps
+                # A reply that stopped to wait, or was resumed, and that a later turn continued: that turn's message
+                # carries the answer. It is the first message along the chain of continuations, null until one is posted.
+                continued = db.execute(
+                    "WITH RECURSIVE chain(run_id,depth) AS (SELECT next_run,1 FROM topic_agent_handoffs WHERE parent_run=? "
+                    "UNION ALL SELECT h.next_run,chain.depth+1 FROM chain JOIN llm_runs r ON r.id=chain.run_id "
+                    "JOIN topic_agent_handoffs h ON h.parent_run=chain.run_id WHERE r.message_id IS NULL) "
+                    "SELECT r.message_id FROM chain JOIN llm_runs r ON r.id=chain.run_id "
+                    "ORDER BY r.message_id IS NULL,chain.depth LIMIT 1",
+                    (reply["id"],),
+                ).fetchone()
+                if continued is not None:
+                    result["continued"] = {"message_id": continued[0]}
             assignment = db.execute("SELECT snapshot_json FROM research_contexts WHERE request_id="
                                     "(SELECT request_id FROM llm_runs WHERE id=?)", (result["inference_run_id"],)).fetchone()
             if assignment:

@@ -42,7 +42,14 @@ test("progress follows its human message, retained failures stay inspectable, an
       else if (path.endsWith("/compute-configuration")) data = { images: [], policy: { allowed_images: [] } };
       else if (path.endsWith("/navigation-usage")) data = { projects: {}, channels: {}, topics: {} };
       else if (path.endsWith("/messages")) data = [{ id: "human", sequence: 1, created_at: base.created_at,
-        content: "Explain the result.", author_kind: "human", author_id: user, topic_id: topic }];
+        content: "Explain the result.", author_kind: "human", author_id: user, topic_id: topic },
+        { id: "checkpoint", sequence: 2, created_at: base.created_at + 1, author_kind: "assistant", author_id: user, topic_id: topic,
+          assistant_model: model.id, inference_run_id: "checkpoint-run", reply_to: "human", continued: { message_id: "answer" },
+          content: "Summary: A librarian and a critic are checking the sources.\n\nI asked them for the exact statements.\n\n"
+            + "*Waiting: delegated work. This is a checkpoint, not a completed answer.*" },
+        { id: "answer", sequence: 3, created_at: base.created_at + 2, author_kind: "assistant", author_id: user, topic_id: topic,
+          assistant_model: model.id, inference_run_id: "answer-run", reply_to: "human",
+          content: "Summary: Both sources state the result with the same hypotheses.\n\nThe librarian found both; the critic agrees." }];
       else if (path.endsWith("/message-updates")) data = { after: 0, messages: [] };
       else if (path.includes("/reactions/")) data = { counts: { up: 0, down: 0, upside_down: 0 }, mine: [] };
       else if (path.endsWith("/inference-runs")) data = [
@@ -90,6 +97,12 @@ test("progress follows its human message, retained failures stay inspectable, an
     assert.equal(await continued.getByText("Waiting · answer incomplete", { exact: true }).count(), 0);
     await continued.locator("summary").first().click();
     await continued.getByText("Waited for delegated work. A later reply continued this work and carries the answer.", { exact: true }).waitFor();
+    // In the transcript, the checkpoint reply of such a coordinator says the same and shows the reply that carries the answer.
+    const checkpoint = page.locator('[data-message-id="checkpoint"]');
+    await checkpoint.getByText("A later reply continued this work and carries the answer.", { exact: true }).waitFor();
+    assert.equal(await page.locator('[data-message-id="answer"]').getByText("A later reply continued", { exact: false }).count(), 0);
+    await checkpoint.getByRole("button", { name: "Show that reply", exact: true }).click();
+    await page.locator('[data-message-id="answer"][aria-current="location"]').waitFor({ timeout: 5000 });
     // The box has one button at its right, and it never stops: the running reply has Stop in its own card header,
     // so beside a paused request the box's button resumes.
     const resume = page.getByRole("button", { name: "Start or resume", exact: true });

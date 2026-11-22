@@ -230,7 +230,9 @@ the latest checkpoint and an `answer_state` separate from execution/accounting:
 working, waiting, continued, partial, or response_ready. A turn that suspends
 for a review or delegates remains waiting and incomplete until the server hands
 its work to a continuation turn; it is then continued, names that `next_run`,
-and the continuation carries the answer. While waiting, `answer_state.waits`
+and the continuation carries the answer. The continuation's message replies to
+the message the waiting turn answered, and the waiting turn's message, which
+keeps its checkpoint text, links to it. While waiting, `answer_state.waits`
 lists what is still pending: a proposal to decide (a computation proposal
 includes its image, language, resources and a program preview), a queued or
 running computation, a review, a workflow run, or delegated agents. A pending

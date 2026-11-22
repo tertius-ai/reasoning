@@ -20,3 +20,7 @@
   .org-reply-pending { animation: org-reply-pending 1.8s ease-in-out infinite; }
   @keyframes org-reply-pending { 50% { opacity: 0.55; } }
 }
+/* Under a reply that stopped to wait or was resumed: a later reply continued its work and carries the answer. */
+.org-reply-continued { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 8px; margin: 6px 0 2px; color: var(--muted); font-size: 12.5px; }
+.org-app .org-reply-continued > button { min-height: 0; padding: 0; border: 0; background: none; font: inherit; color: var(--blue); cursor: pointer; }
+.org-app .org-reply-continued > button:hover { background: none; text-decoration: underline; }
