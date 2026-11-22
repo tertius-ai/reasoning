@@ -61,10 +61,15 @@ export type TimelineEntry =
   | { kind: "step"; key: string; label: string; icon: StepIcon; current: boolean }
   | { kind: "addition"; key: string; addition: ReplyAddition; waiting: boolean; nextStep?: number };
 
-const iconFor = (detail: string): StepIcon => detail.startsWith("searched") ? "search"
-  : detail.startsWith("read") || detail.startsWith("fetched") ? "read"
-    : detail.startsWith("saved") || detail.startsWith("updated") ? "write"
-      : detail.startsWith("submitted") || detail.startsWith("checked") ? "compute" : "think";
+/** A step's icon from the server's description of its call, whichever state it reads in: "fetching", "fetched",
+ * "couldn't fetch" or "skipped fetching". */
+const iconFor = (detail: string): StepIcon => {
+  const verb = detail.replace(/^(couldn't|skipped) /, "");
+  return verb.startsWith("search") ? "search"
+    : verb.startsWith("read") || verb.startsWith("fetch") ? "read"
+      : verb.startsWith("sav") || verb.startsWith("updat") ? "write"
+        : verb.startsWith("submit") || verb.startsWith("check") ? "compute" : "think";
+};
 
 /**
  * How many steps a reply took. Its recorded activity keeps only the latest events, so the count is the highest step
@@ -95,7 +100,7 @@ export function replyTimeline(activity: Activity, additions: ReplyAddition[], ac
   };
   for (const event of activity) {
     if (event.phase === "round") { close(); rounds = event.round ?? rounds + 1; step = { round: rounds, done: [], writing: false }; }
-    else if (event.phase === "tool_requested" && step) step.using = event.detail ?? (event.tool ?? "").replaceAll("_", " ");
+    else if (event.phase === "tool_requested" && step) step.using = event.detail ?? `using ${(event.tool ?? "").replaceAll("_", " ")}`;
     else if (event.phase === "tool_completed" && step) {
       step.done.push(event.detail ?? `used ${(event.tool ?? "").replaceAll("_", " ")}`); step.using = undefined;
     } else if (event.phase === "answer_ready" && step) step.writing = true;
