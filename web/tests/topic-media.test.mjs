@@ -90,3 +90,11 @@ test("Markdown and TeX files are recognised by extension and described by their 
   assert.equal(media.markdownLabel(3 * 1024 * 1024, { status: "ready", method: "text", truncated: true }),
     "Text available for research up to its first 2 MiB · 3.0 MB.");
 });
+test("a PDF whose extraction stopped at its time limit says how many pages were read", () => {
+  assert.equal(media.extractionLabel({ status: "partial", method: "server", error: "time_limit", truncated: true, pages_read: 87, total_pages: 254 }),
+    "Text extraction reached its time limit after 87 of 254 pages; that text is available for research. Provide a TeX/text source for the rest.");
+  assert.equal(media.extractionLabel({ status: "partial", method: "server", error: null, truncated: true, pages_read: 200, total_pages: 254 }),
+    "Only part of this PDF is readable as text · 200/254 pages. Check coverage or provide its TeX/text source.");
+  assert.match(media.extractionLabel({ status: "unavailable", method: "server", error: "time_limit", truncated: true, pages_read: 0, total_pages: 9 }),
+    /reached its resource limit/);
+});

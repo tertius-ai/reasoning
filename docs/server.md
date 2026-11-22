@@ -1010,8 +1010,13 @@ and uncertain charges remain available in their run records. Finished and partia
 replies become topic messages labeled with their model, not their requester.
 A reply message names the human message its context ends at as its `reply_to`,
 so it shows a pointer to that message even when other messages arrived in
-between, and the thread's first message shows how many replies it has. Delegated
-task results and workflow runs reply to nothing. Topic forks keep reply targets
+between, and the thread's first message shows how many replies it has. A turn
+that continues an earlier one, after its delegated work returns or an explicit
+resume, replies to the message that turn answered. A reply message whose turn a
+later turn continued carries `continued.message_id`: the first message posted
+along that chain of turns, null until one is posted; the transcript says under
+it that a later reply continued its work and carries the answer, with a link to
+that reply. Delegated task results and workflow runs reply to nothing. Topic forks keep reply targets
 among the copied messages.
 LLM messages and run records show provider-reported tokens/cost plus explicitly
 configured operational kWh and kg CO₂e scenario estimates. Human/bot chat posts
