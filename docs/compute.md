@@ -122,7 +122,8 @@ than 4096 MiB: at that limit the import is slowed by page-cache thrashing. Run
 4. Resume claims on each relay worker and run a small job.
 
 Enrollments, Modal credentials, catalogs and relay code are unchanged. A job's
-Modal VM is sized to the resources the job requests plus a fixed overhead, so a
+Modal VM is sized to the resources the job requests plus an allowance for the VM
+itself (see [Modal VM compute](#modal-vm-compute)), so a
 job that uses the larger limits costs more on the relays' Modal account; the
 organization's quota counts CPU-seconds only.
 
@@ -363,9 +364,12 @@ organization administrators must choose it with that data boundary in mind.
 
 The adapter requests one VM CPU per logical CPU of the job, since a VM sandbox
 reports one CPU to Docker per requested unit, and applies equal request/upper CPU
-and memory limits. It reserves an additional 512 MiB for the remote supervisor and
-sets a VM lifetime of job wall time plus 600 seconds (job wall time at most
-85800 seconds). The VM has no swap device, so its Docker reports no swap-limit
+and memory limits. The VM gets the job's memory plus 512 MiB plus 1/32 of the
+job's memory. The VM's own kernel keeps part of it (on Modal, about 114 MiB plus
+1/64 of the VM), and before a job starts the relay requires Docker in the VM to
+report at least the job's memory plus 256 MiB, so the allowance grows with the
+job. The VM lifetime is the job's wall time plus 600 seconds (job wall time at
+most 85800 seconds). The VM has no swap device, so its Docker reports no swap-limit
 support. The relay reads `/proc/swaps` and `/proc/meminfo` in the VM and, only
 when it finds no swap at all, accepts the daemon without swap limits and the
 container's memory-only limit (`MemorySwap: -1`); an unprivileged container
@@ -393,7 +397,10 @@ records the latest attempt's job, worker, attempt and sandbox IDs, current stage
 execution outcome, safe error code and exception class, update timestamp, and whether VM cleanup was
 verified. The receipt survives ordinary job settlement; the next attempt replaces
 it. Stages distinguish VM creation, Docker client setup/readiness, the Lean
-environment mount check, image download, and execution/result collection. For a
+environment mount check, image download, the VM's limit check, and
+execution/result collection. The limit check records the memory and CPUs that
+Docker reports in the VM, then checks the daemon and image as the job's start
+does, so a VM too small for the job is refused before any program runs. For a
 job with a Lean environment, the receipt also records the VM mount's filesystem
 and options. Startup failures also produce one short line in
 the job output, without provider error bodies, credentials, or submitted source.

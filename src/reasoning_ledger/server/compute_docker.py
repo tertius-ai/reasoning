@@ -556,6 +556,17 @@ class DockerRunner:
         except (ValueError, TypeError) as exc:
             raise RuntimeFault("docker_unavailable") from exc
 
+    def capacity(self) -> dict:
+        """The memory and logical CPUs the Docker host reports, which every job's limits must fit within."""
+        try:
+            info = json.loads(self._command(["info", "--format", "{{json .}}"], timeout=10))
+            memory, cpus = info["MemTotal"], info["NCPU"]
+            if type(memory) is not int or type(cpus) is not int or memory < 0 or cpus < 0:
+                raise ValueError
+            return {"memory_bytes": memory, "cpus": cpus}
+        except (ValueError, TypeError, KeyError) as exc:
+            raise RuntimeFault("sandbox_unavailable") from exc
+
     def preflight(self, image: ComputeImage, limits: dict) -> str:
         try:
             info = json.loads(self._command(["info", "--format", "{{json .}}"], timeout=10))

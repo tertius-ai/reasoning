@@ -98,6 +98,12 @@ class Docker:
     def _command(self, args, **options):
         assert args[:2] == ["image", "pull"]
 
+    def capacity(self):
+        return {"memory_bytes": 1024**3, "cpus": 1}
+
+    def preflight(self, image, limits):
+        return "sha256:" + "f" * 64
+
     def run(self, job, spool, log, stopped, *, lean_environment=None):
         assert lean_environment == ENVIRONMENT_MOUNT and job["parameters"]["program"] == PROGRAM
         log(b"other output\n")

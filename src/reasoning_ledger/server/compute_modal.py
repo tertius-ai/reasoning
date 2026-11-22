@@ -28,6 +28,9 @@ OVERHEAD_SECONDS = STARTUP_SECONDS
 CLEANUP_SECONDS = 120
 # The image download always gets at least this long, even after a slow VM or Docker start.
 MINIMUM_PULL_SECONDS = 60
+# A Modal VM's kernel keeps part of the VM's memory for itself: 116,536 KiB plus 1/64 of the VM, measured on 4.5, 6.5
+# and 7.5 GiB VMs. Docker readiness requires the job's memory plus 256 MiB (verify_daemon), so the allowance must grow
+# with the job: 512 MiB plus 1/32 of the job's memory leaves at least 134 MiB beyond that at every job size.
 OVERHEAD_MEMORY = 512 * 1024**2
 STDIN_SLICE = 1024**2
 DIAGNOSTIC_CODES = ERROR_CODES | {
@@ -38,7 +41,7 @@ DIAGNOSTIC_CODES = ERROR_CODES | {
 STAGE_NAMES = {
     "sandbox_create": "Modal VM creation", "docker_setup": "Docker client setup",
     "docker_ready": "Docker readiness", "environment_mount": "Lean environment mount check", "image_pull": "image download",
-    "execution": "execution and result collection",
+    "limits_check": "the VM's limit check", "execution": "execution and result collection",
 }
 # Where a job's sealed Lean environment is mounted in its VM, before Docker binds it into the container.
 ENVIRONMENT_MOUNT = "/mnt/lean-env"
@@ -74,6 +77,12 @@ def mount_facts(mountinfo: bytes, path: str) -> dict:
         raise RuntimeFault("environment_unavailable")
     found["read_only"] = "ro" in found["mount_options"].split(",") or "ro" in found["super_options"].split(",")
     return found
+
+
+def vm_memory_mib(limits):
+    """The memory to request for a job's VM: the job's own limit plus room for the VM's kernel, Docker and supervisor."""
+    memory = limits["memory_bytes"]
+    return math.ceil((memory + OVERHEAD_MEMORY + memory // 32) / 1024**2)
 
 
 def pull_seconds(elapsed):
@@ -131,7 +140,7 @@ class ModalSDK:
         app = self.modal.App.lookup(self.profile["app"], environment_name=self.profile["environment"], client=client)
         # A VM sandbox reports one CPU to Docker per requested unit, so request the job's logical CPUs directly.
         cores = limits["cpu"]
-        memory = math.ceil((limits["memory_bytes"] + OVERHEAD_MEMORY) / 1024**2)
+        memory = vm_memory_mib(limits)
         return self.modal.Sandbox.create(
             "dockerd", "--host=unix:///var/run/docker.sock", "--log-level=error", "--bridge=none", "--iptables=false",
             app=app, client=client, name=name,
@@ -375,7 +384,7 @@ class ModalRunner:
         diagnostic = {"format": 1, "job_id": job["id"], "worker_id": self.worker_id,
                       "attempt_id": job["attempt_id"], "sandbox_id": None, "stage": "sandbox_create",
                       "execution_status": None, "error_code": None, "exception_type": None, "cleanup_verified": False,
-                      "environment_mount": None}
+                      "environment_mount": None, "vm": None}
         diagnostic_path = self.data_dir / "modal-last-attempt.json"
 
         def record(**changes):
@@ -436,6 +445,11 @@ class ModalRunner:
                 # the startup allowance after VM creation and Docker readiness, which the server's deadline also grants.
                 runner._command(["image", "pull", "--quiet", "--platform", "linux/amd64", image.reference],
                                 timeout=pull_seconds(time.monotonic() - began), maximum=65536, stopped=stopped)
+                # The same daemon and image checks run again as the job starts; here a refusal is named in the job's
+                # output, with the memory and CPUs the VM reports in the receipt, before any program runs.
+                record(stage="limits_check")
+                record(vm=runner.capacity())
+                runner.preflight(image, limits)
                 record(stage="execution")
                 outcome = runner.run(job, spool, log, stopped,
                                      lean_environment=None if lean_environment is None else ENVIRONMENT_MOUNT)
