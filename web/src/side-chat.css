@@ -18,12 +18,12 @@
 .org-side-show-main kbd { padding: 0 4px; border: 1px solid color-mix(in srgb, var(--blue) 35%, transparent); border-radius: 4px;
   color: color-mix(in srgb, var(--blue) 70%, var(--muted)); font: 10px/1.5 var(--font-mono); }
 .org-side-float-button[aria-pressed="true"] { color: var(--blue); }
-/* The left edge drags the width; a grip shows on hover and focus. Past the topic's floor the side chat slides over it. */
+/* The left edge drags the width; a line and, above it, a grip show on hover and focus. Past the topic's floor the side chat slides over it. */
 .org-side-edge { position: absolute; inset: 0 auto 0 -5px; z-index: 6; width: 10px; cursor: col-resize; touch-action: none; }
 .org-side-edge::after { content: ""; position: absolute; inset: 0 auto 0 4.5px; width: 1px; background: transparent; }
 .org-side-edge:hover::after, .org-side-edge:focus-visible::after, .org-side-edge:active::after { background: var(--blue); }
 .org-side-edge:focus-visible { outline: none; }
-.org-side-edge > span { position: absolute; top: 50%; left: 0; width: 10px; height: 34px; margin-top: -17px; border: 1px solid color-mix(in srgb, var(--blue) 55%, transparent);
+.org-side-edge > span { position: absolute; z-index: 1; top: 50%; left: 0; width: 10px; height: 34px; margin-top: -17px; border: 1px solid color-mix(in srgb, var(--blue) 55%, transparent);
   border-radius: var(--radius-pill); background: var(--surface-raised); opacity: 0; }
 .org-side-edge > span::before { content: ""; position: absolute; inset: 9px 3px; background: radial-gradient(circle, var(--blue) 1px, transparent 1.4px) center / 4px 5px; }
 .org-side-edge:hover > span, .org-side-edge:focus-visible > span, .org-side-edge:active > span { opacity: 1; }
