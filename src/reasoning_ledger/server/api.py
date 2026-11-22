@@ -397,6 +397,34 @@ class Subscription(Input):
     subscribed: bool
 
 
+class SideChatOpen(Input):
+    open: Annotated[bool, Field(strict=True)]
+
+
+class SideChatFloating(Input):
+    """A floating side chat's place, as shares of the conversation area."""
+
+    x: Annotated[float, Field(ge=0, le=1)]
+    y: Annotated[float, Field(ge=0, le=1)]
+    w: Annotated[float, Field(gt=0, le=1)]
+    h: Annotated[float, Field(gt=0, le=1)]
+
+
+class SideChatDesktop(Input):
+    mode: Literal["side", "full", "float"]
+    width: Annotated[float, Field(gt=0, le=1)] | None = None
+    floating: SideChatFloating | None = None
+
+
+class SideChatPhone(Input):
+    height: Annotated[float, Field(ge=0.2, le=1)]
+
+
+class SideChatLayout(Input):
+    desktop: SideChatDesktop
+    phone: SideChatPhone
+
+
 class ReadCursor(Input):
     sequence: Annotated[int, Field(ge=0, le=2**63 - 1)]
 
@@ -727,6 +755,18 @@ def create_app(config: Config, *, provider: OpenRouter | None = None, mail_provi
 
         return favorites(store, user, **body.model_dump())
 
+    @app.get("/api/auth/side-chat")
+    def side_chat_layout(user: User):
+        from .side_chat_layout import side_chat_layout
+
+        return side_chat_layout(store, user)
+
+    @app.put("/api/auth/side-chat")
+    def side_chat_layout_saved(body: SideChatLayout, user: User):
+        from .side_chat_layout import side_chat_layout
+
+        return side_chat_layout(store, user, body.model_dump())
+
     @app.get("/api/auth/email-verification")
     def verification_status(user: User):
         return mail.verification.status(user)
@@ -861,6 +901,10 @@ def create_app(config: Config, *, provider: OpenRouter | None = None, mail_provi
     @app.put("/api/organizations/{organization_id}/topics/{topic_id}/subscription", status_code=204)
     def subscription(organization_id: str, topic_id: str, body: Subscription, user: User):
         store.topic_preference(user, organization_id, topic_id, subscribed=body.subscribed)
+
+    @app.put("/api/organizations/{organization_id}/topics/{topic_id}/side-chat", status_code=204)
+    def side_chat_open(organization_id: str, topic_id: str, body: SideChatOpen, user: User):
+        store.topic_preference(user, organization_id, topic_id, side_chat_open=body.open)
 
     @app.put("/api/organizations/{organization_id}/topics/{topic_id}/read", status_code=204)
     def read_topic(organization_id: str, topic_id: str, body: ReadCursor, user: User):

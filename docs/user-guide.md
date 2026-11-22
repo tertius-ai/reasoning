@@ -119,6 +119,17 @@ one that is already in the topic is linked rather than posted again, and the pos
 side messages stay private. Add your own words above it, with @ mentions. When someone has
 written since your last message, the post answers them unless you remove that.
 
+The side chat opens as a column beside the conversation. Drag its left edge to widen it, up to
+leaving the conversation a column; the edge snaps at a column, half and wide, and a double-click
+switches between the column and your last width (focus the edge to use the arrow keys, Home, End
+and Enter instead). **Expand** fills the conversation area and keeps the project list; the same
+button then reads **Show main chat**, counts what others posted there meanwhile, and brings the
+conversation back, as Esc does. **Float** lifts the side chat over the conversation: drag its
+title bar to move it and its edges to resize it, and **Dock** puts it back. On a phone the side
+chat is a sheet from the bottom: drag its grab bar to set its height, or choose **Full screen**.
+Your layout is saved with your account, so it is the same on your other devices, and the side
+chat reopens in each AI chat where you left it open.
+
 In the conversation, a brought post shows its author's words and a card titled by its first
 question. The card opens the exchange beside the conversation, in place of the side chat until
 you close it. On your own card, **Continue in side chat** goes back to that exchange; on someone

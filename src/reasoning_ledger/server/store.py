@@ -702,7 +702,7 @@ class Store:
                 dict(row)
                 for row in db.execute(
                     """SELECT t.id AS topic_id, COALESCE(s.subscribed,1) AS subscribed,
-                COALESCE(s.last_read_sequence,0) AS last_read_sequence,
+                COALESCE(s.last_read_sequence,0) AS last_read_sequence, COALESCE(s.side_chat_open,0) AS side_chat_open,
                 (SELECT COALESCE(MAX(m.sequence),0) FROM messages m WHERE m.organization_id=t.organization_id AND m.topic_id=t.id)
                     AS last_message_sequence,
                 (SELECT COUNT(*) FROM messages m WHERE m.organization_id=t.organization_id AND m.topic_id=t.id
@@ -723,10 +723,12 @@ class Store:
             ]
             for state in result["topic_state"]:
                 state["subscribed"] = bool(state["subscribed"])
+                state["side_chat_open"] = bool(state["side_chat_open"])
             return result
 
     def topic_preference(
-        self, user_id: str, organization_id: str, topic_id: str, *, subscribed: bool | None = None, sequence: int | None = None
+        self, user_id: str, organization_id: str, topic_id: str, *, subscribed: bool | None = None, sequence: int | None = None,
+        side_chat_open: bool | None = None,
     ) -> None:
         with self.transaction(write=True) as db:
             self._topic_access(db, user_id, organization_id, topic_id)
@@ -744,6 +746,11 @@ class Store:
                 db.execute(
                     "UPDATE topic_subscriptions SET subscribed=? WHERE organization_id=? AND user_id=? AND topic_id=?",
                     (int(subscribed), organization_id, user_id, topic_id),
+                )
+            if side_chat_open is not None:
+                db.execute(
+                    "UPDATE topic_subscriptions SET side_chat_open=? WHERE organization_id=? AND user_id=? AND topic_id=?",
+                    (int(side_chat_open), organization_id, user_id, topic_id),
                 )
             if sequence is not None:
                 db.execute(
