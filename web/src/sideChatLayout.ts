@@ -15,10 +15,12 @@ export type SideChatLayout = { desktop: { mode: SideMode; width: number | null; 
 export type Box = { x: number; y: number; w: number; h: number };
 export type Area = { width: number; height: number };
 
-/** The side chat's narrowest width, and the column the topic keeps beside it. */
-export const COLUMN = 360, TOPIC_MIN = 360;
-/** Within this many pixels a dragged edge snaps to a snap point; arrow keys move it this far. */
-export const SNAP = 14, STEP = 24;
+/** The side chat's narrowest width. Beside the topic its edge drags all the way across the conversation area: the main
+ * chat narrows to FLOOR pixels, then the side chat slides over it, and within FULL_REACH of the far end it takes the
+ * whole area (Full). */
+export const COLUMN = 360, FLOOR = 320, FULL_REACH = 160;
+/** Arrow keys move the edge this far; with Shift, a tenth of the area. */
+export const STEP = 24;
 export const FLOAT_MIN = { w: 320, h: 240 };
 /** The heights a phone's sheet settles at, as shares of the screen below the app bar. */
 export const SHEET_STOPS = [0.36, 0.6, 1] as const;
@@ -42,38 +44,39 @@ export function normalLayout(value: unknown): SideChatLayout {
   return { desktop: { mode, width: share(desktop.width, 0.01), floating }, phone: { height: share(record.phone?.height, 0.2) ?? DEFAULT_LAYOUT.phone.height } };
 }
 
-/** The widest the side chat may be beside the topic: the topic keeps `keep` pixels. */
-export const widestSide = (area: number, keep = TOPIC_MIN) => Math.max(COLUMN, area - keep);
-export const clampWidth = (width: number, area: number, keep = TOPIC_MIN) => Math.round(Math.min(widestSide(area, keep), Math.max(COLUMN, width)));
+/** The widest the side chat rests beside the main chat: the main chat keeps FLOOR pixels, or, while the side chat lies
+ * over it on a narrower window, at least FULL_REACH. */
+export const widestSide = (area: number, over = false) => Math.max(COLUMN, area - (over ? FULL_REACH : FLOOR));
+export const clampWidth = (width: number, area: number, over = false) => Math.round(Math.min(widestSide(area, over), Math.max(COLUMN, width)));
 /** The width for a stored share of the area; a column until a width is chosen. */
-export const sideWidth = (stored: number | null, area: number, keep = TOPIC_MIN) => clampWidth(stored === null ? COLUMN : stored * area, area, keep);
-
-export type Snap = { name: "Column" | "Half" | "Wide"; width: number };
-/** The widths the edge snaps to: a column, half the area, and Wide, where the topic keeps its column. */
-export function widthSnaps(area: number, keep = TOPIC_MIN): Snap[] {
-  const snaps: Snap[] = [{ name: "Column", width: COLUMN }];
-  const half = Math.round(area / 2), wide = Math.round(widestSide(area, keep));
-  if (half > COLUMN + 40 && half < wide) snaps.push({ name: "Half", width: half });
-  if (wide > snaps[snaps.length - 1].width + 40) snaps.push({ name: "Wide", width: wide });
-  return snaps;
+export const sideWidth = (stored: number | null, area: number, over = false) => clampWidth(stored === null ? COLUMN : stored * area, area, over);
+/** Where a dragged edge rests when let go, as a width; the whole area means Full. Within FULL_REACH of the far end it
+ * takes the whole area. Beside the main chat, a width that leaves it less than its floor settles at the floor. */
+export function restingWidth(width: number, area: number, over = false): number {
+  if (width > area - FULL_REACH) return area;
+  return clampWidth(width, area, over);
 }
-/** The snap point a width sits at, if any. */
-export const snapAt = (width: number, area: number, keep = TOPIC_MIN) => widthSnaps(area, keep).find(item => Math.abs(item.width - width) <= 1) ?? null;
-/** A dragged width, pulled to a snap point within SNAP pixels. */
-export function snapWidth(width: number, area: number, keep = TOPIC_MIN): { width: number; snap: Snap | null } {
-  const snap = widthSnaps(area, keep).find(item => Math.abs(item.width - width) <= SNAP) ?? null;
-  return { width: snap ? snap.width : clampWidth(width, area, keep), snap };
+/** What a width looks like while the edge moves: Full at the whole area, and beside the main chat past its floor, the
+ * side chat sliding over it by `overlap` pixels. */
+export function dragView(width: number, area: number, over = false): { width: number; full: boolean; overlap: number } {
+  const value = Math.round(Math.max(COLUMN, Math.min(area, width)));
+  const full = value >= area;
+  return { width: value, full, overlap: !over && !full ? Math.max(0, value - (area - FLOOR)) : 0 };
 }
-/** The width a key gives the edge, which is on the side chat's left: ← widens and → narrows by STEP pixels, or with
- * Shift to the next snap point; Home gives the column and End the widest. Other keys give null. */
-export function keyWidth(key: string, shift: boolean, width: number, area: number, keep = TOPIC_MIN): number | null {
-  const widths = widthSnaps(area, keep).map(item => item.width);
-  if (key === "ArrowLeft") return shift ? widths.find(value => value > width + 1) ?? widestSide(area, keep) : clampWidth(width + STEP, area, keep);
-  if (key === "ArrowRight") return shift ? [...widths].reverse().find(value => value < width - 1) ?? COLUMN : clampWidth(width - STEP, area, keep);
+/** The width a key gives the edge, which is on the side chat's left: ← widens and → narrows by STEP pixels, or by a tenth
+ * of the area with Shift. Past the widest resting width the next step is the whole area, and back from there the widest.
+ * Home gives the column and End the whole area. Other keys give null. */
+export function keyWidth(key: string, shift: boolean, width: number, area: number, over = false): number | null {
+  const step = shift ? Math.round(area / 10) : STEP, widest = widestSide(area, over);
+  if (key === "ArrowLeft") return width >= area || width + step > widest ? area : width + step;
+  if (key === "ArrowRight") return width >= area ? widest : Math.max(COLUMN, width - step);
   if (key === "Home") return COLUMN;
-  if (key === "End") return widestSide(area, keep);
+  if (key === "End") return area;
   return null;
 }
+/** How a width reads to a screen reader. */
+export const widthText = (width: number, area: number) =>
+  width >= area ? "Whole conversation area; the main chat is hidden" : `${Math.round(width / area * 100)} percent of the conversation area`;
 
 /** A floating panel kept inside the area, at least FLOAT_MIN in size, with 8 pixels around it. */
 export function placeBox(box: Box, area: Area): Box {

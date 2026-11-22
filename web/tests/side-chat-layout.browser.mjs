@@ -81,26 +81,60 @@ test("the side chat opens where it was left open, drags to a width, expands over
   assert.ok(Math.abs((await panel.boundingBox()).width - Math.round(area / 2)) <= 1, "half of the conversation area");
   assert.equal(await page.getByRole("button", { name: "Side chat", exact: true }).getAttribute("aria-expanded"), "true");
 
-  // The left edge is a separator: keys move it and snap it, and each change is saved to the account.
+  // The left edge is a separator: keys move it, and each change is saved to the account.
   const edge = page.getByRole("separator", { name: "Side chat width" });
-  assert.equal(await edge.getAttribute("aria-valuetext"), `Half, ${Math.round(area / 2)} pixels`);
+  const percent = width => `${Math.round(width / area * 100)} percent of the conversation area`;
+  assert.equal(await edge.getAttribute("aria-valuetext"), percent(Math.round(area / 2)));
   await edge.focus();
   await page.keyboard.press("Shift+ArrowLeft");
-  assert.equal(await edge.getAttribute("aria-valuetext"), `Wide, ${Math.round(area - 360)} pixels`);
+  const wider = Math.round((await panel.boundingBox()).width);
+  assert.equal(wider, Math.round(area / 2) + Math.round(area / 10), "Shift moves a tenth of the area");
   await page.keyboard.press("Home");
   assert.equal(Math.round((await panel.boundingBox()).width), 360);
   await page.keyboard.press("Enter");
-  assert.match(await edge.getAttribute("aria-valuetext"), /^Wide/, "Enter goes back to the last wider width");
-  // Dragging the edge to near the middle snaps to Half.
-  const handle = await edge.boundingBox();
-  await page.mouse.move(handle.x + 5, handle.y + handle.height / 2);
+  assert.equal(Math.round((await panel.boundingBox()).width), wider, "Enter goes back to the last wider width");
+
+  // Dragging draws no guides or labels, and goes all the way: past the main chat's floor the side chat slides over it,
+  // and at the far end it takes the whole conversation area, which is Full.
+  const middleOf = box => ({ x: box.x + 5, y: box.y + box.height / 2 });
+  let start = middleOf(await edge.boundingBox());
+  const rowBox = await row.boundingBox();
+  await page.mouse.move(start.x, start.y);
   await page.mouse.down();
-  const middle = (await row.boundingBox()).x + area / 2;
-  await page.mouse.move(middle + 8, handle.y + handle.height / 2, { steps: 8 });
-  await page.getByText(/^Half · /).first().waitFor();
+  await page.mouse.move(rowBox.x + 200, start.y, { steps: 10 });
+  assert.equal(await page.locator(".org-side-guides, .org-side-tip").count(), 0, "nothing is drawn on top while dragging");
+  assert.ok(await page.locator(".org-conversation-row.org-side-over-row").count(), "the side chat slides over the main chat");
+  assert.equal(Math.round((await page.locator("section.org-conversation").boundingBox()).width), 320, "the main chat keeps its floor under it");
+  await page.mouse.move(rowBox.x - 40, start.y, { steps: 6 });
   await page.mouse.up();
-  assert.equal(await edge.getAttribute("aria-valuetext"), `Half, ${Math.round(area / 2)} pixels`);
-  await savedAs(layout => layout.desktop.mode === "side" && Math.abs(layout.desktop.width - 0.5) < 0.002);
+  await panel.getByRole("button", { name: "Show main chat", exact: true }).waitFor();
+  assert.equal(await page.locator("section.org-conversation").isVisible(), false, "the main chat is hidden");
+  assert.equal(await edge.getAttribute("aria-valuetext"), "Whole conversation area; the main chat is hidden");
+  await savedAs(layout => layout.desktop.mode === "full");
+  // From Full the edge drags back; let go halfway beside the main chat, it stays there.
+  start = middleOf(await edge.boundingBox());
+  await page.mouse.move(start.x, start.y);
+  await page.mouse.down();
+  await page.mouse.move(rowBox.x + area / 2, start.y, { steps: 10 });
+  await page.mouse.up();
+  await page.locator("section.org-conversation").waitFor();
+  assert.ok(Math.abs((await panel.boundingBox()).width - area / 2) <= 2, "back beside the main chat, at half the area");
+  await savedAs(layout => layout.desktop.mode === "side" && Math.abs(layout.desktop.width - 0.5) < 0.003);
+  // Let go early in the slide-over, it settles at the main chat's floor.
+  start = middleOf(await edge.boundingBox());
+  await page.mouse.move(start.x, start.y);
+  await page.mouse.down();
+  await page.mouse.move(rowBox.x + 300, start.y, { steps: 10 });
+  await page.mouse.up();
+  assert.ok(Math.abs((await page.locator("section.org-conversation").boundingBox()).width - 320) <= 1, "the main chat keeps 320 px");
+  assert.equal(await page.locator(".org-side-over-row").count(), 0);
+  await edge.focus();
+  await page.keyboard.press("Home");
+  await page.keyboard.press("End");
+  await panel.getByRole("button", { name: "Show main chat", exact: true }).waitFor();
+  await page.keyboard.press("Escape");
+  await page.locator("section.org-conversation").waitFor();
+  await savedAs(layout => layout.desktop.mode === "side");
 
   // Expand hides the main chat but keeps the project list; the same button now says “Show main chat” and counts what others post.
   await panel.getByRole("button", { name: "Expand: hide the main chat" }).click();
