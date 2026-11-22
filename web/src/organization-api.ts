@@ -59,6 +59,11 @@ export type Message = { id: string; sequence: number; topic_id: string; author_i
   additions?: ReplyAddition[];
   /** On a model answer: its reply's recorded steps, for the folded timeline under it. */
   steps?: ModelRun["activity"];
+  /**
+   * On a model answer that stopped to wait, for delegated work or a review, or that was resumed: a later reply continued its
+   * work and carries the answer. `message_id` is that reply's message, null until it is posted.
+   */
+  continued?: { message_id: string | null };
   /** Set when the author brought these messages from their private side chat; the conversation folds them into one group. */
   side_chat?: SideChatGroup };
 /** A topic post that brought side messages, as a side message or a later post refers to it. */
