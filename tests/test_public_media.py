@@ -113,6 +113,64 @@ def test_pdf_text_limit_reports_partial_coverage_and_keeps_readable_text(monkeyp
     assert 0 < len(value["text"].encode()) <= 100 and value["total_pages"] == 2
 
 
+def test_pdf_worker_keeps_the_pages_read_before_its_time_limit(monkeypatch):
+    from pypdf import PageObject
+
+    from reasoning_ledger.server import pdf_extract_worker
+
+    original, calls = PageObject.extract_text, []
+
+    def limited(self, *args, **kwargs):
+        calls.append(None)
+        if len(calls) == 3:
+            raise pdf_extract_worker.TimeLimit
+        return original(self, *args, **kwargs)
+
+    monkeypatch.setattr(PageObject, "extract_text", limited)
+    value = pdf_extract_worker.extract(text_pdf("A retained lemma.", pages=5))
+    assert value["status"] == "partial" and value["error"] == "time_limit" and value["truncated"] is True
+    assert value["pages_read"] == 2 and value["total_pages"] == 5
+    assert "[Page 2]\nA retained lemma." in value["text"] and "[Page 3]" not in value["text"]
+    monkeypatch.undo()
+    late = pdf_extract_worker.extract(text_pdf("A retained lemma.", pages=5), deadline=(0, 0))
+    assert late == {"status": "unavailable", "text": "", "truncated": True, "pages_read": 0, "total_pages": 5, "error": "time_limit"}
+
+
+# Runs the worker exactly as extract_pdf does, with each page slowed by CPU work or by waiting and the matching limit
+# lowered to two seconds; the other limit stays out of reach.
+SLOW_WORKER = """
+import sys, time
+from pypdf import PageObject
+from reasoning_ledger.server import pdf_extract_worker as worker
+original, limit = PageObject.extract_text, sys.argv[1]
+def slow(self, *args, **kwargs):
+    if limit == "cpu":
+        end = time.process_time() + 0.25
+        while time.process_time() < end:
+            pass
+    else:
+        time.sleep(0.25)
+    return original(self, *args, **kwargs)
+PageObject.extract_text = slow
+worker.CPU_SECONDS, worker.WALL_SECONDS = (2, 60) if limit == "cpu" else (60, 2)
+worker.main()
+"""
+
+
+@pytest.mark.parametrize("limit", ["cpu", "wall"])
+def test_pdf_worker_subprocess_returns_the_text_read_when_a_time_limit_stops_it(limit):
+    import subprocess
+    import sys
+
+    result = subprocess.run([sys.executable, "-I", "-B", "-c", SLOW_WORKER, limit], input=text_pdf("A retained lemma.", pages=40),
+                            capture_output=True, timeout=30, check=False)
+    assert result.returncode == 0, result.stderr.decode()
+    value = json.loads(result.stdout)
+    assert value["status"] == "partial" and value["error"] == "time_limit" and value["truncated"] is True, value
+    assert 0 < value["pages_read"] < 40 and value["total_pages"] == 40
+    assert value["text"].startswith("\n[Page 1]\nA retained lemma.")
+
+
 def test_pdf_extractor_subprocess_reads_text_on_this_platform():
     from reasoning_ledger.server.pdf_extract import extract_pdf
 
