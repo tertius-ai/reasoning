@@ -247,6 +247,10 @@ def install_routes(app: FastAPI, state: ComputeStore, authenticated: Callable) -
     def drain(organization_id: str, worker_id: str, body: Drain, user: User):
         state.change_worker(user, organization_id, worker_id, draining=body.draining)
 
+    @app.put("/api/organizations/{organization_id}/compute-workers/{worker_id}/resources")
+    def worker_resources(organization_id: str, worker_id: str, body: Resources, user: User):
+        return state.change_worker_resources(user, organization_id, worker_id, body.model_dump())
+
     @app.delete("/api/organizations/{organization_id}/compute-workers/{worker_id}", status_code=204)
     def revoke(organization_id: str, worker_id: str, user: User):
         state.change_worker(user, organization_id, worker_id, revoke=True)
