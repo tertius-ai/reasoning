@@ -3,22 +3,44 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 import { ApiError, Message, errorMessage, request } from "./organization-api";
 import { ReturnIcon } from "./ComposerIcons";
 import { AttachFilesButton, MAX_DIRECT_ATTACHMENTS, PendingFile, PendingFiles, joinAttachments, pendingFile } from "./DirectMedia";
+import { plainMath } from "./plainMath";
 import { withoutSummaryLabel } from "./replySummary";
 import { mediaReference } from "./TopicMedia";
 import "./direct-messages.css";
 
 export type MessageThread = { root_id: string; message_id: string; messages: Message[]; truncated: boolean };
 
-/** One line of a message's text for a reply pointer: mentions and references keep their visible names, markup is dropped. */
+/**
+ * Code spans, which keep their text as it is, and math between `$$`, `\[`, `\(` or `$` delimiters (group 2, 3, 4 or 5),
+ * as the Markdown renderer finds them. A delimiter escaped by a backslash does not count.
+ */
+const CODE_OR_MATH = /(`+)[\s\S]*?\1|(?<!\\)\$\$([\s\S]+?)\$\$|(?<!\\)\\\[([\s\S]+?)\\\]|(?<!\\)\\\(([\s\S]+?)\\\)|(?<!\\)\$((?:\\[\s\S]|[^$\\])+)\$/g;
+const MARKUP = /[*_`>#~[\]()$\\]/g;
+
+/**
+ * One line of a message's text for a reply pointer: mentions and references keep their visible names, math reads as
+ * plain Unicode text (see `plainMath`), other markup is dropped.
+ */
 export function replyExcerpt(content: string, limit = 90): string {
   // A model reply starts with its summary line; quote the summary without its label.
   const text = withoutSummaryLabel(content)
     .replace(/(!?)\[([^\]\n]*)\]\(([^)\s]*)\)/g, (link: string, image: string, name: string, url: string) =>
       image || mediaReference(url) ? "📎 " + (name || "attachment") : link)
     .replace(/@\[[a-f0-9]{32}(?::([^\]]+))?\]/g, (_, name?: string) => "@" + (name ?? "member"))
-    .replace(/#\[(topic|project):[a-f0-9]{32}\]/g, (_, kind: string) => "#" + kind)
-    .replace(/[*_`>#~[\]()$\\]/g, "").replace(/\s+/g, " ").trim();
-  return text.length > limit ? text.slice(0, limit - 1).trimEnd() + "…" : text;
+    .replace(/#\[(topic|project):[a-f0-9]{32}\]/g, (_, kind: string) => "#" + kind);
+  let line = "", last = 0;
+  for (const match of text.matchAll(CODE_OR_MATH)) {
+    const math = match[2] ?? match[3] ?? match[4] ?? match[5];
+    // Spaces at the ends of math stay, so that dollar amounts read "$5 and $10" read "5 and 10".
+    line += text.slice(last, match.index).replace(MARKUP, "") + (math === undefined ? match[0].replace(MARKUP, "")
+      : (/^\s/.test(math) ? " " : "") + plainMath(math) + (/\s$/.test(math) ? " " : ""));
+    last = match.index + match[0].length;
+  }
+  line = (line + text.slice(last).replace(MARKUP, "")).replace(/\s+/g, " ").trim();
+  if (line.length <= limit) return line;
+  // Cut between characters, never inside one written as a surrogate pair, such as 📎 or 𝔽.
+  const head = line.slice(0, limit - 1).replace(/[\uD800-\uDBFF]$/, "");
+  return head.trimEnd() + "…";
 }
 
 /** The first name of a person, or a bot's or model's whole label. */
