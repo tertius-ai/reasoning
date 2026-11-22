@@ -63,11 +63,12 @@ def expand(db, org: str, event: dict, cache: dict | None = None) -> dict:
     missing = sorted({digest for digest in references if digest not in cache})
     for start in range(0, len(missing), LOOKUP_BATCH):
         batch = missing[start:start + LOOKUP_BATCH]
-        for digest, body in db.execute(
+        for row in db.execute(
             "SELECT sha256,body FROM llm_event_blobs WHERE organization_id=? AND sha256 IN (" + ",".join("?" * len(batch)) + ")",
             (org, *batch),
         ):
-            cache[digest] = json.loads(body)
+            # Positional access: PostgreSQL rows iterate over their column names.
+            cache[row[0]] = json.loads(row[1])
     if any(digest not in cache for digest in references):
         raise ValueError("stored provider request refers to a missing blob")
     restored = dict(request)

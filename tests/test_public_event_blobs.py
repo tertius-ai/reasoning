@@ -103,3 +103,26 @@ def test_compaction_leaves_a_database_with_a_write_ahead_log_alone(tmp_path):
     (tmp_path / "server.sqlite3-wal").write_bytes(b"")
     maintenance._compact(path)
     assert path.stat().st_size == size and not (tmp_path / "server.sqlite3.compact").exists()
+
+
+def test_expansion_reads_postgresql_rows_by_position():
+    from reasoning_ledger.server.postgres import Row
+
+    class Database:
+        """Answers blob lookups the way the PostgreSQL adapter does: rows iterate over their column names."""
+
+        def __init__(self):
+            self.blobs = {}
+
+        def execute(self, sql, parameters=()):
+            if sql.startswith("INSERT"):
+                self.blobs[parameters[1]] = parameters[2]
+                return []
+            return [Row(("sha256", "body"), (digest, self.blobs[digest])) for digest in parameters[1:] if digest in self.blobs]
+
+    from reasoning_ledger.server.event_blobs import stored_request
+
+    db = Database()
+    original = {"type": "agent", "phase": "provider_request", "call_id": "c",
+                "request": {"model": "m", "messages": [{"role": "user", "content": "α"}], "tools": [{"name": "t"}]}}
+    assert expand(db, "org", stored_request(db, "org", original)) == original
