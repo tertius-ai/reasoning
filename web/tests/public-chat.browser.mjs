@@ -138,10 +138,10 @@ test("three users create an organization, exchange alpha messages, and use durab
     await visible(owner.getByRole("button", { name: "Choose reply model", exact: true }));
     await send(owner, "A separate topic conversation.");
     const models = member.getByRole("navigation", { name: "Projects and channels" }).getByRole("button", { name: /^beta topic -Models\b/ });
-    await visible(models.getByLabel("1 unread message", { exact: true }));
+    await visible(models.getByLabel("1 unread messages"));
     await member.bringToFront(); await models.click();
     await visible(member.locator(".org-message").filter({ hasText: "A separate topic conversation." }));
-    await until(async () => (await models.getByLabel("1 unread message", { exact: true }).count()) === 0, "read acknowledgement updates navigation");
+    await until(async () => (await models.getByLabel("1 unread messages").count()) === 0, "read acknowledgement updates navigation");
     await member.getByRole("navigation", { name: "Projects and channels" }).getByRole("button", { name: /^alpha topic -Planning\b/ }).click();
     await create(owner, "topic", "Proof run", "gamma");
     assert.equal(await owner.getByRole("button", { name: "Workflow", exact: true }).count(), 0);
