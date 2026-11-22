@@ -69,6 +69,27 @@ export const canCancelCompute = (job: ComputeJob, userId: string, canWrite: bool
   canWrite && activeCompute(job) && !job.cancel_requested && (canManage || job.requested_by === userId);
 export const computeJobPath = (organizationId: string, jobId: string) => organizationPath(organizationId) + "/compute-jobs/" + encodeURIComponent(jobId);
 
+/** One source an environment's preparation fetches, at exactly this revision. */
+export type LeanEnvironmentSource = { kind: "toolchain" | "package"; name: string; url: string; revision: string; sub_dir: string | null };
+/** A Lean environment the organization asked for, keyed by its toolchain and pinned packages. */
+export type LeanEnvironment = {
+  id: string; organization_id: string; key: string; status: "requested" | "approved" | "declined";
+  specification: { format: number; toolchain: string; packages: { name: string; url: string; rev: string; sub_dir: string | null }[] };
+  sources: LeanEnvironmentSource[]; requested_by: string; requested_at: number; decided_by: string | null; decided_at: number | null;
+};
+export const LEAN_ENVIRONMENT_STATUS: Record<LeanEnvironment["status"], string> = {
+  requested: "Waiting for an administrator", approved: "Approved", declined: "Declined",
+};
+
+/** The two project files exactly as a request sends them; the server parses and checks them. */
+export function captureLeanEnvironmentRequest(leanToolchain: string, lakeManifest: string) {
+  if (!leanToolchain.trim()) throw new Error("Paste the project's lean-toolchain file.");
+  if (!lakeManifest.trim()) throw new Error("Paste the project's lake-manifest.json file.");
+  if (new TextEncoder().encode(leanToolchain).length > 128) throw new Error("lean-toolchain must be at most 128 bytes.");
+  if (new TextEncoder().encode(lakeManifest).length > 32 * 1024) throw new Error("lake-manifest.json must be at most 32 KiB.");
+  return { lean_toolchain: leanToolchain, lake_manifest: lakeManifest };
+}
+
 export function validateComputeResources(value: ComputeResources, maximum?: ComputeResources): ComputeResources {
   if (Object.keys(value).sort().join() !== RESOURCE_FIELDS.map(([key]) => key).sort().join()) throw new Error("Supply all six resource limits.");
   for (const [key, label, minimum, upper] of RESOURCE_FIELDS) {

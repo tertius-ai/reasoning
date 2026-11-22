@@ -2,6 +2,7 @@ import React, { useEffect, useRef, useState } from "react";
 import { ApiError, aborted, errorMessage, organizationPath, request } from "./organization-api";
 import { ComputeConfiguration, ComputeResources as Limits, ComputeWorker, DEFAULT_COMPUTE_RESOURCES, computeWorkerStatus, validateComputeResources } from "./compute-api";
 import { ComputeResources } from "./ComputeResources";
+import { LeanEnvironments } from "./LeanEnvironments";
 import { ScalerAdministration } from "./ScalerAdministration";
 
 export function ComputeAdministration({ organizationId, onAuthLost }: { organizationId: string; onAuthLost: () => void }) {
@@ -131,6 +132,7 @@ export function ComputeAdministration({ organizationId, onAuthLost }: { organiza
         </>}
       </li>)}</ul><p className="org-help">Draining blocks fresh claims while existing work finishes. Revocation is not physical cleanup; cloud destruction must wait for verified termination and result delivery.</p>
       <ScalerAdministration key={organizationId} organizationId={organizationId} images={configuration.images} onAuthLost={onAuthLost} />
+      <LeanEnvironments key={"lean-" + organizationId} organizationId={organizationId} onAuthLost={onAuthLost} />
     </>}
   </section>;
 }
