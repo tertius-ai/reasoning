@@ -601,6 +601,7 @@ Use the prefix `/api/organizations/{organization_id}` for organization resources
 | `{prefix}/compute-jobs/{job_id}/artifacts/{artifact_id}` | GET | Verified attachment download |
 | `{prefix}/compute-workers` | GET, POST | Administrator worker metadata/enrollment |
 | `{prefix}/compute-workers/{worker_id}` | PATCH, DELETE | Worker draining or credential revocation |
+| `{prefix}/compute-workers/{worker_id}/resources` | PUT | Change a drained, settled worker's per-job limits |
 | `{prefix}/compute-scalers` | GET, POST | Administrator scoped capacity/enrollment grants |
 | `{prefix}/compute-scalers/{scaler_id}/rotate` | POST | Rotate token/lifetime/sponsor, preserving immutable bounds and request namespace |
 | `{prefix}/compute-scalers/{scaler_id}` | DELETE | Permanently revoke scaler access, not existing workers/hardware |

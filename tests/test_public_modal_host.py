@@ -413,3 +413,125 @@ def test_relay_update_refuses_before_stopping_anything_when_it_cannot_prove_it_s
     assert unit_path(root, worker).read_bytes() == original
     assert not any(call[:2] in (["systemctl", "stop"], ["systemctl", "start"]) for call in calls)
     assert not any("--require-hashes" in call for call in calls)
+
+
+@pytest.fixture
+def limits(host):
+    """A running original relay, drained and idle, whose limits the server already raised."""
+    root, payload, worker, installer, calls, identity = host
+    installer.install(payload, "prepare")
+    installer.install({**payload, "workers": [worker]}, "activate")
+    raised = {**DEFAULT_RESOURCES, "cpu": 4}
+    server = {"draining": 1, "unsettled_jobs": [], "resources": raised}
+
+    def client(config):
+        def request(method, endpoint, body=None):
+            view = {**config, "resources": server["resources"], "revoked_at": None, "retired_at": None,
+                    "draining": server["draining"]}
+            if endpoint == "/api/worker/status":
+                return {**view, "unsettled_jobs": server["unsettled_jobs"], "quiescent": not server["unsettled_jobs"]}
+            return view
+        return SimpleNamespace(request=request, close=lambda: None)
+
+    installer.identity_client = client
+    write_private(root / "var/lib/reasoning-modal" / worker["enrollment"]["id"] / "modal-sandbox.json", b'{"phase":"idle"}')
+    calls.clear()
+    request = {"format": 1, "release_id": payload["release_id"], "public_url": payload["public_url"], "resources": raised,
+               "workers": [worker["enrollment"]["id"]]}
+    return root, request, worker, installer, calls, identity, server
+
+
+def test_relay_limits_follow_the_server_and_keep_credentials_catalog_and_runtime(limits):
+    root, request, worker, installer, calls, _, _ = limits
+    identifier = worker["enrollment"]["id"]
+    state = root / "var/lib/reasoning-modal" / identifier
+    unit, catalog = unit_path(root, worker).read_bytes(), (state / "catalog.json").read_bytes()
+
+    result = installer.limits(request)
+
+    assert result == {"resources": request["resources"], "relays": [identifier], "updated": [identifier],
+                      "restarted": [identifier], "live_compute_verified": False}
+    assert json.loads((state / "enrollment.json").read_text()) == {**worker["enrollment"], "resources": request["resources"]}
+    assert json.loads((state / "modal-profile.json").read_text()) == {**worker["profile"], "resources": request["resources"]}
+    assert all((state / name).stat().st_mode & 0o077 == 0 for name in ("enrollment.json", "modal-profile.json"))
+    assert unit_path(root, worker).read_bytes() == unit and (state / "catalog.json").read_bytes() == catalog
+    name = "reasoning-modal-" + identifier
+    probes = [index for index, call in enumerate(calls) if "verify-images" in call]
+    assert probes and calls.index(["systemctl", "stop", name]) < min(probes) <= max(probes) < calls.index(["systemctl", "start", name])
+    assert all(f"/opt/reasoning/modal/{request['release_id']}/venv/bin/" in " ".join(calls[index]) for index in probes)
+    assert not any("--require-hashes" in call for call in calls)
+    assert worker["profile"]["token_secret"] not in str(calls) and worker["enrollment"]["token"] not in str(calls)
+    assert not (root / "var/lib/reasoning-deploy/modal-setup/relay-limits.json").exists()
+
+    calls.clear()
+    again = installer.limits(request)
+    assert again["updated"] == [] and again["restarted"] == []
+    assert not any(call[:2] in (["systemctl", "stop"], ["systemctl", "start"]) for call in calls)
+
+
+def test_relay_limits_leave_a_stopped_relay_stopped(limits):
+    _, request, worker, installer, calls, identity, _ = limits
+    identity["service"] = {"ActiveState": "inactive"}
+    result = installer.limits(request)
+    assert result["updated"] == [worker["enrollment"]["id"]] and result["restarted"] == []
+    assert not any(call[:2] == ["systemctl", "start"] for call in calls)
+
+
+def test_relay_limits_resume_restarts_a_relay_stopped_before_a_failed_probe(limits):
+    root, request, worker, installer, calls, _, _ = limits
+    name = "reasoning-modal-" + worker["enrollment"]["id"]
+    command = installer.command
+
+    def failing(arguments, **options):
+        if "verify-images" in arguments:
+            raise InstallError("fixture probe failed")
+        return command(arguments, **options)
+
+    installer.command = failing
+    with pytest.raises(InstallError, match="fixture probe"):
+        installer.limits(request)
+    assert ["systemctl", "stop", name] in calls and ["systemctl", "start", name] not in calls
+    assert json.loads((root / "var/lib/reasoning-deploy/modal-setup/relay-limits.json").read_text()) == {
+        "restart": [worker["enrollment"]["id"]]}
+    installer.command = command
+    calls.clear()
+    result = installer.limits(request)
+    assert result["updated"] == [] and result["restarted"] == [worker["enrollment"]["id"]]
+    assert ["systemctl", "stop", name] not in calls and ["systemctl", "start", name] in calls
+
+
+LIMIT_REFUSALS = {"server": "new limits", "claims": "drain every", "unsettled": "running or unknown", "attempt": "unfinished VM",
+                  "unit": "service definition", "workers": "differ from the relay workers", "image": "maximum resources",
+                  "request": "invalid Modal relay limits", "no-setup": "installed Modal setup"}
+
+
+@pytest.mark.parametrize("change", sorted(LIMIT_REFUSALS))
+def test_relay_limits_refuse_before_stopping_or_writing_anything_when_unsafe(limits, change):
+    root, request, worker, installer, calls, identity, server = limits
+    identifier = worker["enrollment"]["id"]
+    state = root / "var/lib/reasoning-modal" / identifier
+    if change == "server":
+        server["resources"] = worker["enrollment"]["resources"]
+    elif change == "claims":
+        server["draining"] = 0
+    elif change == "unsettled":
+        server["unsettled_jobs"] = [{"id": "e" * 32, "status": "running"}]
+    elif change == "attempt":
+        (state / "modal-sandbox.json").unlink()
+        write_private(state / "modal-sandbox.json", b'{"phase":"creating"}')
+    elif change == "unit":
+        unit_path(root, worker).write_text(unit_path(root, worker).read_text() + "Environment=EXTRA=1\n")
+    elif change == "workers":
+        request = {**request, "workers": sorted([identifier, "e" * 32])}
+    elif change == "image":
+        request = {**request, "resources": {**request["resources"], "cpu": 8}}
+        server["resources"] = request["resources"]
+    elif change == "request":
+        request = {**request, "resources": {**request["resources"], "cpu": 0}}
+    else:
+        (root / "var/lib/reasoning-deploy/modal-setup/installation.json").unlink()
+    before = relay_files(root, identifier)
+    with pytest.raises(InstallError, match=LIMIT_REFUSALS[change]):
+        installer.limits(request)
+    assert relay_files(root, identifier) == before
+    assert not any(call[:2] in (["systemctl", "stop"], ["systemctl", "start"]) for call in calls)
