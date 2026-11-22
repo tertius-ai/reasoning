@@ -28,6 +28,8 @@ export type KnowledgeEntry = {
 export type TopicState = {
   topic_id: string; subscribed: boolean; last_read_sequence: number; last_message_sequence: number;
   unread_count: number; unread_mention_count: number;
+  /** Unread replies to your messages, or to model answers you asked for, by someone else; a reply that mentions you counts as a mention. */
+  unread_reply_count?: number;
   /** Whether your side chat is open in the topic; kept per topic with your account. */
   side_chat_open?: boolean;
 };

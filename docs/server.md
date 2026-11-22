@@ -644,7 +644,11 @@ Do not combine a positive `after` with `before`. To fetch the latest page, use a
 Read cursors must identify a message in the topic (or zero) and never move
 backward. Subscriptions default to following; unfollowing does not restrict
 access or discard messages. `hierarchy.topic_state` returns the current member's
-read/follow state, unread count, unread mentions, and latest sequence per topic.
+read/follow state, unread count, unread mentions, unread replies, and latest sequence per topic.
+An unread reply (`unread_reply_count`) is a person's or bot's message past the read
+cursor that replies to one of the member's own messages, or to a model answer the
+member asked for; the member's own messages, model answers, and replies that also
+mention the member (counted as mentions) are left out.
 Mention syntax is `@[user_id]`; only current members of the same organization
 receive mention records. Removing a membership clears its preferences and
 mention records without deleting account or message history.

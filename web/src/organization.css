@@ -147,8 +147,9 @@
 .org-dialog .org-danger { color: var(--red, #d45f66); border-color: currentColor; }
 .org-topic-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; }
 .org-kind { color: var(--org-tree-tone); font-family: Georgia, "Times New Roman", serif; font-style: italic; font-weight: 600; flex: none; }
-.org-unread, .org-mention-count { background: var(--accent-dim); border-radius: var(--radius-pill); padding: 1px 6px; font: 11px var(--font-mono); flex: none; }
-.org-mention-count { color: var(--amber); }
+.org-unread, .org-mention-count, .org-reply-count { background: var(--accent-dim); border-radius: var(--radius-pill); padding: 1px 6px; font: 11px var(--font-mono); flex: none; }
+/* What is for you, in amber: “@” and the number of unread mentions of you, “↩” and the number of unread replies to you. */
+.org-mention-count, .org-reply-count { color: var(--amber); background: color-mix(in srgb, var(--amber) 16%, transparent); }
 .org-tree .org-unfollowed { color: var(--muted); }
 .org-tree-empty { font-size: 12px; color: var(--muted); padding: 4px 16px; }
 .org-project-member-picker { display: grid; gap: 7px; padding: 12px; border: 1px solid var(--border); border-radius: var(--radius-control); }
@@ -316,6 +317,21 @@ a.org-reference:hover, a.org-reference:focus-visible { text-decoration: underlin
   padding: 0; border: 1px solid var(--border-strong); border-radius: 50%; background: var(--surface-raised); color: var(--foreground); z-index: 2;
   box-shadow: 0 6px 18px rgba(0, 0, 0, .35); }
 .org-app .org-jump:hover { background: var(--surface-raised); border-color: var(--muted); }
+/* Mentions of you and replies to you that were waiting when the topic opened: a bar at the top steps to each, and each
+   carries a tag and an amber rule until the bar is closed. */
+.org-for-you-bar { position: absolute; top: 10px; left: 50%; z-index: 3; display: flex; align-items: center; gap: 2px; max-width: calc(100% - 24px); transform: translateX(-50%);
+  padding: 3px 3px 3px 12px; border: 1px solid var(--border-strong); border-radius: var(--radius-pill); background: var(--surface-raised);
+  box-shadow: 0 6px 18px rgba(0, 0, 0, .35); font-size: 12px; white-space: nowrap; }
+.org-for-you-bar-text { min-width: 0; margin-right: 4px; overflow: hidden; text-overflow: ellipsis; }
+.org-for-you-bar-text b { margin-right: 5px; color: var(--amber); font: 600 12px var(--font-mono); }
+.org-for-you-bar-text small { margin-left: 6px; color: var(--muted); font: 11px var(--font-mono); }
+.org-app .org-for-you-bar button { flex: none; width: 26px; min-height: 26px; height: 26px; padding: 0; border-color: transparent; border-radius: 50%; font-size: 13px; }
+.org-for-you-tag { display: block; margin: 0 0 2px; color: var(--amber); font: 500 10.5px/14px var(--font-mono); letter-spacing: .04em; }
+.org-message.org-message-for-you { border-radius: var(--radius-card); box-shadow: inset 2px 0 0 color-mix(in srgb, var(--amber) 70%, transparent); }
+.org-message.org-message-for-you-current { background: color-mix(in srgb, var(--amber) 8%, transparent); box-shadow: inset 3px 0 0 var(--amber); }
+.org-message-for-you:focus { outline: none; }
+.org-message-for-you:focus-visible { outline: 2px solid var(--amber); outline-offset: 2px; }
+.org-app .org-thread-count.org-thread-count-fresh { border: 1px solid color-mix(in srgb, var(--amber) 45%, transparent); color: var(--amber); }
 .org-jump-count { position: absolute; top: -6px; right: -6px; min-width: 16px; height: 16px; padding: 0 4px; box-sizing: border-box; border-radius: var(--radius-pill);
   background: var(--teal); color: var(--background); font: 600 10px/16px var(--font-mono); text-align: center; }
 .org-reconnecting { font-size: 11px; color: var(--amber); margin: 3px 16px; }
@@ -525,7 +541,22 @@ a.org-reference:hover, a.org-reference:focus-visible { text-decoration: underlin
 .org-inline-spend { visibility:hidden; margin-left:auto; padding-left:6px; white-space:nowrap; flex:none; }
 .org-inline-spend[data-visible=true] { visibility:visible; }
 .org-tree-label { flex:1; }
-.org-mention-count { margin-left:5px; font-weight:700; }
+.org-mention-count, .org-reply-count { margin-left:5px; font-weight:600; }
+.org-mention-count + .org-reply-count { margin-left:3px; }
+.org-tree .org-topic :is(.org-mention-count, .org-reply-count) + .org-unread { margin-left:4px; }
+/* A collapsed channel or closed project adds up what its topics hold for you. */
+.org-for-you-sum { display:inline-flex; gap:3px; margin-left:5px; flex:none; letter-spacing:normal; text-transform:none; }
+.org-for-you-sum > span { margin-left:0; }
+/* Beside these counts the hidden spend figure gives up its room until it is shown, so the name keeps its width. */
+.org-tree .org-topic:has(.org-mention-count, .org-reply-count) > .org-inline-spend[data-visible=false],
+.org-tree .org-channel-name:has(.org-for-you-sum) > .org-inline-spend[data-visible=false],
+.org-tree .org-project > summary:has(.org-for-you-sum) > .org-inline-spend[data-visible=false] { display:none; }
+/* The sidebar header names the totals; the navigation button carries their sum while the sidebar is closed. */
+.org-app .org-for-you-total { align-self:flex-start; min-height:0; padding:0; border:0; border-radius:0; background:transparent; color:var(--amber); font-size:10px; text-align:left; }
+.org-app .org-for-you-total:hover { background:transparent; text-decoration:underline; }
+.org-app .org-nav-toggle { position:relative; }
+.org-nav-for-you { position:absolute; top:-4px; right:-7px; min-width:16px; height:16px; padding:0 4px; box-sizing:border-box; border-radius:var(--radius-pill);
+  background:var(--amber); color:var(--background); font:600 10px/16px var(--font-mono); text-align:center; pointer-events:none; }
 /* A run of messages from one speaker, styled like a People group: a dot in the speaker's tone beside the name,
    then a guide line along the messages. People are green, bots and models blue, as in People. */
 .org-message-group { --speaker-tone: var(--teal); position: relative; margin: 10px 0; }

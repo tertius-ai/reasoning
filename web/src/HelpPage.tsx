@@ -49,7 +49,7 @@ export function HelpPage({ onClose }: { onClose: () => void }) {
       <dt>?</dt><dd>Toggle help outside text fields</dd><dt>Enter / Shift+Enter</dt><dd>Send / new line</dd>
       <dt>Ctrl/⌘+K</dt><dd>Search</dd><dt>Ctrl/⌘+B</dt><dd>Toggle navigation</dd>
       <dt>Ctrl/⌘+Shift+P</dt><dd>Toggle people and bots</dd>
-      <dt>Alt+↑ / ↓</dt><dd>Previous / next topic</dd><dt>@ / # / /</dt><dd>Mention / reference / commands</dd>
+      <dt>Alt+↑ / ↓</dt><dd>Previous / next topic</dd><dt>Alt+Shift+↑ / ↓</dt><dd>Previous / next mention or reply in a topic</dd><dt>@ / # / /</dt><dd>Mention / reference / commands</dd>
       <dt>↑ / ↓ · Enter / Tab</dt><dd>Select autocomplete</dd><dt>Escape</dt><dd>Dismiss dialogs and menus</dd></dl>
     <h2>Slash commands</h2><dl className="org-shortcut-list">{TOPIC_COMMANDS.map(command => <Fragment key={command.id}><dt>/{command.id}</dt><dd>{command.label} · {command.kinds.join(" / ")}</dd></Fragment>)}</dl>
     <ServerStatus />
