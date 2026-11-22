@@ -21,40 +21,50 @@ test("a stored layout keeps what the app can draw and replaces the rest with the
   assert.equal(normalLayout({ desktop: { mode: "full", width: "0.5" } }).desktop.width, null);
 });
 
-test("the width stays between a column and leaving the topic a column, and starts as a column", () => {
+test("a resting width stays between a column and leaving the main chat 320 px, and starts as a column", () => {
   const { sideWidth, clampWidth, widestSide } = layout;
   assert.equal(sideWidth(null, 1170), 360);
   assert.equal(sideWidth(0.5, 1170), 585);
-  assert.equal(sideWidth(0.95, 1170), 810);
+  assert.equal(sideWidth(0.95, 1170), 850, "the main chat keeps its 320 px floor");
   assert.equal(sideWidth(0.1, 1170), 360);
   assert.equal(widestSide(600), 360, "an area too small for both still gives the side chat its column");
-  assert.equal(clampWidth(900, 1000, 48), 900, "over a narrower window the topic keeps only 48 px");
-  assert.equal(clampWidth(990, 1000, 48), 952);
+  assert.equal(clampWidth(900, 1000, true), 840, "lying over the topic, it rests short of the whole area");
 });
 
-test("the edge snaps at Column, Half and Wide, and each snap point appears only where it differs", () => {
-  const { widthSnaps, snapWidth, snapAt } = layout;
-  assert.deepEqual(widthSnaps(1170), [{ name: "Column", width: 360 }, { name: "Half", width: 585 }, { name: "Wide", width: 810 }]);
-  assert.deepEqual(widthSnaps(2674).map(snap => snap.width), [360, 1337, 2314], "the reporter's window");
-  assert.deepEqual(widthSnaps(760).map(snap => snap.name), ["Column"], "Half would equal Wide, which is the column");
-  assert.deepEqual(snapWidth(575, 1170), { width: 585, snap: { name: "Half", width: 585 } });
-  assert.deepEqual(snapWidth(700, 1170), { width: 700, snap: null });
-  assert.equal(snapAt(810, 1170).name, "Wide");
-  assert.equal(snapAt(700, 1170), null);
+test("the edge drags all the way across: past the main chat's floor it slides over it, and the far end is the whole area", () => {
+  const { dragView } = layout;
+  assert.deepEqual(dragView(585, 1170), { width: 585, full: false, overlap: 0 });
+  assert.deepEqual(dragView(850, 1170), { width: 850, full: false, overlap: 0 }, "at the floor nothing overlaps yet");
+  assert.deepEqual(dragView(1000, 1170), { width: 1000, full: false, overlap: 150 });
+  assert.deepEqual(dragView(5000, 1170), { width: 1170, full: true, overlap: 0 });
+  assert.deepEqual(dragView(100, 1170), { width: 360, full: false, overlap: 0 });
+  assert.deepEqual(dragView(900, 1000, true), { width: 900, full: false, overlap: 0 }, "over the topic on a narrower window it just widens");
 });
 
-test("keys move the edge: arrows by 24 px, Shift to the next snap point, Home and End to the ends", () => {
-  const { keyWidth } = layout;
+test("a let-go edge rests where it is, except near the end and while sliding over the main chat", () => {
+  const { restingWidth } = layout;
+  assert.equal(restingWidth(700, 1170), 700, "anywhere beside the main chat it stays");
+  assert.equal(restingWidth(900, 1170), 850, "early in the slide-over it settles at the main chat's floor");
+  assert.equal(restingWidth(1011, 1170), 1170, "within 160 px of the end it takes the whole area");
+  assert.equal(restingWidth(1170, 1170), 1170);
+  assert.equal(restingWidth(1010, 1170), 850, "at exactly 160 px from the end it stays beside the main chat");
+  assert.equal(restingWidth(840, 1000, true), 840, "over the topic, its widest resting width is not the whole area");
+  assert.equal(restingWidth(900, 1000, true), 1000);
+});
+
+test("keys move the edge: arrows by 24 px, Shift by a tenth, past the widest to the whole area, Home and End to the ends", () => {
+  const { keyWidth, widthText } = layout;
   assert.equal(keyWidth("ArrowLeft", false, 585, 1170), 609, "the edge is on the left, so ← widens");
   assert.equal(keyWidth("ArrowRight", false, 585, 1170), 561);
   assert.equal(keyWidth("ArrowRight", false, 370, 1170), 360);
-  assert.equal(keyWidth("ArrowLeft", true, 400, 1170), 585);
-  assert.equal(keyWidth("ArrowLeft", true, 585, 1170), 810);
-  assert.equal(keyWidth("ArrowRight", true, 810, 1170), 585);
-  assert.equal(keyWidth("ArrowRight", true, 360, 1170), 360);
+  assert.equal(keyWidth("ArrowLeft", true, 400, 1170), 517);
+  assert.equal(keyWidth("ArrowLeft", false, 840, 1170), 1170, "past the main chat's floor the next step is the whole area");
+  assert.equal(keyWidth("ArrowRight", false, 1170, 1170), 850, "and back from there, the widest resting width");
   assert.equal(keyWidth("Home", false, 700, 1170), 360);
-  assert.equal(keyWidth("End", false, 400, 1170), 810);
+  assert.equal(keyWidth("End", false, 400, 1170), 1170);
   assert.equal(keyWidth("Tab", false, 400, 1170), null);
+  assert.equal(widthText(585, 1170), "50 percent of the conversation area");
+  assert.equal(widthText(1170, 1170), "Whole conversation area; the main chat is hidden");
 });
 
 test("a floating panel opens at the right, stays inside the area, and is saved as shares", () => {

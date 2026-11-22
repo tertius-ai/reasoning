@@ -119,10 +119,12 @@ one that is already in the topic is linked rather than posted again, and the pos
 side messages stay private. Add your own words above it, with @ mentions. When someone has
 written since your last message, the post answers them unless you remove that.
 
-The side chat opens as a column beside the conversation. Drag its left edge to widen it, up to
-leaving the conversation a column; the edge snaps at a column, half and wide, and a double-click
-switches between the column and your last width (focus the edge to use the arrow keys, Home, End
-and Enter instead). **Expand** fills the conversation area and keeps the project list; the same
+The side chat opens as a column beside the conversation. Drag its left edge to widen it, as far
+as you like: the conversation narrows to a column, then the side chat slides over it, and at the
+far end the side chat takes the whole conversation area, as **Expand** does. Let go while it is
+sliding over the conversation and it settles at the nearer end. A double-click switches between
+the column and your last width (focus the edge to use the arrow keys, Home, End and Enter
+instead). **Expand** fills the conversation area and keeps the project list; the same
 button then reads **Show main chat**, counts what others posted there meanwhile, and brings the
 conversation back, as Esc does. **Float** lifts the side chat over the conversation: drag its
 title bar to move it and its edges to resize it, and **Dock** puts it back. On a phone the side
