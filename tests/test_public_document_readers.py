@@ -183,6 +183,8 @@ def test_web_text_refusals_name_the_media_and_the_supported_alternatives():
     assert redirect.code == "source_redirected" and "https://arxiv.org/html/2401.01234v2" in redirect.explanation()
     assert "redirects" in SourceError(302, {"location": "http://10.0.0.1/"}, "https://example.org/").explanation()
     assert "10.0.0.1" not in SourceError(302, {"location": "http://10.0.0.1/"}, "https://example.org/").explanation()
+    unacceptable = SourceError(415, {}, "https://example.org/paper").explanation()
+    assert "XML only" not in unacceptable and "PDF up to 1 MiB use web_fetch" in unacceptable and "media_read" in unacceptable
     limited = SourceError(429, {"retry-after": "30"}, "https://example.org/")
     assert limited.code == "source_rate_limited" and "30 seconds" in limited.explanation()
 
@@ -213,24 +215,34 @@ def test_tool_failures_name_arguments_and_grants_without_leaking_unexpected_text
 
 def test_research_tool_refusals_reach_the_model_and_receipt(installation, monkeypatch):
     from test_organization_research_workbench import source_run
+    from test_public_media import PNG, text_pdf
 
     state, _, _, row, tools = source_run(installation)
+    responses = {
+        "https://example.org/paper.pdf": (text_pdf("Lemma 4.2. The kernel is finite."), {"content-type": "application/pdf"}),
+        "https://example.org/figure.png": (PNG, {"content-type": "image/png"}),
+    }
 
-    async def pdf(url, **kwargs):
-        return PDF, {"content-type": "application/pdf"}
+    async def fetch(url, **kwargs):
+        return responses[url]
 
-    monkeypatch.setattr("reasoning_ledger.server.research_tools.public_get", pdf)
+    monkeypatch.setattr("reasoning_ledger.server.research_tools.public_get", fetch)
+    read = tools.invoke("web_fetch", {"url": "https://example.org/paper.pdf"})["result"]
+    assert "Lemma 4.2. The kernel is finite." in read["text"] and read["total_characters"] == len(read["text"])
+    assert read["extraction"]["status"] == "ready" and read["extraction"]["method"] == "server"
+    assert "text" not in read["extraction"] and "unverified" in read["notice"]
     with pytest.raises(ValueError) as error:
-        tools.invoke("web_fetch", {"url": "https://example.org/paper.pdf"})
-    assert "application/pdf" in str(error.value) and "arxiv_read" in str(error.value)
+        tools.invoke("web_fetch", {"url": "https://example.org/figure.png"})
+    assert "image/png" in str(error.value) and "arxiv_read" in str(error.value) and "media_read" in str(error.value)
     with pytest.raises(ValueError, match="arguments for arxiv_read are invalid"):
         tools.invoke("tool_call", {"name": "arxiv_read", "arguments": {"arxiv_id": "2401.01234"}})
     with pytest.raises(ValueError, match="not_a_tool is not a granted tool"):
         tools.invoke("tool_call", {"name": "not_a_tool", "arguments": {}})
     with state.store.transaction() as db:
-        codes = [json.loads(item[0])["code"] for item in db.execute(
-            "SELECT result_json FROM research_tool_receipts WHERE run_id=? ORDER BY sequence", (row["id"],))]
-    assert codes == ["source_media_unsupported", "tool_arguments_invalid", "tool_not_granted"]
+        receipts = [(item[0], json.loads(item[1]).get("code")) for item in db.execute(
+            "SELECT status,result_json FROM research_tool_receipts WHERE run_id=? ORDER BY sequence", (row["id"],))]
+    assert receipts == [("completed", None), ("failed", "source_media_unsupported"),
+                        ("failed", "tool_arguments_invalid"), ("failed", "tool_not_granted")]
 
 
 def test_pdf_attachment_reads_state_whether_text_exists_and_what_to_do(installation):
@@ -244,7 +256,7 @@ def test_pdf_attachment_reads_state_whether_text_exists_and_what_to_do(installat
     empty = upload(media, owner, topic, scanned, "application/pdf", "scan.pdf")
     read = media.read(owner["user_id"], owner["organization_id"], topic, empty["id"], hashlib.sha256(scanned).hexdigest())
     assert read["text"] == "" and read["text_status"] == "unavailable"
-    assert "no model receives PDF bytes" in read["notice"] and "arxiv_read" in read["notice"]
+    assert "native models have not inspected its pages" in read["notice"] and "arxiv_read" in read["notice"]
     with pytest.raises(StoreError, match="without NUL"):
         upload(media, owner, topic, PDF.replace(b"1.4", b"1.5"), "application/pdf", "nul.pdf", preview_text="a\0b")
 

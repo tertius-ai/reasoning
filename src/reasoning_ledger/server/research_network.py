@@ -21,8 +21,9 @@ SCHOLARLY_MAXIMUM = 8 * 1024 * 1024
 MEDIA_TYPE = re.compile(r"[a-z0-9][a-z0-9.+-]{0,63}/[a-z0-9][a-z0-9.+-]{0,63}")
 TEXT_MEDIA = {"text/html", "text/plain", "application/json", "application/xml", "application/atom+xml", "text/xml"}
 DOCUMENT_ADVICE = (
-    "For an arXiv paper use arxiv_read with queries, or arxiv_source_list and arxiv_source_read. For another PDF, "
-    "ask a member to attach it and read its extracted text with media_read."
+    "For an arXiv paper use arxiv_read with queries, or arxiv_source_list and arxiv_source_read. For another public "
+    "PDF up to 1 MiB use web_fetch, which extracts its text; otherwise ask a member to attach it and read its extracted "
+    "text with media_read."
 )
 
 
@@ -62,7 +63,7 @@ class SourceError(SourceRefused):
         elif status in {401, 403}:
             code, action = "source_access_denied", "The source requires access that public reads do not have; use another source."
         elif status in {406, 415}:
-            code, action = "source_media_unsupported", "This reader accepts text, HTML, JSON or XML only. " + DOCUMENT_ADVICE
+            code, action = "source_media_unsupported", "The source would not serve a media type this reader requests. " + DOCUMENT_ADVICE
         else:
             code, action = "source_http_error", "Retry later or use an alternate source."
         super().__init__(code, f"The public source returned HTTP {status}.", action)

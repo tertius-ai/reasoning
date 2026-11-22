@@ -82,6 +82,7 @@ DEPLOYMENT_TESTS = {
     "test_public_research_export.py",
     "test_public_research_safety.py",
     "test_public_research_network.py",
+    "test_public_document_readers.py",
     "test_organization_research_workbench.py",
     "test_public_usage.py",
     "test_public_input_security.py",
