@@ -111,11 +111,14 @@ than 4096 MiB: at that limit the import is slowed by page-cache thrashing. Run
    still take jobs.
 3. After the typed confirmation, it records the new limits on the server for each
    relay worker. Then, inside a temporary SSH window, the chat host writes the same
-   limits into each relay's enrollment and Modal profile. The host refuses unless
-   the server already records the new limits, every relay is drained with no
-   running or unknown job and no unfinished VM attempt, and its relays are exactly
-   the relay workers the server lists. It probes every relay with `verify-images`
-   and restarts only the relays that were running.
+   limits into each relay's enrollment and Modal profile, and updates the relay's
+   runtime binding (`modal-runtime.json`, which names its Modal app, profile and
+   catalog and is checked on every start) to the changed profile. The host refuses
+   unless the server already records the new limits, every relay is drained with
+   no running or unknown job and no unfinished VM attempt, its relays are exactly
+   the relay workers the server lists, and each runtime binding names the relay's
+   current profile and catalog. It probes every relay with `verify-images` and
+   restarts only the relays that were running.
 4. Resume claims on each relay worker and run a small job.
 
 Enrollments, Modal credentials, catalogs and relay code are unchanged. A job's

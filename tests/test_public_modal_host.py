@@ -502,7 +502,7 @@ def test_relay_limits_resume_restarts_a_relay_stopped_before_a_failed_probe(limi
 
 LIMIT_REFUSALS = {"server": "new limits", "claims": "drain every", "unsettled": "running or unknown", "attempt": "unfinished VM",
                   "unit": "service definition", "workers": "differ from the relay workers", "image": "maximum resources",
-                  "request": "invalid Modal relay limits", "no-setup": "installed Modal setup"}
+                  "request": "invalid Modal relay limits", "no-setup": "installed Modal setup", "binding": "runtime binding"}
 
 
 @pytest.mark.parametrize("change", sorted(LIMIT_REFUSALS))
@@ -528,6 +528,11 @@ def test_relay_limits_refuse_before_stopping_or_writing_anything_when_unsafe(lim
         server["resources"] = request["resources"]
     elif change == "request":
         request = {**request, "resources": {**request["resources"], "cpu": 0}}
+    elif change == "binding":
+        bind_runtime(root, worker)
+        binding = json.loads((state / "modal-runtime.json").read_text())
+        (state / "modal-runtime.json").unlink()
+        write_private(state / "modal-runtime.json", json.dumps({**binding, "profile_sha256": "0" * 64}).encode())
     else:
         (root / "var/lib/reasoning-deploy/modal-setup/installation.json").unlink()
     before = relay_files(root, identifier)
@@ -535,6 +540,72 @@ def test_relay_limits_refuse_before_stopping_or_writing_anything_when_unsafe(lim
         installer.limits(request)
     assert relay_files(root, identifier) == before
     assert not any(call[:2] in (["systemctl", "stop"], ["systemctl", "start"]) for call in calls)
+
+
+def modal_runner(state, worker):
+    """The relay's own Modal runner over its files on disk, with a fake app identity and no Modal calls."""
+    from reasoning_ledger.server.compute_catalog import load_catalog
+    from reasoning_ledger.server.compute_modal import ModalRunner
+
+    return ModalRunner(state, worker["enrollment"]["id"], json.loads((state / "modal-profile.json").read_text()),
+                       load_catalog(state / "catalog.json"), sdk=SimpleNamespace(identity=lambda: "ap-fixture"))
+
+
+def bind_runtime(root, worker):
+    """Bind the relay's Modal runtime exactly as the relay does on its first start."""
+    state = root / "var/lib/reasoning-modal" / worker["enrollment"]["id"]
+    sandbox = state / "modal-sandbox.json"
+    sandbox.unlink()
+    modal_runner(state, worker).verify_runtime_identity()
+    write_private(sandbox, b'{"phase":"idle"}')
+    return state
+
+
+def test_relay_limits_rebind_the_runtime_so_the_relay_accepts_its_changed_profile(limits):
+    from reasoning_ledger.server.compute_modal import RuntimeFault
+
+    root, request, worker, installer, calls, _, _ = limits
+    state = bind_runtime(root, worker)
+    original = modal_runner(state, worker)
+    before = json.loads((state / "modal-runtime.json").read_text())
+
+    result = installer.limits(request)
+
+    assert result["updated"] == [worker["enrollment"]["id"]]
+    after = json.loads((state / "modal-runtime.json").read_text())
+    assert {**after, "profile_sha256": None} == {**before, "profile_sha256": None}
+    assert after["profile_sha256"] != before["profile_sha256"]
+    assert (state / "modal-runtime.json").stat().st_mode & 0o077 == 0
+    modal_runner(state, worker).verify_runtime_identity()
+    with pytest.raises(RuntimeFault, match="runtime_identity_changed"):
+        original.verify_runtime_identity()
+
+
+def test_relay_limits_finish_a_change_that_left_the_runtime_binding_behind(limits):
+    """Files written by a host step that did not yet rebind: the relays were stopped and the probe refused them."""
+    root, request, worker, installer, calls, identity, _ = limits
+    identifier = worker["enrollment"]["id"]
+    state = bind_runtime(root, worker)
+    for name, body in (("enrollment.json", worker["enrollment"]), ("modal-profile.json", worker["profile"])):
+        (state / name).unlink()
+        write_private(state / name, json.dumps({**body, "resources": request["resources"]}, sort_keys=True,
+                                               separators=(",", ":")).encode())
+    write_document(root / "var/lib/reasoning-deploy/modal-setup/relay-limits.json", {"restart": [identifier]})
+    identity["service"] = {"ActiveState": "inactive"}
+    command = installer.command
+
+    def starting(arguments, **options):
+        if arguments[:2] == ["systemctl", "start"]:
+            identity["service"] = {}
+        return command(arguments, **options)
+
+    installer.command = starting
+    result = installer.limits(request)
+
+    assert result["updated"] == [identifier] and result["restarted"] == [identifier]
+    modal_runner(state, worker).verify_runtime_identity()
+    assert ["systemctl", "start", "reasoning-modal-" + identifier] in calls
+    assert not (root / "var/lib/reasoning-deploy/modal-setup/relay-limits.json").exists()
 
 
 @pytest.fixture

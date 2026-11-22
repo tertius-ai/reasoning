@@ -579,8 +579,8 @@ class ModalHostInstaller:
         return self._locked(lambda: self._limits(value))
 
     def _limits(self, value):
-        """Give every relay the per-job limits the server already records for it. Credentials, catalogs and the relay
-        runtime stay as they are.
+        """Give every relay the per-job limits the server already records for it, in its enrollment, its Modal profile
+        and the runtime binding that names that profile. Credentials, catalogs and the relay runtime stay as they are.
 
         Every relay must be drained with no running or unknown job, and idle locally, so a relay and the server never
         disagree while it can claim a job. All relays are checked before any is stopped, and each is probed with its new
@@ -610,8 +610,13 @@ class ModalHostInstaller:
                     raise InstallError("a Modal relay profile or catalog is missing, unsafe or invalid") from None
                 if not images or any(not fits(offered, image.maximum_resources) for image in images):
                     raise InstallError("the new limits exceed the maximum resources of an image a relay serves")
-                changes.append((identifier, name, state, {"enrollment.json": {**config, "resources": offered},
-                                                          "modal-profile.json": {**profile, "resources": offered}}))
+                changed_profile = {**profile, "resources": offered}
+                files = {"enrollment.json": {**config, "resources": offered}, "modal-profile.json": changed_profile}
+                binding = state / "modal-runtime.json"
+                if binding.exists() or binding.is_symlink():
+                    files["modal-runtime.json"] = self._runtime_binding(binding, account, identifier, images, profile,
+                                                                        changed_profile)
+                changes.append((identifier, name, state, files))
             # A lost reply after a stop must still start the relays that were running: keep that intent first.
             journal = setup / "relay-limits.json"
             restart = read_document(journal)["restart"] if journal.exists() or journal.is_symlink() else []
@@ -634,6 +639,30 @@ class ModalHostInstaller:
                 journal.unlink()
             return {"resources": offered, "relays": [identifier for identifier, _, _ in relays], "updated": sorted(changed),
                     "restarted": sorted(restart), "live_compute_verified": False}
+
+    def _runtime_binding(self, path, account, identifier, images, profile, changed_profile):
+        """The relay's Modal runtime binding for its changed profile: the same worker, Modal app and catalog.
+
+        The relay checks this binding on every start and probe, and it names the exact Modal profile by digest. Before
+        any file is rewritten it must name the relay's current profile. A rerun after a partial rewrite finds the
+        changed profile already in place, and then only the worker, app and catalog can still be checked.
+        """
+        def digest(value):
+            return hashlib.sha256(canonical(value).encode()).hexdigest()
+
+        try:
+            binding = json.loads(self._private_relay_file(path, account))
+            if (not isinstance(binding, dict) or set(binding) != {"format", "worker_id", "app_id", "profile_sha256", "images"}
+                    or type(binding["format"]) is not int or binding["format"] != 1 or binding["worker_id"] != identifier
+                    or not isinstance(binding["app_id"], str) or not re.fullmatch(r"ap-[A-Za-z0-9]+", binding["app_id"])
+                    or not isinstance(binding["profile_sha256"], str)
+                    or not re.fullmatch(r"[a-f0-9]{64}", binding["profile_sha256"])
+                    or binding["images"] != [image.record() for image in sorted(images, key=lambda image: image.id)]
+                    or profile != changed_profile and binding["profile_sha256"] != digest(profile)):
+                raise ValueError
+        except (InstallError, OSError, ValueError, TypeError, KeyError):
+            raise InstallError("a Modal relay's runtime binding is unsafe or does not match its profile and catalog") from None
+        return {**binding, "profile_sha256": digest(changed_profile)}
 
     def environment_probe(self, value):
         validate_probe(value)
