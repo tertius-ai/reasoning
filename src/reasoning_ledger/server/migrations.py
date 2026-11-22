@@ -691,6 +691,10 @@ from .side_chat_layout_schema import SCHEMA as SIDE_CHAT_LAYOUT_SCHEMA  # noqa: 
 
 MIGRATIONS += (SIDE_CHAT_LAYOUT_SCHEMA,)
 
+from .compute_environments_schema import SCHEMA as COMPUTE_ENVIRONMENTS_SCHEMA  # noqa: E402
+
+MIGRATIONS += (COMPUTE_ENVIRONMENTS_SCHEMA,)
+
 from .event_blobs_schema import SCHEMA as EVENT_BLOBS_SCHEMA  # noqa: E402
 
 MIGRATIONS += (EVENT_BLOBS_SCHEMA,)

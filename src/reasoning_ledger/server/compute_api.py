@@ -8,8 +8,10 @@ from fastapi.responses import StreamingResponse
 from pydantic import Field, SecretStr
 
 from .compute_catalog import DEFAULT_RESOURCES
+from .compute_environments import ComputeEnvironments
 from .compute_scaler import ComputeScalers
 from .compute_store import MAX_ATTACHMENTS, ComputeStore
+from .lean_environments import MANIFEST_BYTES, TOOLCHAIN_BYTES
 from .request_input import RequestInput as Input
 from .store import StoreError
 
@@ -47,6 +49,16 @@ class Policy(Input):
     max_active_jobs: Annotated[int, Field(ge=1, le=4096, strict=True)] = 2
     max_pending_jobs: Annotated[int, Field(ge=1, le=1_000_000, strict=True)] | None = None
     requests_per_user_15_minutes: Annotated[int, Field(ge=1, le=1_000_000, strict=True)] | None = None
+
+
+class EnvironmentRequest(Input):
+    lean_toolchain: Annotated[str, Field(min_length=1, max_length=TOOLCHAIN_BYTES)]
+    lake_manifest: Annotated[str, Field(min_length=1, max_length=MANIFEST_BYTES)]
+
+
+class EnvironmentDecision(Input):
+    decision: Literal["approved", "declined"]
+    key: Annotated[str, Field(pattern=r"^[a-f0-9]{64}$", min_length=64, max_length=64)]
 
 
 class Worker(Input):
@@ -132,6 +144,8 @@ def install_routes(app: FastAPI, state: ComputeStore, authenticated: Callable) -
     User = Annotated[str, Depends(authenticated)]
     scalers = ComputeScalers(state)
     app.state.compute_scalers = scalers
+    environments = ComputeEnvironments(state.store)
+    app.state.compute_environments = environments
 
     def worker_credential(request: Request) -> str:
         # Never accept browser sessions or silently fall back to cookies.
@@ -182,6 +196,22 @@ def install_routes(app: FastAPI, state: ComputeStore, authenticated: Callable) -
     def policy(organization_id: str, body: Policy, user: User):
         return state.set_policy(user, organization_id, body.allowed_images, body.monthly_cpu_seconds, body.max_active_jobs,
                                 body.max_pending_jobs, body.requests_per_user_15_minutes)
+
+    @app.get("/api/organizations/{organization_id}/compute-environments")
+    def environment_list(organization_id: str, user: User):
+        return environments.environments(user, organization_id)
+
+    @app.post("/api/organizations/{organization_id}/compute-environments")
+    def environment_request(organization_id: str, body: EnvironmentRequest, user: User):
+        return environments.request(user, organization_id, body.lean_toolchain, body.lake_manifest)
+
+    @app.get("/api/organizations/{organization_id}/compute-environments/{environment_id}")
+    def environment(organization_id: str, environment_id: str, user: User):
+        return environments.environment(user, organization_id, environment_id)
+
+    @app.put("/api/organizations/{organization_id}/compute-environments/{environment_id}/decision")
+    def environment_decision(organization_id: str, environment_id: str, body: EnvironmentDecision, user: User):
+        return environments.decide(user, organization_id, environment_id, body.key, body.decision)
 
     @app.post("/api/organizations/{organization_id}/topics/{topic_id}/compute-jobs", status_code=202)
     def submit(organization_id: str, topic_id: str, body: Job, user: User):

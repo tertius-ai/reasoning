@@ -149,6 +149,72 @@ provides operation names, schemas and examples without launching a job;
 artifact. Native beta models use the topic's Compute grant and explicit allowance
 or exact-action approval. Bot submissions require the bot owner's approval.
 
+## Lean environments
+
+A Lean environment is the toolchain and pinned dependencies a Lean project builds
+against. The server derives it from the project's `lean-toolchain` and
+`lake-manifest.json` and keeps one record per organization and environment key.
+Preparing approved environments on the Modal relays, and using them in jobs, is
+not available yet; the [mount check](#check-that-lean-environments-mount-read-only)
+below covers the read-only mount they will use.
+
+**Key.** The specification keeps only what decides the built environment, and
+its key is the SHA-256 of the specification as canonical JSON (sorted keys,
+compact separators):
+
+```json
+{
+  "format": 1,
+  "toolchain": "leanprover/lean4:v4.34.0-rc1",
+  "packages": [
+    {"name": "mathlib", "url": "https://github.com/leanprover-community/mathlib4",
+     "rev": "<40 hexadecimal digits>", "sub_dir": null}
+  ]
+}
+```
+
+Packages are sorted by name. URLs are kept as written: Lake compares each
+package's manifest URL with its clone's remote, so `…/mathlib4` and
+`…/mathlib4.git` are different environments. Lake's other manifest fields (`inputRev`,
+`inherited`, `scope`, `configFile`, `manifestFile`), the project name and the
+layout of the file do not change the key. A request is refused unless:
+
+| Input | Accepted |
+| --- | --- |
+| `lean-toolchain` | `leanprover/lean4:v4.X.Y` or `leanprover/lean4:v4.X.Y-rcN`, an official release or release candidate; surrounding whitespace is ignored; at most 128 bytes |
+| `lake-manifest.json` | A Lake manifest of version `7`, `"1.0.0"` or `"1.1.0"`, at most 32 KiB, with no repeated field in any object and at most 64 packages with distinct names |
+| Package `type` | `git`; path packages are refused |
+| Package `name` | A letter, then up to 63 letters, digits, `_` or `-` |
+| Package `url` | `https://github.com/<owner>/<repository>`, optionally ending in `.git`; no credentials, port, path, query or fragment |
+| Package `rev` | A full 40-character lowercase commit hash |
+| Package `subDir` | `null`, or a relative path of up to 8 plain names |
+
+**Request and approval.** `POST {prefix}/compute-environments` with
+`lean_toolchain` and `lake_manifest`, each the file's text, returns the
+organization's record for that key. Members with write access may ask; viewers
+and other members may read the list. If the organization already has the key,
+the existing record is returned unchanged, so reuse needs no approval. A new key
+is recorded as `requested`. An organization holds at most 16 undecided requests,
+and each member at most 4; past either, a request is refused with 429 until an
+administrator decides some.
+
+Each record carries its `key`, the `specification` and `sources`: the Lean
+release page and each package's URL, exact revision and sub-directory, in the
+order an approval lists them. Only a human owner or administrator decides:
+`PUT {prefix}/compute-environments/{environment_id}/decision` with `decision`
+(`approved` or `declined`) and the record's `key`. A decision that names another
+key is refused with 409, so it covers exactly the sources the record lists.
+A commit hash names a commit, not the repository it is on: GitHub serves a
+fork's commits under the original repository's URL too, so neither the record
+nor the approval shows that a listed commit belongs to the listed repository.
+An approved environment stays approved; a declined one can still be approved.
+Requests and decisions are recorded in the organization audit log. The database
+refuses any change to a record's key, specification, organization or requester,
+and any change to an approved record.
+
+Owners and administrators use **Administration → Compute → Lean environments**:
+paste the two files, review the sources table, then approve or decline.
+
 ## Check that Lean environments mount read-only
 
 A Lean environment holds a Lean project's toolchain and compiled dependencies.
