@@ -91,6 +91,20 @@ class ComputeEnvironments:
             self.store._require(db, user, org)
             return self._view(self._record(db, org, environment))
 
+    def for_worker(self, credential: str, environment: str) -> dict:
+        """An approved environment of the worker's own organization, for a relay to prepare. Waiting, declined and other
+        organizations' environments are not found."""
+        from .compute_store import ComputeStore
+
+        with self.store.transaction() as db:
+            worker = ComputeStore._authenticate_worker(db, credential)
+            row = _row(db.execute(
+                "SELECT * FROM compute_environments WHERE organization_id=? AND id=? AND status='approved'",
+                (worker["organization_id"], environment),
+            ).fetchone())
+            view = self._view(row)
+            return {key: view[key] for key in ("id", "organization_id", "key", "status", "specification")}
+
     def decide(self, user: str, org: str, environment: str, key: str, decision: str) -> dict:
         """Approve or decline a request. The key must be the record's, so a decision covers only what it listed.
         A declined environment can still be approved later; an approved one stays approved."""

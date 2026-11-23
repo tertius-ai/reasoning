@@ -684,3 +684,83 @@ def test_environment_probe_refuses_what_it_cannot_trust(probe, change):
         installer.environment_probe(request)
     if change != "receipt":
         assert not any("probe-environment-mount" in call for call in calls)
+
+
+@pytest.fixture
+def preparing(host):
+    """A running relay of the installed release, and a host command that answers a preparation with a fixed receipt."""
+    root, payload, worker, installer, calls, identity = host
+    installer.install(payload, "prepare")
+    installer.install({**payload, "workers": [worker]}, "activate")
+    environment = "e" * 32
+    original = installer.command
+    answer = {"body": json.dumps({"format": 1, "environment_id": environment, "failures": []}).encode()}
+
+    def command(arguments, **options):
+        if "prepare-environment" in arguments:
+            calls.append(arguments)
+            return answer["body"]
+        return original(arguments, **options)
+
+    installer.command = command
+    calls.clear()
+    request = {"format": 1, "release_id": payload["release_id"], "public_url": payload["public_url"],
+               "environment_id": environment}
+    return root, request, worker, installer, calls, answer
+
+
+def test_environment_preparation_runs_as_the_relay_account_for_the_named_environment(preparing):
+    root, request, worker, installer, calls, _ = preparing
+    identifier = worker["enrollment"]["id"]
+    before = relay_files(root, identifier)
+
+    result = installer.environment_prepare(request)
+
+    assert result == {"release_id": request["release_id"], "relay": identifier,
+                      "preparation": {"format": 1, "environment_id": request["environment_id"], "failures": []}}
+    state = f"{root}/var/lib/reasoning-modal/{identifier}"
+    assert calls[-1] == ["runuser", "-u", "reasoning-modal", "--",
+                         f"{root}/opt/reasoning/modal/{request['release_id']}/venv/bin/reasoning-compute-worker",
+                         "--data-dir", state, "prepare-environment", "--environment", request["environment_id"],
+                         "--modal-profile", state + "/modal-profile.json", "--catalog", state + "/catalog.json"]
+    assert not any(call[:2] in (["systemctl", "stop"], ["systemctl", "start"], ["systemctl", "restart"]) for call in calls)
+    assert relay_files(root, identifier) == before
+    assert worker["profile"]["token_secret"] not in str(calls) and worker["enrollment"]["token"] not in str(calls)
+
+
+def test_environment_preparation_is_bounded_by_its_own_timeout(preparing, monkeypatch):
+    from reasoning_ledger.deployment import modal_host
+    from reasoning_ledger.server import compute_environment_prepare
+
+    _, request, _, installer, _, _ = preparing
+    seen = []
+    installer.command = None
+    receipt = {"format": 1, "environment_id": request["environment_id"], "failures": []}
+    monkeypatch.setattr(modal_host.subprocess, "run", lambda arguments, **options: seen.append(options["timeout"]) or
+                        SimpleNamespace(returncode=0, stdout=json.dumps(receipt).encode()))
+    monkeypatch.setattr(installer, "service_identity", lambda *args, **options: None)
+    installer.environment_prepare(request)
+    assert seen == [modal_host.PREPARE_SECONDS] and modal_host.PREPARE_SECONDS > compute_environment_prepare.PREPARE_SECONDS
+
+
+@pytest.mark.parametrize("change", ["older-relay", "receipt", "other-environment", "request"])
+def test_environment_preparation_refuses_what_it_cannot_trust(preparing, change):
+    root, request, worker, installer, calls, answer = preparing
+    unit = root / "etc/systemd/system" / ("reasoning-modal-" + worker["enrollment"]["id"] + ".service")
+    if change == "older-relay":
+        unit.write_text(relay_unit("7" * 64, worker["enrollment"]["id"]))
+        expected = "make compute-relays-update"
+    elif change == "receipt":
+        answer["body"] = b'{"format": 1}'
+        expected = "invalid Lean environment preparation receipt"
+    elif change == "other-environment":
+        answer["body"] = json.dumps({"format": 1, "environment_id": "f" * 32, "failures": []}).encode()
+        expected = "invalid Lean environment preparation receipt"
+    else:
+        request = {**request, "environment_id": "../" + "e" * 29}
+        expected = "invalid Lean environment preparation request"
+    with pytest.raises(InstallError, match=expected):
+        installer.environment_prepare(request)
+    if change in {"older-relay", "request"}:
+        assert not any("prepare-environment" in call for call in calls)
+

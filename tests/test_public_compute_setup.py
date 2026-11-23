@@ -489,3 +489,103 @@ def test_environment_probe_closes_ssh_when_the_host_fails_or_answers_badly(probi
     with pytest.raises(InstallError):
         compute_images.run_environment_probe(state, None, remote=remote)
     assert calls[-1] == "close" and not (state / "compute-environment-probe").exists()
+
+
+
+ENVIRONMENT_ID = "e" * 32
+PREPARED = {
+    "format": 1, "environment_id": ENVIRONMENT_ID, "key": "k" * 64, "attempt": "d" * 32,
+    "volume": "reasoning-lean-" + "c" * 32, "sub_path": f"/environments/{'k' * 64}/{'d' * 32}",
+    "toolchain": {"version": "v4.34.0-rc1", "sha256": "f" * 64, "bytes": 312000000}, "failures": [], "removed": False,
+    "log": "d" * 32 + ".log", "seal_verified": True, "cleanup_verified": True, "error": None,
+    "vm": {"failure": None, "packages": [{"name": "mathlib", "on": "default branch", "seconds": 61.2}],
+           "cache": {"requests": 8729, "files": 8729, "bytes_in": 441000000, "upstream_errors": 0, "refused": 0,
+                     "refused_requests": []},
+           "built": ["InfinityCosmos"], "seconds": {"toolchain": 40.1, "packages": 211.0, "cache": 70.4, "build": 31.0},
+           "seal": {"sha256": "5" * 64, "files": 31000, "bytes": 9800000000}},
+}
+
+
+@pytest.fixture
+def preparing(relays):
+    compute_images, state, calls, features = relays
+    features["installation_features"].append("modal-environment-prepare-v1")
+    requests = []
+
+    def remote(config, document, ownership, bundle, payload, operation):
+        requests.append((payload, operation))
+        calls.append("remote")
+        return {"release_id": payload["release_id"], "relay": "c" * 32, "preparation": PREPARED}
+
+    return compute_images, state, calls, features, requests, remote
+
+
+def test_environment_preparation_asks_consent_then_runs_on_the_host_inside_one_ssh_window(preparing, capsys):
+    compute_images, state, calls, _, requests, remote = preparing
+    result = compute_images.run_environment_prepare(state, None, ENVIRONMENT_ID, remote=remote)
+    assert calls == [f"prepare {ENVIRONMENT_ID} https://chat.example.org", "open", "remote", "close"]
+    assert requests == [({"format": 1, "release_id": "a" * 64, "public_url": "https://chat.example.org",
+                          "environment_id": ENVIRONMENT_ID}, "environment-prepare")]
+    assert result["ssh_closed"] is True and result["preparation"] == PREPARED
+    saved = [path for path in (state / "compute-environment-preparations").iterdir() if path.suffix == ".json"]
+    assert len(saved) == 1 and read_document(saved[0])["preparation"] == PREPARED
+    output = capsys.readouterr().out
+    assert "mathlib: on its default branch (61.2 s)" in output and "Built offline: InfinityCosmos." in output
+    assert "mathlib's files: 8729 files, 441000000 bytes, 0 upstream errors; 0 requests refused." in output
+    assert f"Sealed: 31000 files, 9800000000 bytes, seal SHA-256 {'5' * 64}" in output
+
+
+def test_environment_preparation_reports_why_it_did_not_seal(preparing, capsys):
+    compute_images, state, _, _, _, _ = preparing
+    failed = {**PREPARED, "failures": ["the VM failed at packages: commit x is on no branch or tag"], "removed": True,
+              "vm": {**PREPARED["vm"], "failure": {"step": "packages", "message": "x"}, "seal": None}}
+    compute_images.run_environment_prepare(
+        state, None, ENVIRONMENT_ID,
+        remote=lambda *args: {"release_id": "a" * 64, "relay": "c" * 32, "preparation": failed})
+    output = capsys.readouterr().out
+    assert "Not prepared:\n  - the VM failed at packages" in output and "directory was removed" in output
+    assert "Sealed:" not in output
+
+
+def test_environment_preparation_reports_a_refusal_before_modal(preparing, capsys):
+    compute_images, state, _, _, _, _ = preparing
+    refusal = {"format": 1, "environment_id": ENVIRONMENT_ID,
+               "failures": ["the server has no approved environment with this ID in this relay's organization"]}
+    compute_images.run_environment_prepare(
+        state, None, ENVIRONMENT_ID,
+        remote=lambda *args: {"release_id": "a" * 64, "relay": "c" * 32, "preparation": refusal})
+    output = capsys.readouterr().out
+    assert "nothing was started on Modal" in output and "no approved environment with this ID" in output
+    assert "directory is kept" not in output and "Sealed:" not in output
+
+
+@pytest.mark.parametrize("change", ["feature", "identifier"])
+def test_environment_preparation_refuses_before_any_prompt(preparing, change):
+    compute_images, state, calls, features, _, _ = preparing
+    environment = ENVIRONMENT_ID
+    if change == "feature":
+        features["installation_features"].remove("modal-environment-prepare-v1")
+        expected = "make upgrade"
+    else:
+        environment = "not-an-id"
+        expected = "32-character ID"
+    with pytest.raises(InstallError, match=expected):
+        compute_images.run_environment_prepare(state, None, environment,
+                                               remote=lambda *_: pytest.fail("must not reach the host"))
+    assert calls == []
+
+
+@pytest.mark.parametrize("answer", [None, {"release_id": "a" * 64, "preparation": {**PREPARED, "environment_id": "f" * 32}},
+                                    "fail"])
+def test_environment_preparation_closes_ssh_when_the_host_fails_or_answers_badly(preparing, answer):
+    compute_images, state, calls, _, _, _ = preparing
+
+    def remote(*_):
+        if answer == "fail":
+            raise InstallError("update the Modal relays to the installed release first")
+        return answer
+
+    with pytest.raises(InstallError):
+        compute_images.run_environment_prepare(state, None, ENVIRONMENT_ID, remote=remote)
+    assert calls[-1] == "close" and not (state / "compute-environment-preparations").exists()
+

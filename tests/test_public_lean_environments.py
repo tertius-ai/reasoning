@@ -5,6 +5,9 @@ import json
 import sqlite3
 
 import pytest
+from fastapi.testclient import TestClient
+from test_public_compute import compute as compute
+from test_public_compute import worker
 from test_public_server import installation as installation
 from test_public_server import invited
 
@@ -373,3 +376,28 @@ def test_the_database_keeps_sources_and_approvals_fixed(installation):
     with store.transaction(write=True) as db, pytest.raises(sqlite3.DatabaseError, match="stays approved"):
         db.execute("UPDATE compute_environments SET status='declined' WHERE id=?", (record["id"],))
 
+
+def test_a_relay_reads_only_approved_environments_of_its_own_organization(compute):
+    config, _, _, client, owner, _ = compute
+    record = ask(client, owner).json()
+    enrolled, relay = worker(compute)
+    path = f"/api/worker/compute-environments/{record['id']}"
+    assert relay.get(path).status_code == 404
+    decide(client, owner, record)
+    response = relay.get(path)
+    assert response.status_code == 200, response.text
+    assert response.json() == {"id": record["id"], "organization_id": owner["organization_id"], "key": record["key"],
+                               "status": "approved", "specification": record["specification"]}
+    assert relay.get("/api/worker/compute-environments/" + "f" * 32).status_code == 404
+    assert TestClient(client.app, base_url=config.public_url).get(path).status_code == 401
+
+    elsewhere = client.post("/api/organizations", json={"name": "Elsewhere", "credential_mode": "none"})
+    assert elsewhere.status_code == 201, elsewhere.text
+    other = {"organization_id": elsewhere.json()["id"]}
+    theirs = ask(client, other, lean_toolchain="leanprover/lean4:v4.24.0\n").json()
+    assert decide(client, other, theirs).json()["status"] == "approved"
+    assert relay.get(f"/api/worker/compute-environments/{theirs['id']}").status_code == 404
+
+    revoked = client.delete(f"/api/organizations/{owner['organization_id']}/compute-workers/{enrolled['id']}")
+    assert revoked.status_code == 204
+    assert relay.get(path).status_code == 401

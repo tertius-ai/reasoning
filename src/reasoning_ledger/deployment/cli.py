@@ -549,6 +549,10 @@ def main(argv: list[str] | None = None, *, raise_errors: bool = False) -> int:
     compute_probe = commands.add_parser(
         "compute-environment-probe", help="check on a live Modal run that a sealed Lean environment mounts read-only into a job")
     compute_probe.add_argument("--state-dir", type=Path, default=Path.home() / ".reasoning-deploy")
+    compute_prepare = commands.add_parser(
+        "compute-environment-prepare", help="fetch, build and seal one approved Lean environment on the relays' Modal account")
+    compute_prepare.add_argument("--environment", required=True, help="the approved environment's ID")
+    compute_prepare.add_argument("--state-dir", type=Path, default=Path.home() / ".reasoning-deploy")
     mail_setup = commands.add_parser("email-setup", help="enable Resend mail on an existing synchronized managed deployment")
     mail_setup.add_argument("--state-dir", type=Path, default=Path.home() / ".reasoning-deploy")
     upgrade_stage = commands.add_parser("upgrade-stage", help="retain the currently installed release before building its replacement")
@@ -998,6 +1002,16 @@ def main(argv: list[str] | None = None, *, raise_errors: bool = False) -> int:
                 result = run_environment_probe(args.state_dir, lambda arguments: main(arguments, raise_errors=True))
             except (EOFError, KeyboardInterrupt):
                 raise InstallError("the Lean environment probe stopped; run the same command again") from None
+        elif args.command == "compute-environment-prepare":
+            from .compute_images import run_environment_prepare
+
+            if not sys.stdin.isatty():
+                raise InstallError("prepare Lean environments in your terminal; the typed consent belongs in the CLI")
+            try:
+                result = run_environment_prepare(args.state_dir, lambda arguments: main(arguments, raise_errors=True),
+                                                 args.environment)
+            except (EOFError, KeyboardInterrupt):
+                raise InstallError("the Lean environment preparation stopped; run the same command again") from None
         elif args.command == "email-setup":
             from .mail_setup import run_mail_setup
 

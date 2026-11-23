@@ -226,18 +226,27 @@ def owned_modal_remote(config, document, directory, bundle, value, operation, *,
 
     from .cli import STAGE_SCRIPT, ssh_arguments
     from .digitalocean import DigitalOcean
-    from .modal_host import validate_addition, validate_limits, validate_probe, validate_refresh, validate_request
+    from .modal_host import (
+        validate_addition,
+        validate_limits,
+        validate_preparation,
+        validate_probe,
+        validate_refresh,
+        validate_request,
+    )
     from .private import write_private
     from .release_state import operator_origin
     from .server_install import ServerInstaller
     from .ssh_host import server_trust
 
     addition, refresh, limits = operation in {"extend", "relays"}, operation == "refresh", operation == "limits"
-    probe = operation == "environment-probe"
+    probe, preparation = operation == "environment-probe", operation == "environment-prepare"
     if refresh:
         validate_refresh(value)
     elif probe:
         validate_probe(value)
+    elif preparation:
+        validate_preparation(value)
     elif limits:
         validate_limits(value)
     elif addition:
@@ -260,6 +269,8 @@ def owned_modal_remote(config, document, directory, bundle, value, operation, *,
             raise InstallError("upgrade the server to a release that can change Modal relay limits before changing them")
         if probe and "modal-environment-probe-v1" not in features:
             raise InstallError("upgrade the server to a release that can probe Lean environments before probing them")
+        if preparation and "modal-environment-prepare-v1" not in features:
+            raise InstallError("upgrade the server to a release that can prepare Lean environments before preparing them")
         with locked_directory(directory):
             installer.state = read_document(directory / "digitalocean.json")
             installer._validate_state()
@@ -275,12 +286,16 @@ def owned_modal_remote(config, document, directory, bundle, value, operation, *,
                 raise InstallError("Modal relays require the original verified installed release")
             with server_trust(document, directory, address, request) as trusted:
                 options = ssh_arguments(address, Path(config["identity"]), trusted)
+                # A preparation keeps one quiet connection open for up to an hour.
+                timeout = 4200 if preparation else 1200
+                if preparation:
+                    options = [*options, "-o", "ServerAliveInterval=30", "-o", "ServerAliveCountMax=10"]
 
                 def run(arguments, *, capture=False):
                     if command is not None:
                         return command(arguments, capture=capture)
                     result = subprocess.run(arguments, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE if capture else subprocess.DEVNULL,
-                                            stderr=subprocess.DEVNULL, timeout=1200, check=False)
+                                            stderr=subprocess.DEVNULL, timeout=timeout, check=False)
                     if result.returncode or capture and len(result.stdout) > 65536:
                         raise InstallError("Modal relay SSH installation failed; preserve original enrollment and staging inputs")
                     return result.stdout if capture else None

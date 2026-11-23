@@ -863,6 +863,12 @@ def main(argv: list[str] | None = None) -> int:
         help="start two small Modal VMs to check that a sealed Lean environment mounts read-only into a job (paid)")
     probe.add_argument("--modal-profile", required=True, type=Path)
     probe.add_argument("--catalog", required=True, type=Path)
+    prepare = commands.add_parser(
+        "prepare-environment",
+        help="fetch, build and seal one approved Lean environment of this organization in a Modal VM (paid)")
+    prepare.add_argument("--environment", required=True, help="the approved environment's ID")
+    prepare.add_argument("--modal-profile", required=True, type=Path)
+    prepare.add_argument("--catalog", required=True, type=Path)
     drain = commands.add_parser("drain", help="stop new claims without interrupting active work or stopping a service")
     retire = commands.add_parser("retire", help="irreversibly retire a stopped worker after cleanup and retained result delivery")
     for command in (drain, retire):
@@ -901,6 +907,30 @@ def main(argv: list[str] | None = None) -> int:
             print(json.dumps(run_probe(args.data_dir, config["id"], profile, images), sort_keys=True))
             return 0
         client = WorkerClient(config)
+        if args.command == "prepare-environment":
+            from .compute_environment_prepare import prepare_environment, refused
+
+            if not HEX_ID.fullmatch(args.environment):
+                raise WorkerFault("invalid_environment")
+            profile = json.loads(read_private(args.modal_profile, 16384))
+            read_private(args.catalog, 65536)
+            images = load_catalog(args.catalog)
+            if profile.get("resources") != config["resources"] or set(images) != set(config["image_ids"]):
+                raise WorkerFault("enrollment_mismatch")
+            verify_identity(config, client)
+            # The server returns only an approved environment of this relay's own organization.
+            try:
+                environment = client.request("GET", f"/api/worker/compute-environments/{args.environment}")
+            except WorkerFault as exc:
+                if str(exc) != "attempt_rejected":
+                    raise
+                receipt = refused(args.environment, "the server has no approved environment with this ID in this "
+                                                    "relay's organization")
+            else:
+                receipt = prepare_environment(args.data_dir, config["id"], config["organization_id"], profile,
+                                              environment, args.environment)
+            print(json.dumps(receipt, sort_keys=True))
+            return 0
         if args.command == "drain":
             verify_identity(config, client)
             client.request("POST", "/api/worker/drain", {})

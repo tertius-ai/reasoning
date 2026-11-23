@@ -106,6 +106,23 @@ def validate_probe(value):
 
 # Two VMs, each bounded by its Modal lifetime, plus the image download; see compute_environment_probe.
 PROBE_SECONDS = 1140
+# One VM for at most an hour (compute_environment_prepare.PREPARE_SECONDS), plus the relay's checks and reads.
+PREPARE_SECONDS = 3900
+
+
+def validate_preparation(value):
+    """Prepare one approved Lean environment on one installed relay of the installed release."""
+    try:
+        if (not isinstance(value, dict) or set(value) != {"format", "release_id", "public_url", "environment_id"}
+                or type(value["format"]) is not int or value["format"] != 1
+                or not isinstance(value["release_id"], str) or not re.fullmatch(r"[a-f0-9]{64}", value["release_id"])
+                or not isinstance(value["environment_id"], str)
+                or not re.fullmatch(r"[a-f0-9]{32}", value["environment_id"])):
+            raise ValueError
+        public_origin(value["public_url"])
+        return value
+    except (KeyError, TypeError, ValueError):
+        raise InstallError("invalid Lean environment preparation request") from None
 
 
 def validate_addition(value, operation):
@@ -673,11 +690,45 @@ class ModalHostInstaller:
         catalog, on that relay's runtime, which must be the installed release's. The relay keeps running: the probe
         uses its own VMs and its own directory inside the relay's state, and claims no job."""
         value = validate_probe(value)
+        identifier, output = self._first_relay(value, ["probe-environment-mount"], PROBE_SECONDS,
+                                               "probe Lean environments")
+        try:
+            receipt = json.loads(output)
+            if not isinstance(receipt, dict) or receipt.get("format") != 1 or not isinstance(receipt.get("failures"), list):
+                raise ValueError
+        except (TypeError, ValueError):
+            raise InstallError("invalid Lean environment probe receipt") from None
+        return {"release_id": value["release_id"], "relay": identifier, "probe": receipt}
+
+    def environment_prepare(self, value):
+        validate_preparation(value)
+        return self._locked(lambda: self._environment_prepare(value))
+
+    def _environment_prepare(self, value):
+        """Run `prepare-environment` for one approved environment as the relay account, with the first installed
+        relay's own enrollment, profile and catalog. The relay keeps running: the preparation uses its own VM and its
+        own directory inside the relay's state, and claims no job."""
+        value = validate_preparation(value)
+        identifier, output = self._first_relay(
+            value, ["prepare-environment", "--environment", value["environment_id"]], PREPARE_SECONDS,
+            "prepare Lean environments")
+        try:
+            receipt = json.loads(output)
+            if (not isinstance(receipt, dict) or receipt.get("format") != 1 or not isinstance(receipt.get("failures"), list)
+                    or receipt.get("environment_id") != value["environment_id"]):
+                raise ValueError
+        except (TypeError, ValueError):
+            raise InstallError("invalid Lean environment preparation receipt") from None
+        return {"release_id": value["release_id"], "relay": identifier, "preparation": receipt}
+
+    def _first_relay(self, value, command, timeout, purpose):
+        """Run a relay worker command as the relay account for the first installed relay, whose service must run the
+        installed release, and return that relay's identifier and the command's output."""
         release = value["release_id"]
         self._installed(value)
         setup = self.root / "var/lib/reasoning-deploy/modal-setup"
         if not (setup / "installation.json").is_file():
-            raise InstallError("probe Lean environments only on a host with an installed Modal setup")
+            raise InstallError(f"{purpose} only on a host with an installed Modal setup")
         with locked_directory(setup):
             account = self._relay_account(create=False)
             parent = self.root / "var/lib/reasoning-modal"
@@ -695,16 +746,10 @@ class ModalHostInstaller:
                 state = self._relay_safety(parent, identifier, account)
                 venv = self.root / f"opt/reasoning/modal/{release}/venv"
                 output = self.run(["runuser", "-u", "reasoning-modal", "--", str(venv / "bin/reasoning-compute-worker"),
-                                   "--data-dir", str(state), "probe-environment-mount", "--modal-profile",
+                                   "--data-dir", str(state), command[0], *command[1:], "--modal-profile",
                                    str(state / "modal-profile.json"), "--catalog", str(state / "catalog.json")],
-                                  capture=True, timeout=PROBE_SECONDS)
-                try:
-                    receipt = json.loads(output)
-                    if not isinstance(receipt, dict) or receipt.get("format") != 1 or not isinstance(receipt.get("failures"), list):
-                        raise ValueError
-                except (TypeError, ValueError):
-                    raise InstallError("invalid Lean environment probe receipt") from None
-                return {"release_id": release, "relay": identifier, "probe": receipt}
+                                  capture=True, timeout=timeout)
+                return identifier, output
             raise InstallError("no Modal relays are installed on this host")
 
     def _unit(self, release, identifier):
@@ -723,7 +768,8 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--input", required=True, type=Path)
     parser.add_argument("--operation", required=True,
-                        choices=("prepare", "activate", "extend", "relays", "refresh", "limits", "environment-probe"))
+                        choices=("prepare", "activate", "extend", "relays", "refresh", "limits", "environment-probe",
+                                 "environment-prepare"))
     args = parser.parse_args(argv)
     try:
         if os.geteuid() != 0:
@@ -735,6 +781,8 @@ def main(argv=None):
             result = installer.limits(value)
         elif args.operation == "environment-probe":
             result = installer.environment_probe(value)
+        elif args.operation == "environment-prepare":
+            result = installer.environment_prepare(value)
         elif args.operation in {"extend", "relays"}:
             result = installer.add_images(value, args.operation)
         else:

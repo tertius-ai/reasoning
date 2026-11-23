@@ -256,7 +256,7 @@ test("an approval lists every source by URL and exact revision as untrusted text
   assert.equal((markup.match(/rel="noreferrer noopener"/g) ?? []).length, 3);
   const section = renderToStaticMarkup(React.createElement(environments.LeanEnvironments, { organizationId: org, onAuthLost: () => {} }));
   assert.match(section, /Lean environments/); assert.match(section, /lean-toolchain/); assert.match(section, /lake-manifest\.json/);
-  assert.match(section, /Approve only sources you trust/); assert.match(section, /not available yet/);
+  assert.match(section, /Approve only sources you trust/); assert.match(section, /make compute-environment-prepare ENVIRONMENT=&lt;ID&gt;/);
   assert.match(section, /Review sources/); assert.match(section, /Loading Lean environments/);
   assert.equal(api.LEAN_ENVIRONMENT_STATUS.requested, "Waiting for an administrator");
 });

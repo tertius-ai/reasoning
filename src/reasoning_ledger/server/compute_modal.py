@@ -161,6 +161,48 @@ class ModalSDK:
     def mounted(volume, *, read_only, sub_path=None):
         return volume.with_mount_options(read_only=read_only, sub_path=sub_path)
 
+    def organization_volume(self, name):
+        """A named version 2 Volume, created on first use; see compute_environment_prepare."""
+        from modal_proto import api_pb2
+
+        return self.modal.Volume.from_name(name, environment_name=self.profile["environment"], create_if_missing=True,
+                                           version=api_pb2.VOLUME_FS_VERSION_V2, client=self.connect())
+
+    def preparation_vm(self, name, limits, volumes, *, timeout, domains):
+        """A fresh VM that prepares a Lean environment: no Docker, but git, curl and zstd; no secrets; outbound network
+        only to `domains`."""
+        client = self.connect()
+        app = self.modal.App.lookup(self.profile["app"], environment_name=self.profile["environment"], client=client)
+        cores, memory = limits["cpu"], vm_memory_mib(limits)
+        image = self.modal.Image.from_registry(self.profile["supervisor_image"], add_python="3.12").apt_install(
+            "ca-certificates", "curl", "git", "zstd")
+        return self.modal.Sandbox.create(
+            "sleep", "infinity", app=app, client=client, name=name, image=image, runtime="vm", cpu=(cores, cores),
+            memory=(memory, memory), timeout=timeout, secrets=[], include_oidc_identity_token=False, encrypted_ports=[],
+            unencrypted_ports=[], volumes=dict(volumes), tags={"reasoning-name": name},
+            outbound_domain_allowlist=list(domains),
+        )
+
+    @staticmethod
+    def put(volume, path, body):
+        import io
+
+        with volume.batch_upload() as batch:
+            batch.put_file(io.BytesIO(body), path)
+
+    @staticmethod
+    def read(volume, path, maximum):
+        body = bytearray()
+        for chunk in volume.read_file(path):
+            body.extend(chunk)
+            if len(body) > maximum:
+                raise RuntimeFault("output_limit")
+        return bytes(body)
+
+    @staticmethod
+    def remove(volume, path):
+        volume.remove_file(path, recursive=True)
+
     def lookup(self, name, identifier=None):
         client = self.connect()
         if identifier is not None:
