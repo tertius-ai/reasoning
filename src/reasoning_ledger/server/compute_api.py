@@ -293,6 +293,10 @@ def install_routes(app: FastAPI, state: ComputeStore, authenticated: Callable) -
     def status(credential: Credential):
         return state.worker_status(credential)
 
+    @app.get("/api/worker/compute-environments/{environment_id}")
+    def worker_environment(environment_id: str, credential: Credential):
+        return environments.for_worker(credential, environment_id)
+
     @app.post("/api/worker/drain")
     def drain_self(body: Input, credential: Credential):
         return state.drain_self(credential)

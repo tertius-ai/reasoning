@@ -111,6 +111,19 @@ def test_image_addition_needs_an_installed_release_that_has_the_host_operation(p
     assert calls == [] and len(provider.writes) == writes
 
 
+def test_environment_preparation_needs_an_installed_release_that_has_the_host_operation(prepared):
+    config, document, directory, bundle, value, command, calls, _, provider, _ = prepared
+    request = {"format": 1, "release_id": value["release_id"], "public_url": value["public_url"],
+               "environment_id": "e" * 32}
+    writes = len(provider.writes)
+    with pytest.raises(InstallError, match="can prepare Lean environments"):
+        owned_modal_remote(config, document, directory, bundle, request, "environment-prepare", command=command)
+    with pytest.raises(InstallError, match="invalid Lean environment preparation request"):
+        owned_modal_remote(config, document, directory, bundle, {**request, "environment_id": "E" * 32},
+                           "environment-prepare", command=command)
+    assert calls == [] and len(provider.writes) == writes
+
+
 def test_the_environment_probe_needs_an_installed_release_that_has_the_host_operation(prepared):
     config, document, directory, bundle, value, command, calls, _, provider, _ = prepared
     request = {"format": 1, "release_id": value["release_id"], "public_url": value["public_url"]}

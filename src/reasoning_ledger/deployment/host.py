@@ -31,6 +31,7 @@ INSTALLATION_FEATURES = (
     "existing-mail-setup-v1",
     "invitation-mail-v1",
     "modal-add-images-v1",
+    "modal-environment-prepare-v1",
     "modal-environment-probe-v1",
     "modal-relay-limits-v1",
     "modal-relay-refresh-v1",

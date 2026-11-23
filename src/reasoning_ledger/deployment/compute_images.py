@@ -262,23 +262,117 @@ def run_environment_probe(directory: Path, command, *, detect_public_ipv4=None, 
     deletes afterwards; see reasoning_ledger.server.compute_environment_probe. The relays keep running. The receipt is
     printed and saved in DEPLOY_STATE/compute-environment-probe.
     """
+    intro = [
+        "One Modal relay on the chat host starts two small VMs on the relays' Modal account (1 CPU and 1 GiB each,",
+        "a few minutes in all) and a temporary Modal Volume of 256 MiB that Modal deletes afterwards. No job, topic",
+        "or organization data is involved, and the relays keep running. The relays must run this release's relay",
+        "code (make compute-relays-update).",
+    ]
+
+    def valid(result):
+        return isinstance(result.get("probe"), dict) and isinstance(result["probe"].get("failures"), list)
+
+    return _relay_operation(
+        directory, command, operation="environment-probe", feature="modal-environment-probe-v1",
+        purpose="probe Lean environments", gerund="probing Lean environments", receipt="Lean environment probe",
+        intro=intro, question="Run the Lean environment probe?",
+        consent="probe environments", value={}, valid=valid, receipts="compute-environment-probe",
+        describe=describe_probe, detect_public_ipv4=detect_public_ipv4, remote=remote)
+
+
+def describe_preparation(receipt):
+    """Plain lines for the operator: what was prepared where, or why it was not."""
+    preparation = receipt["preparation"]
+    vm = preparation.get("vm") or {}
+    lines = [f"Relay used: {receipt['relay']}"]
+    if preparation.get("attempt"):
+        toolchain = preparation["toolchain"]
+        lines += [f"Environment {preparation['environment_id']} (key {preparation['key']}), attempt {preparation['attempt']}.",
+                  f"Lean {toolchain['version']}: {toolchain['bytes']} bytes, SHA-256 {toolchain['sha256']} from GitHub."]
+    else:
+        lines.append(f"Environment {preparation['environment_id']}: nothing was started on Modal.")
+    for package in vm.get("packages") or []:
+        lines.append(f"  {package['name']}: on its {package['on']} ({package['seconds']} s)")
+    if vm.get("cache"):
+        cache = vm["cache"]
+        lines.append(f"mathlib's files: {cache['files']} files, {cache['bytes_in']} bytes, {cache['upstream_errors']} "
+                     f"upstream errors; {cache['refused']} requests refused"
+                     + (f" ({'; '.join(cache['refused_requests'])})" if cache["refused_requests"] else "") + ".")
+    if vm.get("built"):
+        lines.append("Built offline: " + ", ".join(vm["built"]) + ".")
+    if vm.get("seconds"):
+        lines.append("Seconds: " + ", ".join(f"{name} {value}" for name, value in vm["seconds"].items()) + ".")
+    if preparation["failures"]:
+        lines.append("Not prepared:")
+        lines.extend("  - " + item for item in preparation["failures"])
+        if preparation.get("removed"):
+            lines.append("The attempt's directory was removed from the Volume.")
+        elif preparation.get("attempt"):
+            lines.append(f"The attempt's directory is kept: Volume {preparation['volume']}, {preparation['sub_path']}.")
+    else:
+        seal = vm["seal"]
+        lines.append(f"Sealed: {seal['files']} files, {seal['bytes']} bytes, seal SHA-256 {seal['sha256']}, read back from "
+                     f"the Volume and matched.")
+        lines.append(f"Volume {preparation['volume']}, directory {preparation['sub_path']}.")
+    if preparation.get("log"):
+        lines.append(f"The relay keeps the receipt and the VM's log ({preparation['log']}) in its environment-preparations "
+                     "directory.")
+    return lines
+
+
+def run_environment_prepare(directory: Path, command, environment_id: str, *, detect_public_ipv4=None,
+                            remote=owned_modal_remote):
+    """Prepare one approved Lean environment on the relays' Modal account.
+
+    One relay on the chat host reads the environment from the server, which returns it only if an administrator of the
+    organization approved it, then fetches, builds and seals it in one VM on the organization's Modal Volume; see
+    reasoning_ledger.server.compute_environment_prepare. The relays keep running. The receipt is printed and saved in
+    DEPLOY_STATE/compute-environment-preparations.
+    """
+    if not isinstance(environment_id, str) or not re.fullmatch(r"[a-f0-9]{32}", environment_id):
+        raise InstallError("name the approved environment by its 32-character ID (Administration, Compute, Lean environments)")
+    intro = [
+        f"One Modal relay on the chat host prepares Lean environment {environment_id}, if an administrator approved it.",
+        "It starts one VM on the relays' Modal account with the relay's CPU and memory limits, for up to an hour (about",
+        "ten minutes for a mathlib project whose compiled files are in mathlib's cache), and writes about 10 GB to the",
+        "organization's Modal Volume, which is created on first use and kept. The VM fetches only the approved sources,",
+        "from GitHub and mathlib's cache. The relays keep running and must run this release's relay code",
+        "(make compute-relays-update).",
+    ]
+
+    def valid(result):
+        preparation = result.get("preparation")
+        return (isinstance(preparation, dict) and isinstance(preparation.get("failures"), list)
+                and preparation.get("environment_id") == environment_id)
+
+    return _relay_operation(
+        directory, command, operation="environment-prepare", feature="modal-environment-prepare-v1",
+        purpose="prepare Lean environments", gerund="preparing Lean environments", receipt="Lean environment preparation",
+        intro=intro, question="Prepare this Lean environment?",
+        consent="prepare " + environment_id, value={"environment_id": environment_id}, valid=valid,
+        receipts="compute-environment-preparations", describe=describe_preparation,
+        detect_public_ipv4=detect_public_ipv4, remote=remote)
+
+
+def _relay_operation(directory: Path, command, *, operation, feature, purpose, gerund, receipt, intro, question, consent,
+                     value, valid, receipts, describe, detect_public_ipv4, remote):
+    """Open SSH briefly, run one relay operation of the installed release on the chat host, close SSH, and keep the
+    receipt in DEPLOY_STATE/<receipts>."""
     with locked_directory(directory.absolute()) as state:
         current = current_binding(state)
         bundle = archived_release(state, current["release_id"])
         manifest, release, checksum = inspect_bundle(bundle, current["bundle_sha256"])
         if release != current["release_id"] or checksum != current["bundle_sha256"]:
-            raise InstallError("synchronize the installed release before probing Lean environments")
-        if "modal-environment-probe-v1" not in manifest.get("installation_features", []):
-            raise InstallError("upgrade the server to a release that can probe Lean environments (make upgrade), then retry")
+            raise InstallError(f"synchronize the installed release before {gerund}")
+        if feature not in manifest.get("installation_features", []):
+            raise InstallError(f"upgrade the server to a release that can {purpose} (make upgrade), then retry")
         config_path, plan_path, ownership = state / "setup.json", state / "plan.json", state / "ownership"
         config, document = read_document(config_path), read_document(plan_path)
         origin = public_origin(operator_origin(config, document, current))
         print(f"Site: {origin}\nRelease: {release}")
-        print("One Modal relay on the chat host starts two small VMs on the relays' Modal account (1 CPU and 1 GiB each,")
-        print("a few minutes in all) and a temporary Modal Volume of 256 MiB that Modal deletes afterwards. No job, topic")
-        print("or organization data is involved, and the relays keep running. The relays must run this release's relay")
-        print("code (make compute-relays-update).")
-        approve("Run the Lean environment probe?", "probe environments " + origin)
+        for line in intro:
+            print(line)
+        approve(question, f"{consent} {origin}")
         plan_id = document["plan_id"] if "plan_id" in document else read_document(state / "setup-completion.json")["plan_id"]
         cidr = temporary_ssh_cidr(detect_public_ipv4)
         try:
@@ -287,11 +381,10 @@ def run_environment_probe(directory: Path, command, *, detect_public_ipv4=None, 
             )
             if opened.get("phase") != "open":
                 raise InstallError("temporary SSH access is unverified")
-            result = remote(config, document, ownership, bundle, {"format": 1, "release_id": release, "public_url": origin},
-                            "environment-probe")
-            if (not isinstance(result, dict) or result.get("release_id") != release or not isinstance(result.get("probe"), dict)
-                    or not isinstance(result["probe"].get("failures"), list)):
-                raise InstallError("Lean environment probe receipt is invalid")
+            result = remote(config, document, ownership, bundle,
+                            {"format": 1, "release_id": release, "public_url": origin, **value}, operation)
+            if not isinstance(result, dict) or result.get("release_id") != release or not valid(result):
+                raise InstallError(f"{receipt} receipt is invalid")
         finally:
             config, closed = close_ssh_with_token_recovery(
                 lambda arguments: _invoke(command, arguments), state, config_path, config, plan_path, ownership, plan_id,
@@ -299,11 +392,11 @@ def run_environment_probe(directory: Path, command, *, detect_public_ipv4=None, 
             )
             if closed.get("phase") != "closed":
                 raise InstallError("SSH closure is unverified; run make doctor with the same deployment state")
-        work = state / "compute-environment-probe"
+        work = state / receipts
         with locked_directory(work):
             write_document(work / f"{time.strftime('%Y%m%dT%H%M%SZ', time.gmtime())}-{secrets.token_hex(4)}.json", result,
                            new=True)
-        for line in describe_probe(result):
+        for line in describe(result):
             print(line)
         return {**result, "ssh_closed": True}
 

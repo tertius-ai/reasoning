@@ -55,7 +55,9 @@ export function LeanEnvironments({ organizationId, onAuthLost }: { organizationI
       {" "}github.com with its full commit hash. The same files always name the same environment, so a request for one the organization already
       has returns it. Approve only sources you trust: approval records your decision for exactly the listed revisions. A commit hash
       does not show that the commit is on the named repository, because GitHub also serves a fork's commits under the original URL.
-      Preparing approved environments on the Modal relays is not available yet.</p>
+      An operator prepares an approved environment on the Modal relays with
+      {" "}<code>make compute-environment-prepare ENVIRONMENT=&lt;ID&gt;</code>, which first checks that each commit is on a branch or
+      tag of its named repository. Naming a prepared environment in a job is not available yet.</p>
     {error && <p role="alert" className="org-error">{error}</p>}
     <form onSubmit={(event) => { event.preventDefault(); void action(async () => {
       const body = captureLeanEnvironmentRequest(toolchain, manifest);
@@ -76,7 +78,7 @@ export function LeanEnvironments({ organizationId, onAuthLost }: { organizationI
         <header><strong>{environment.specification.toolchain}</strong>
           <span>{environment.specification.packages.length === 1 ? "1 package" : `${environment.specification.packages.length} packages`}</span>
           <span className={"org-lean-status org-lean-status-" + environment.status}>{LEAN_ENVIRONMENT_STATUS[environment.status]}</span></header>
-        <small>Key {environment.key} · requested {new Date(environment.requested_at * 1000).toLocaleString()}
+        <small>ID {environment.id} · key {environment.key} · requested {new Date(environment.requested_at * 1000).toLocaleString()}
           {environment.decided_at !== null && <> · {environment.status} {new Date(environment.decided_at * 1000).toLocaleString()}</>}</small>
         <LeanEnvironmentSources environment={environment} />
         {environment.status !== "approved" && <div className="org-lean-environment-actions">

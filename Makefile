@@ -66,6 +66,7 @@ help:
 		'make compute-relays-update Move the drained Modal relays onto the installed release'"'"'s relay code' \
 		'make compute-relays-limits Change the per-job CPU, memory and wall-time limits of the drained Modal relays' \
 		'make compute-environment-probe Check on Modal that a sealed Lean environment mounts read-only into a job' \
+		'make compute-environment-prepare ENVIRONMENT=id Fetch, build and seal an approved Lean environment on Modal' \
 		'make compute-source-publish Publish a maintainer source archive to Spaces, with private CLI consent' \
 		'make compute-publish Sign exact observed-source provenance and verify public images on hosted runners' \
 		'make email-setup   Enable Resend invitations and verification on this existing deployment' \
@@ -129,6 +130,7 @@ bot-status bot-doctor: check-uv
 
 .PHONY: compute-images compute-setup _compute-setup compute-add-images _compute-add-images compute-relays-update _compute-relays-update \
 	compute-relays-limits _compute-relays-limits compute-environment-probe _compute-environment-probe \
+	compute-environment-prepare _compute-environment-prepare \
 	compute-source-publish compute-publish
 compute-publish: check-uv
 	@$(UV) run --locked --extra publication python -m reasoning_ledger.compute_publish \
@@ -185,6 +187,15 @@ compute-environment-probe: check-uv check-deploy-tools
 _compute-environment-probe:
 	@$(UV) run --locked reasoning-deploy operator-sync --state-dir "$(DEPLOY_STATE)" --require-no-pending-upgrade
 	@$(UV) run --locked reasoning-deploy compute-environment-probe --state-dir "$(DEPLOY_STATE)"
+
+compute-environment-prepare: check-uv check-deploy-tools
+	@test -n "$(ENVIRONMENT)" || { echo "Name the approved environment: make compute-environment-prepare ENVIRONMENT=<id>" >&2; exit 2; }
+	@$(UV) run --locked reasoning-deploy operator-session --state-dir "$(DEPLOY_STATE)" -- \
+		$(MAKE) --no-print-directory _compute-environment-prepare DEPLOY_STATE="$(DEPLOY_STATE)" ENVIRONMENT="$(ENVIRONMENT)"
+
+_compute-environment-prepare:
+	@$(UV) run --locked reasoning-deploy operator-sync --state-dir "$(DEPLOY_STATE)" --require-no-pending-upgrade
+	@$(UV) run --locked reasoning-deploy compute-environment-prepare --state-dir "$(DEPLOY_STATE)" --environment "$(ENVIRONMENT)"
 
 .PHONY: email-setup _email-setup
 email-setup: check-uv check-deploy-tools

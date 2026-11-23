@@ -154,9 +154,10 @@ or exact-action approval. Bot submissions require the bot owner's approval.
 A Lean environment is the toolchain and pinned dependencies a Lean project builds
 against. The server derives it from the project's `lean-toolchain` and
 `lake-manifest.json` and keeps one record per organization and environment key.
-Preparing approved environments on the Modal relays, and using them in jobs, is
-not available yet; the [mount check](#check-that-lean-environments-mount-read-only)
-below covers the read-only mount they will use.
+An operator [prepares an approved environment](#prepare-an-approved-lean-environment)
+on the Modal relays. Using one in a job is not available yet; the
+[mount check](#check-that-lean-environments-mount-read-only) covers the
+read-only mount jobs will use.
 
 **Key.** The specification keeps only what decides the built environment, and
 its key is the SHA-256 of the specification as canonical JSON (sorted keys,
@@ -213,15 +214,101 @@ refuses any change to a record's key, specification, organization or requester,
 and any change to an approved record.
 
 Owners and administrators use **Administration → Compute → Lean environments**:
-paste the two files, review the sources table, then approve or decline.
+paste the two files, review the sources table, then approve or decline. Each
+record shows its ID, which names it for preparation.
+
+## Prepare an approved Lean environment
+
+`make compute-environment-prepare ENVIRONMENT=<ID>` fetches, builds and seals
+one approved environment of the organization on the relays' Modal account.
+
+1. If the relays do not run the installed release's relay code, run
+   `make compute-relays-update` first. The relays may keep taking jobs.
+2. Run `make compute-environment-prepare ENVIRONMENT=<ID>` and type the
+   confirmation. Inside a temporary SSH window, the chat host runs
+   `reasoning-compute-worker prepare-environment` as the relay account, with the
+   first relay's own enrollment, Modal profile and catalog. Modal credentials stay
+   on the host.
+3. The relay asks the server for the environment with its worker credential.
+   `GET /api/worker/compute-environments/{environment_id}` returns only an
+   approved environment of the relay's own organization; anything else is not
+   found. The relay checks the specification and that it hashes to the key.
+   If it finds no approved environment, or GitHub gives no SHA-256 in the next
+   step, the receipt says why and nothing starts on Modal.
+4. The relay reads GitHub's record of the Lean release
+   (`api.github.com/repos/leanprover/lean4/releases/tags/<version>`, without
+   credentials) for the Linux archive's URL, size and SHA-256, and stops if
+   GitHub gives no SHA-256.
+5. The relay writes `attempt.json` into a new directory
+   `/environments/<key>/<attempt>` of the organization's version 2 Modal Volume,
+   `reasoning-lean-<organization ID>`, which is created on first use. It then
+   starts one VM with the relay's CPU and memory limits and a lifetime of one
+   hour. The VM mounts only that directory, read-write, at `/opt/lean-env`; it
+   sees nothing else of the Volume. It has no Docker, no secrets and no OIDC
+   token, and Modal allows its outbound connections only to `github.com`,
+   `objects.githubusercontent.com`, `release-assets.githubusercontent.com` and
+   `lakecache.blob.core.windows.net`.
+6. The VM runs one fixed program as root, `compute_environment_vm`, with the
+   plan on its standard input:
+   - **Toolchain.** It downloads the release archive, following redirects only
+     over HTTPS to GitHub's hosts, and stops unless its size and SHA-256 match
+     GitHub's. It unpacks it into `toolchain/` with no owners from the archive.
+   - **Packages.** For each package it first fetches, without file contents, the
+     named repository's default branch, then its tags, then its other branches,
+     until one contains the pinned commit. A commit on no branch or tag of the
+     named repository is refused: GitHub serves a fork's commits under the
+     original URL too. It then fetches only that commit into
+     `workspace/.lake/packages/<name>` with the manifest's URL as the remote.
+     Git runs with HTTPS only, no redirects, no hooks, no credentials and no
+     submodules. The package's sub-directory must exist inside it and hold a
+     Lake configuration.
+   - **Workspace.** It writes a root package in `workspace/` that requires
+     every package at its commit, and a `lake-manifest.json` that pins each one,
+     so Lake materializes the packages without fetching.
+   - **Dependency code.** Every Lake command runs as UID 10001 with no
+     capabilities and no new privileges, in a network namespace of its own. If
+     the environment includes `mathlib`, `lake exe cache get` reads mathlib's
+     compiled files with `MATHLIB_CACHE_GET_URL` pointing at a plain-HTTP
+     gateway on loopback in that namespace, which has no other interface. The
+     gateway answers only `GET` and `HEAD` of
+     `/mathlib4-master/f/<hexadecimal>.ltar`, which it fetches itself over HTTPS
+     from `lakecache.blob.core.windows.net`, and refuses every other request.
+     A cache tool that needs anything else, such as older versions that
+     download `leantar` from GitHub, fails this step. Then
+     `lake build @<package>` builds the default targets of each package that no
+     other package depends on, judged by the packages' own manifests before any
+     dependency code runs, in a namespace with no interface up at all. After
+     each step every live process of UID 10001 is killed.
+   - **Seal.** It removes its VM-local scratch files and writes `seal.json`:
+     every directory, file and symbolic link under `/opt/lean-env` with its
+     mode, and each file's size and SHA-256. A link that is absolute or, once
+     resolved through other links, leaves the environment, or any device,
+     socket or pipe, stops the seal.
+7. If Modal's answer to creating the VM is lost, the relay finds the VM by
+   name and stops it. After the VM ends, the relay reads `seal.json` back from
+   the Volume and checks its SHA-256 against the one the VM reported. The directory of an
+   attempt the VM did not finish is removed from the Volume once the VM's end
+   is verified. A sealed attempt whose seal does not read back is kept and
+   reported.
+8. The command prints which ref holds each package's commit, how many cache
+   files came through the gateway and what it refused, what was built, each step's
+   time, and the seal's file count, size and SHA-256. It saves the receipt in
+   `DEPLOY_STATE/compute-environment-preparations/`. The relay keeps the
+   receipt and the VM's progress log in `environment-preparations/` inside its
+   state directory.
+
+Nothing is reported to the server yet, and the preparation claims no job. The
+build runs in the same VM as the fetch, separated from the network by its
+namespace and user rather than by a VM of its own.
 
 ## Check that Lean environments mount read-only
 
 A Lean environment holds a Lean project's toolchain and compiled dependencies.
 It is prepared once and then shared, read-only, by the organization's jobs, which
 see it at `/opt/lean-env`. The relay code can run a job with a sealed environment
-from a Modal Volume (see [Modal VM compute](#modal-vm-compute)); preparing
-environments and naming one in a job are not available yet.
+from a Modal Volume (see [Modal VM compute](#modal-vm-compute)), and an operator
+[prepares environments](#prepare-an-approved-lean-environment); naming one in a
+job is not available yet.
 `make compute-environment-probe` checks that mount on a live Modal run.
 
 1. If the relays do not run the installed release's relay code, run
@@ -813,6 +900,7 @@ by the server's 64 KiB request-body limit.
 | --- | --- | --- |
 | `/api/worker/identity` | GET | None; authenticated enrollment metadata without credentials |
 | `/api/worker/status` | GET | None; enrollment, unsettled job IDs/status, advisory quiescence |
+| `/api/worker/compute-environments/{environment_id}` | GET | None; an approved Lean environment of the worker's organization: its key and specification |
 | `/api/worker/drain` | POST | Empty object; block fresh claims without interrupting active work |
 | `/api/worker/retirement` | GET | None; fixed enrollment retirement receipt/status |
 | `/api/worker/retirement` | POST | `cleanup_confirmed: true`; irreversible seal only when drained and no unsettled assigned jobs |
