@@ -122,6 +122,7 @@ createRoot(document.getElementById('root')).render(React.createElement(Fixture))
     const chip = page.locator("a.topic-file-chip"); await chip.waitFor();
     const data = [...uploads.values()][4];
     assert.equal(data.mime, "application/octet-stream"); assert.equal(data.vision_base64, ""); assert.equal(data.preview_text, "");
+    await chip.getByText("4 KB · Download", { exact: true }).waitFor();
     assert.match(await chip.innerText(), /work\.bundle[\s\S]*4 KB · Download/);
     assert.equal(await chip.getAttribute("download"), "work.bundle");
     assert.match(await chip.getAttribute("href"), /\/media\/0{31}5\/[a-f0-9]{64}\/content$/);
