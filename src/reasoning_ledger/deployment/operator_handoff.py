@@ -20,6 +20,7 @@ from urllib.parse import urlsplit
 from . import setup_ui
 from .digitalocean import DigitalOcean
 from .host import MAX_BUNDLE, InstallError, canonical, inspect_bundle
+from .operator_request import read_request, resume_command
 from .private import locked_directory, protected_parent, read_document, read_private, write_document, write_private
 from .provision import plan_identity
 from .release_state import archived_release, current_binding, record_current, retain_release, validate_binding
@@ -333,6 +334,7 @@ def grant_operator_locked(
     authorize_remote=_authorize_remote,
     display: bool = True,
     header: bool = True,
+    recipient: dict | None = None,
 ) -> dict:
     """Authorize one key and create its handoff while the caller owns the state lock.
 
@@ -372,7 +374,8 @@ def grant_operator_locked(
             "operator_public_key_fingerprint": fingerprint,
         }
         if display:
-            setup_ui.operator_handoff_ready(source["public_url"], fingerprint, str(output), result["handoff_sha256"])
+            setup_ui.operator_handoff_ready(source["public_url"], fingerprint, str(output), result["handoff_sha256"],
+                                            resume=resume_command(recipient, result["handoff_sha256"]))
         return result
     config_path = state / "setup.json"
     config = read_document(config_path)
@@ -455,7 +458,8 @@ def grant_operator_locked(
         raise InstallError("operator handoff did not complete; retry with the same state and public key")
     if display:
         setup_ui.operator_handoff_ready(source["public_url"], fingerprint, str(output), result["handoff_sha256"],
-                                        closing=result["phase"] != "operator_handoff_ready")
+                                        closing=result["phase"] != "operator_handoff_ready",
+                                        resume=resume_command(recipient, result["handoff_sha256"]))
     return result
 
 
@@ -468,10 +472,16 @@ def grant_operator(
     source_bundle: Path | None = None,
     detect_public_ipv4=None,
     authorize_remote=_authorize_remote,
+    request_file: Path | None = None,
 ) -> dict:
     """Authorize a collaborator; without a key file, ask for it interactively."""
     directory = directory.absolute()
-    if public_key_file is None:
+    recipient = read_request(request_file) if request_file is not None else None
+    if recipient is not None:
+        if public_key_file is not None:
+            raise InstallError("choose a request file or public key, not both")
+        public = recipient["public_key"]
+    elif public_key_file is None:
         setup_ui.operator_header("authorize")
         public = prompt_public_key()
     else:
@@ -485,7 +495,8 @@ def grant_operator(
             source_bundle=source_bundle,
             detect_public_ipv4=detect_public_ipv4,
             authorize_remote=authorize_remote,
-            header=public_key_file is not None,
+            header=public_key_file is not None or recipient is not None,
+            recipient=recipient,
         )
 
 

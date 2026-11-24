@@ -134,33 +134,19 @@ def onboard_header() -> None:
     console.print(Panel.fit(body, title=Text(" REASONING ", style="bold bright_cyan"), border_style="bright_cyan", padding=(1, 3)))
 
 
-def onboard_handoff(public_file: str, fingerprint: str, public_key: str, resume: str) -> None:
-    section("Existing operator authorization", "Send only this public key, never its private key or your token.")
-    console.print()
-    console.print(Text("Public key file: " + public_file))
+def onboard_handoff(request_file: str, fingerprint: str, resume: str) -> None:
+    section("Send your operator request", "You and the existing operator can complete your steps at different times.")
+    console.print(Text("Attach: " + request_file), soft_wrap=True)
+    console.print(Text("Message to copy: " + str(PurePath(request_file).with_name("request-message.txt"))), soft_wrap=True)
     console.print(Text("SSH key fingerprint: " + fingerprint))
+    console.print(Text("The request contains only your public key, fingerprint, and local resume paths."))
+    console.print(Text("Keep your private key and DigitalOcean token on this computer."))
     console.print()
-    console.print(Text(public_key), soft_wrap=True)
-    console.print()
-    console.print(Text("1. On the existing operator's computer", style="bold bright_white"))
-    console.print(Text("Save the public key in a file, then run the command below. It asks for that file and reads it once."))
-    console.print()
-    console.print(Text("  make operator-authorize", style="bright_cyan"), soft_wrap=True)
-    console.print()
-    console.print(Text("Its review shows a \"Collaborator SSH key fingerprint\"; it must equal the fingerprint above."))
-    console.print()
-    console.print(Text("2. Receive the handoff on this computer", style="bold bright_white"))
-    console.print(Text("The existing operator sends the archive privately and its handoff archive checksum "
-                       "through an authenticated connection."))
-    console.print()
-    console.print(Text("Protect the received archive:"))
-    console.print()
-    console.print(Text("  chmod 600 /path/to/received-handoff.tar.gz", style="bright_cyan"), soft_wrap=True)
-    console.print()
-    console.print(Text("3. Continue here, or pause and resume later", style="bold bright_white"))
-    console.print(Text("Keep both private directories on this box for retries. To resume, run:"))
-    console.print()
-    console.print(Text("  " + resume, style="bright_cyan"), soft_wrap=True)
+    console.print(Text("The existing operator uses make operator-authorize with the attached request file."))
+    console.print(Text("The operator returns an archive and a copyable resume command. Run it in this checkout,"))
+    console.print(Text("then enter the downloaded archive path. File permissions and SSH-agent setup are handled here."))
+    console.print(Text("Keep both private directories. You can close this terminal while waiting."))
+    console.print(Text("Saved resume command: " + resume), soft_wrap=True)
     console.print()
 
 
@@ -218,24 +204,27 @@ def operator_review(url: str, fingerprint: str, output: str, ssh_cidr: str) -> N
     console.print(Panel(Group(rows, Text(), note), title="Review collaborator access", border_style="yellow", padding=(1, 2)))
 
 
-def handoff_message(url: str, fingerprint: str, archive: str, checksum: str) -> str:
+def handoff_message(url: str, fingerprint: str, archive: str, checksum: str, *, resume: str | None = None) -> str:
+    from .operator_request import resume_command
+
     name = PurePath(archive).name
     return (
         f"You are authorized as a Reasoning deployment operator for {url}.\n"
         f"Your SSH key fingerprint: {fingerprint}\n"
         "\n"
-        f"1. Save the handoff archive {name} that I sent separately, and protect it:\n"
-        f"   chmod 600 /path/to/{name}\n"
-        "2. In your Reasoning checkout, rerun make onboard (or the resume command it printed).\n"
-        "3. When asked, enter the archive path and this handoff archive checksum (SHA-256):\n"
-        f"   {checksum}\n"
+        f"1. Save the handoff archive {name} that I sent separately.\n"
+        "2. In your Reasoning checkout, run this resume command:\n"
+        f"   {resume or resume_command(None, checksum)}\n"
+        "3. Enter the downloaded archive path when asked. The command checks its authenticated SHA-256,\n"
+        "   protects the archive, and guides your own DigitalOcean token and local SSH unlocking.\n"
         "\n"
         "Onboarding refuses an archive whose checksum differs. If this message did not reach you through a channel "
         "where you recognize me, confirm the checksum with me directly before continuing."
     )
 
 
-def operator_handoff_ready(url: str, fingerprint: str, archive: str, checksum: str, *, closing: bool = False) -> None:
+def operator_handoff_ready(url: str, fingerprint: str, archive: str, checksum: str, *, closing: bool = False,
+                           resume: str | None = None) -> None:
     rows = Table.grid(padding=(0, 2))
     rows.add_column(style="bold cyan", no_wrap=True)
     rows.add_column(overflow="fold")
@@ -251,7 +240,7 @@ def operator_handoff_ready(url: str, fingerprint: str, archive: str, checksum: s
                        "recognizes you, such as a call or an authenticated chat."))
     console.print()
     console.print(Rule(Text("Message to send", style="bold cyan"), style="cyan"))
-    console.print(Text(handoff_message(url, fingerprint, archive, checksum)), soft_wrap=True)
+    console.print(Text(handoff_message(url, fingerprint, archive, checksum, resume=resume)), soft_wrap=True)
     console.print(Rule(style="cyan"))
 
 

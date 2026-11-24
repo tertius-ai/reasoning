@@ -7,6 +7,8 @@ RELEASE ?= build/reasoning-release.tar.gz
 DEPLOY_STATE ?= $(HOME)/.reasoning-deploy
 ONBOARD_STATE ?= $(HOME)/.reasoning-onboard
 ONBOARD_REPLACE_TOKEN ?= 0
+ONBOARD_HANDOFF ?=
+ONBOARD_HANDOFF_SHA256 ?=
 COMPUTE_BACKEND ?= auto
 COMPUTE_RETAIN_CANDIDATE ?= false
 SOURCE_BUNDLE ?=
@@ -22,6 +24,7 @@ DEV_STATE ?=
 DEV_FRONTEND_PORT ?= 5173
 DEV_BACKEND_PORT ?= 9119
 OPERATOR_HANDOFF ?=
+OPERATOR_REQUEST ?=
 OPERATOR_PUBLIC_KEY ?=
 RECOVERY_KIT ?= $(HOME)/reasoning-operator-recovery.rnrk
 BOT_SERVER ?=
@@ -306,18 +309,23 @@ onboard: check-uv check-deploy-tools
 			0) :;; 1) replace_flag='--replace-token';; \
 			*) printf '%s\n' 'ONBOARD_REPLACE_TOKEN must be 0 or 1' >&2; exit 2;; \
 		esac; \
-		$(UV) run --locked reasoning-deploy onboard --state-dir "$(DEPLOY_STATE)" --onboard-dir "$(ONBOARD_STATE)" $$replace_flag
+		set -- --state-dir "$(DEPLOY_STATE)" --onboard-dir "$(ONBOARD_STATE)"; \
+		if [ -n "$(ONBOARD_HANDOFF)" ]; then set -- "$$@" --handoff "$(ONBOARD_HANDOFF)"; fi; \
+		if [ -n "$(ONBOARD_HANDOFF_SHA256)" ]; then set -- "$$@" --confirm-handoff-sha256 "$(ONBOARD_HANDOFF_SHA256)"; fi; \
+		$(UV) run --locked reasoning-deploy onboard "$$@" $$replace_flag
 
 operator-authorize: check-uv check-deploy-tools
 	@$(UV) run --locked reasoning-deploy operator-session --state-dir "$(DEPLOY_STATE)" -- \
 		$(MAKE) --no-print-directory _operator-authorize
 
-# Without OPERATOR_PUBLIC_KEY the command asks for the key file; without
-# OPERATOR_HANDOFF it writes DEPLOY_STATE/handoffs/operator-KEY-release-RELEASE.tar.gz.
+# OPERATOR_REQUEST supplies the collaborator's public request. Without it or
+# OPERATOR_PUBLIC_KEY the command asks for the key file. Without OPERATOR_HANDOFF
+# it writes DEPLOY_STATE/handoffs/operator-KEY-release-RELEASE.tar.gz.
 _operator-authorize:
 	@$(UV) run --locked reasoning-deploy operator-sync --state-dir "$(DEPLOY_STATE)"
 	@set -eu; \
 		set -- --state-dir "$(DEPLOY_STATE)" --bundle "$(RELEASE)"; \
+		if [ -n "$(OPERATOR_REQUEST)" ]; then set -- "$$@" --request "$(OPERATOR_REQUEST)"; fi; \
 		if [ -n "$(OPERATOR_PUBLIC_KEY)" ]; then set -- "$$@" --public-key "$(OPERATOR_PUBLIC_KEY)"; fi; \
 		if [ -n "$(OPERATOR_HANDOFF)" ]; then set -- "$$@" --output "$(OPERATOR_HANDOFF)"; fi; \
 		$(UV) run --locked reasoning-deploy operator-authorize "$$@"

@@ -8,6 +8,7 @@ import json
 import random
 import shlex
 import subprocess
+import sys
 from contextlib import contextmanager
 from pathlib import Path
 
@@ -16,7 +17,7 @@ import test_public_deployment as deployment_fixtures
 from rich.console import Console
 from test_public_operator_handoff import deployment_state, key_pair
 
-from reasoning_ledger.deployment import cli, onboard, operator_handoff, setup_ui
+from reasoning_ledger.deployment import cli, onboard, operator_handoff, operator_request, setup_ui
 from reasoning_ledger.deployment.host import InstallError
 from reasoning_ledger.deployment.private import MAX_STATE, locked_directory, read_document, read_private, write_document, write_private
 
@@ -107,7 +108,7 @@ def flow(tmp_path, monkeypatch, request):
     monkeypatch.setattr(onboard, "verify_operator", verify)
     return {"stage": stage, "target": target, "handoff": handoff, "digest": receipt["handoff_sha256"],
             "identity": identity, "public": public, "calls": calls, "approvals": approvals, "opened": opened,
-            "command": command, "team": team, "binding": binding, "join": join, "verify": verify,
+            "original": original, "command": command, "team": team, "binding": binding, "join": join, "verify": verify,
             "rejected": rejected_tokens, "credential": credential}
 
 
@@ -120,35 +121,40 @@ def run(flow, **kwargs):
     return onboard.run_onboard(flow["target"], flow["stage"], flow["command"], **kwargs)
 
 
+def prepare(flow):
+    if not (flow["stage"] / "onboarding.json").exists():
+        assert run(flow)["phase"] == "operator_handoff_required"
+
+
 def ready(flow, monkeypatch, *, browser="no"):
+    prepare(flow)
     answers(monkeypatch, [str(flow["handoff"]), flow["digest"], browser])
 
 
-def test_handoff_instructions_have_spaced_steps_and_copyable_literal_commands(monkeypatch):
+def test_handoff_instructions_identify_request_message_and_saved_resume(monkeypatch):
     output = io.StringIO()
     monkeypatch.setattr(setup_ui, "console", Console(file=output, force_terminal=False, color_system=None, width=120))
     resume = "make onboard 'DEPLOY_STATE=/private/deployment [test]' 'ONBOARD_STATE=/private/onboard prep'"
-    setup_ui.onboard_handoff("/private/onboard [test]/operator.pub", "SHA256:fixture", "ssh-ed25519 fixture", resume)
+    setup_ui.onboard_handoff("/private/onboard [test]/operator-request.json", "SHA256:fixture", resume)
     rendered = output.getvalue()
-    assert "Public key file: /private/onboard [test]/operator.pub" in rendered
+    assert "Attach: /private/onboard [test]/operator-request.json" in rendered
+    assert "Message to copy: /private/onboard [test]/request-message.txt" in rendered
     assert "SSH key fingerprint: SHA256:fixture" in rendered
-    assert "\n\nssh-ed25519 fixture\n\n1. On the existing operator's computer\n" in rendered
-    assert "reads it once.\n\n  make operator-authorize\n\n" in rendered
-    assert '"Collaborator SSH key fingerprint"' in rendered
-    assert "handoff archive checksum" in rendered
-    assert "Protect the received archive:\n\n  chmod 600 /path/to/received-handoff.tar.gz\n\n3. Continue" in rendered
-    assert "To resume, run:\n\n  " + resume + "\n\n" in rendered
+    assert "make operator-authorize" in rendered and "close this terminal while waiting" in rendered
+    assert "Saved resume command: " + resume in rendered
+    assert "chmod" not in rendered
 
 
-def test_archive_prompt_is_short_and_separated_from_instructions(flow, monkeypatch, capsys):
+def test_first_run_exits_without_an_archive_prompt_and_next_run_can_pause(flow, monkeypatch, capsys):
     prompts = []
     monkeypatch.setattr("builtins.input", lambda prompt: prompts.append(prompt) or "")
     assert run(flow)["phase"] == "operator_handoff_required"
+    assert prompts == []
+    assert run(flow)["phase"] == "operator_handoff_required"
     assert prompts == ["Handoff archive path: "]
     rendered = capsys.readouterr().out
-    assert "RECEIVED HANDOFF" in rendered
-    assert "leave it blank to pause" in rendered
-    assert rendered.index("3. Continue here") < rendered.index("RECEIVED HANDOFF")
+    assert "SEND YOUR OPERATOR REQUEST" in rendered and "RECEIVED HANDOFF" in rendered
+    assert "leave it blank to pause" in rendered and "close this terminal" in rendered
     assert flow["calls"] == []
 
 
@@ -198,6 +204,7 @@ def test_hidden_token_prompt_stays_private_and_is_not_repeated(flow, monkeypatch
     prompts = []
     monkeypatch.setattr(onboard, "private_credential", private_credential)
     monkeypatch.setattr("getpass.getpass", lambda prompt: prompts.append(prompt) or TOKEN)
+    prepare(flow)
     answers(monkeypatch, [str(flow["handoff"]), flow["digest"], "no", ""])
     assert run(flow)["phase"] == "operator_onboarded"
     token = flow["stage"] / "digitalocean-token"
@@ -334,6 +341,7 @@ def test_token_pasted_at_the_browser_question_is_refused_and_cannot_be_used(flow
     monkeypatch.setattr(onboard, "private_credential", private_credential)
     secrets = iter([TOKEN, REPLACEMENT_TOKEN])
     monkeypatch.setattr("getpass.getpass", lambda prompt: next(secrets))
+    prepare(flow)
     answers(monkeypatch, [str(flow["handoff"]), flow["digest"], TOKEN, "no", ""])
     assert run(flow)["phase"] == "operator_onboarded"
     assert (flow["stage"] / "digitalocean-token").read_text() == REPLACEMENT_TOKEN
@@ -499,6 +507,7 @@ def test_bad_handoff_or_authority_stops_before_live_verification(flow, monkeypat
             raise InstallError("not confirmed")
 
         monkeypatch.setattr(onboard, "approve", deny)
+    prepare(flow)
     answers(monkeypatch, [str(flow["handoff"]), digest, "no"])
     with pytest.raises(InstallError):
         run(flow)
@@ -611,7 +620,8 @@ def test_cli_requires_own_interactive_terminal_before_preparation(tmp_path, monk
 def test_make_target_only_invokes_guided_onboard_and_retains_path_overrides():
     result = subprocess.run(["make", "-n", "onboard", "DEPLOY_STATE=/private/deployment state", "ONBOARD_STATE=/private/onboard prep"],
                             check=True, capture_output=True, text=True)
-    assert 'reasoning-deploy onboard --state-dir "/private/deployment state" --onboard-dir "/private/onboard prep"' in result.stdout
+    assert 'set -- --state-dir "/private/deployment state" --onboard-dir "/private/onboard prep"' in result.stdout
+    assert 'reasoning-deploy onboard "$@"' in result.stdout
     assert "upgrade" not in result.stdout and "bundle" not in result.stdout and "npm" not in result.stdout
 
 
@@ -619,6 +629,158 @@ def test_make_token_replacement_is_explicit_and_rejects_invalid_flag():
     result = subprocess.run(["make", "-n", "onboard", "ONBOARD_REPLACE_TOKEN=1"],
                             check=True, capture_output=True, text=True)
     assert 'case "1"' in result.stdout and "--replace-token" in result.stdout
-    invalid = subprocess.run(["make", "onboard", "ONBOARD_REPLACE_TOKEN=invalid", "UV=/bin/true"],
+    invalid = subprocess.run(["make", "onboard", "ONBOARD_REPLACE_TOKEN=invalid", "UV=" + sys.executable],
                              check=False, capture_output=True, text=True)
     assert invalid.returncode != 0 and "ONBOARD_REPLACE_TOKEN must be 0 or 1" in invalid.stderr
+
+
+def test_generated_request_round_trip_preserves_paths_and_needs_no_checksum_prompt(flow, monkeypatch, capsys):
+    answers(monkeypatch, [])
+    prepared = run(flow)
+    request = operator_request.read_request(Path(prepared["request_file"]))
+    assert request == operator_request.operator_request(flow["public"], flow["target"], flow["stage"])
+    message = Path(prepared["message_file"]).read_text()
+    assert "make operator-authorize OPERATOR_REQUEST=" in message
+    assert flow["identity"].read_text() not in message and TOKEN not in message
+    # The JSON may be an ordinary downloaded attachment, rather than a 0600 state file.
+    downloaded = flow["stage"].parent / "downloaded-request.json"
+    downloaded.write_bytes(Path(prepared["request_file"]).read_bytes())
+    downloaded.chmod(0o644)
+    operator_handoff.grant_operator(flow["original"], None, flow["handoff"], flow["command"], request_file=downloaded)
+    rendered = capsys.readouterr().out
+    command = operator_request.resume_command(request, flow["digest"])
+    assert command in rendered
+    assert shlex.split(command)[4:] == ["onboard", "--state-dir", str(flow["target"]),
+        "--onboard-dir", str(flow["stage"]), "--confirm-handoff-sha256", flow["digest"]]
+    answers(monkeypatch, [str(flow["handoff"]), "no"])
+    monkeypatch.setattr(cli.sys.stdin, "isatty", lambda: True)
+    assert cli.main(shlex.split(command)[4:]) == 0
+    assert read_document(flow["stage"] / "onboarding.json")["phase"] == "verified"
+    assert flow["calls"] == ["join", "team-read", "sync", "doctor"]
+
+
+def test_download_is_protected_and_explicit_inputs_skip_both_handoff_prompts(flow, monkeypatch):
+    flow["handoff"].chmod(0o644)
+    answers(monkeypatch, ["no"])
+    assert run(flow, handoff=flow["handoff"], handoff_sha256=flow["digest"])["phase"] == "operator_onboarded"
+    assert flow["handoff"].stat().st_mode & 0o777 == 0o600
+    assert (flow["stage"] / "handoff.tar.gz").read_bytes() == flow["handoff"].read_bytes()
+    answers(monkeypatch, [])
+    assert run(flow, handoff_sha256=flow["digest"])["phase"] == "operator_onboarded"
+    before = (flow["stage"] / "onboarding.json").read_bytes()
+    with pytest.raises(InstallError, match="saved intent"):
+        run(flow, handoff_sha256="0" * 64)
+    assert (flow["stage"] / "onboarding.json").read_bytes() == before
+
+
+@pytest.mark.parametrize("kind", ["symlink", "hardlink", "writable", "fifo", "oversize"])
+def test_unsafe_download_is_rejected_before_join_or_agent(flow, monkeypatch, kind):
+    import os
+
+    download = flow["handoff"].with_name("download")
+    if kind == "symlink":
+        download.symlink_to(flow["handoff"])
+    elif kind == "hardlink":
+        os.link(flow["handoff"], download)
+    elif kind == "writable":
+        download.write_bytes(flow["handoff"].read_bytes())
+        download.chmod(0o666)
+    elif kind == "fifo":
+        os.mkfifo(download, 0o600)
+    else:
+        download.write_bytes(b"x" * 10)
+        monkeypatch.setattr(onboard, "MAX_HANDOFF", 9)
+    monkeypatch.setattr(onboard, "authenticated_session", lambda *args: pytest.fail("unsafe archive must not unlock SSH"))
+    answers(monkeypatch, [])
+    with pytest.raises(InstallError):
+        run(flow, handoff=download, handoff_sha256=flow["digest"])
+    assert flow["calls"] == [] and not (flow["stage"] / "handoff.tar.gz").exists()
+
+
+@pytest.mark.parametrize("kind", ["fingerprint", "duplicate", "command", "relative-path", "unknown-field"])
+def test_bad_request_is_rejected_before_authorization(flow, kind):
+    prepared = run(flow)
+    path = Path(prepared["request_file"])
+    data = json.loads(path.read_text())
+    if kind == "fingerprint":
+        data["public_key_fingerprint"] = "SHA256:wrong"
+    elif kind == "command":
+        data["state_dir"] = "\nmake deploy"
+    elif kind == "relative-path":
+        data["onboard_dir"] = "../elsewhere"
+    elif kind == "unknown-field":
+        data["command"] = "make deploy"
+    body = json.dumps(data, sort_keys=True, separators=(",", ":")).encode() + b"\n"
+    if kind == "duplicate":
+        body = body.replace(b'{', b'{"format":1,', 1)
+    path.write_bytes(body)
+    with pytest.raises(InstallError, match="invalid operator request"):
+        operator_handoff.grant_operator(flow["original"], None, flow["handoff"], flow["command"], request_file=path)
+    assert flow["calls"] == []
+
+
+def test_recipient_paths_are_literal_shell_arguments_not_make_expressions(tmp_path):
+    import os
+
+    request = {"state_dir": str(tmp_path / "state $(touch INJECTED_ONE) `touch INJECTED_TWO` 'quoted'"),
+               "onboard_dir": str(tmp_path / "onboard prep")}
+    command = operator_request.resume_command(request, "a" * 64)
+    binary = tmp_path / "uv"
+    received = tmp_path / "arguments.json"
+    binary.write_text(f"#!{sys.executable}\nimport json,sys\nfrom pathlib import Path\n"
+                      f"Path({str(received)!r}).write_text(json.dumps(sys.argv[1:]))\n")
+    binary.chmod(0o700)
+    subprocess.run(command, shell=True, check=True, cwd=tmp_path,
+                   env={**os.environ, "PATH": str(tmp_path) + os.pathsep + os.environ["PATH"]})
+    assert json.loads(received.read_text()) == ["run", "--locked", "reasoning-deploy", "onboard", "--state-dir", request["state_dir"],
+        "--onboard-dir", request["onboard_dir"], "--confirm-handoff-sha256", "a" * 64]
+    assert not (tmp_path / "INJECTED_ONE").exists() and not (tmp_path / "INJECTED_TWO").exists()
+
+
+def test_onboarding_agent_encloses_join_verification_and_cleanup(flow, monkeypatch):
+    active = []
+
+    @contextmanager
+    def authenticated(identity):
+        assert identity == flow["identity"]
+        active.append(True)
+        try:
+            yield
+        finally:
+            active.pop()
+
+    def joined(*args, **kwargs):
+        assert active == [True]
+        return flow["join"](*args, **kwargs)
+
+    def failed(*args, **kwargs):
+        assert active == [True]
+        raise InstallError("fixture verification failed")
+
+    monkeypatch.setattr(onboard, "authenticated_session", authenticated)
+    monkeypatch.setattr(onboard, "join_operator", joined)
+    monkeypatch.setattr(onboard, "verify_operator", failed)
+    answers(monkeypatch, ["no"])
+    with pytest.raises(InstallError, match="fixture verification failed"):
+        run(flow, handoff=flow["handoff"], handoff_sha256=flow["digest"])
+    assert active == [] and read_document(flow["stage"] / "onboarding.json")["phase"] == "joined"
+
+
+def test_make_passes_explicit_request_and_handoff_inputs():
+    result = subprocess.run(["make", "-n", "onboard", "ONBOARD_HANDOFF=/private/received archive.tar.gz",
+        "ONBOARD_HANDOFF_SHA256=" + "a" * 64], check=True, capture_output=True, text=True).stdout
+    assert '--handoff "/private/received archive.tar.gz"' in result
+    assert '--confirm-handoff-sha256 "' + "a" * 64 + '"' in result
+    result = subprocess.run(["make", "-n", "_operator-authorize", "OPERATOR_REQUEST=/private/received request.json"],
+        check=True, capture_output=True, text=True).stdout
+    assert '--request "/private/received request.json"' in result
+
+
+def test_wrong_explicit_checksum_can_be_corrected_before_any_handoff_is_retained(flow, monkeypatch):
+    answers(monkeypatch, [])
+    with pytest.raises(InstallError, match="checksum differs"):
+        run(flow, handoff=flow["handoff"], handoff_sha256="0" * 64)
+    assert read_document(flow["stage"] / "onboarding.json")["handoff_sha256"] is None
+    assert flow["calls"] == [] and not (flow["stage"] / "handoff.tar.gz").exists()
+    answers(monkeypatch, ["no"])
+    assert run(flow, handoff=flow["handoff"], handoff_sha256=flow["digest"])["phase"] == "operator_onboarded"

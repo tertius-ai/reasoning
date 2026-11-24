@@ -129,6 +129,27 @@ def authenticated_environment(identity: Path):
         yield prepared
 
 
+@contextmanager
+def authenticated_session(identity: Path):
+    """Use a command-owned agent for in-process SSH calls and restore the caller's environment."""
+    names = ("SSH_AUTH_SOCK", "SSH_AGENT_PID")
+    original = {name: os.environ.get(name) for name in names}
+    with authenticated_environment(identity) as environment:
+        try:
+            for name in names:
+                if name in environment:
+                    os.environ[name] = environment[name]
+                else:
+                    os.environ.pop(name, None)
+            yield
+        finally:
+            for name, value in original.items():
+                if value is None:
+                    os.environ.pop(name, None)
+                else:
+                    os.environ[name] = value
+
+
 def run_session(directory: Path, arguments: list[str]) -> int:
     if arguments[:1] == ["--"]:
         arguments = arguments[1:]

@@ -88,9 +88,13 @@ authorized SSH key.
 
 For a remote development box or collaborator, run `make onboard` and follow the
 [operator onboarding walkthrough](operations.md#add-a-deployment-operator).
-The wizard prepares a key, waits for existing-operator authorization, collects
-the handoff and own Team token, joins, and verifies SSH trust, the installed
-release, HTTPS, and temporary SSH closure. It retains key/token preparation in
+The wizard prepares a key and public request, then exits automatically. Send
+`operator-request.json` with `request-message.txt` to any existing operator.
+Their `make operator-authorize OPERATOR_REQUEST=/path/to/operator-request.json`
+returns an archive and a copyable resume command with the authenticated checksum.
+Resume later to select the download and supply your own Team token; file
+permissions and SSH-agent setup are handled locally. The wizard joins and
+verifies SSH trust, the installed release, HTTPS, and temporary SSH closure. It retains key/token preparation in
 `~/.reasoning-onboard` separately from deployment state in `~/.reasoning-deploy`.
 Keep both directories.
 
