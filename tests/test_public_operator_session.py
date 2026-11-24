@@ -6,6 +6,7 @@ import signal
 import subprocess
 import sys
 import time
+from contextlib import contextmanager
 from pathlib import Path
 
 import pytest
@@ -267,3 +268,29 @@ def test_make_upgrade_keeps_one_session_through_retention_build_and_upgrade(key,
             "operator-sync", "upgrade-stage", "uv-sync", "npm-ci", "npm-run", "bundle", "inspect", "upgrade",
         ]
         assert bundle.read_bytes() == b"new fixture release"
+
+
+@pytest.mark.parametrize("fail", [False, True])
+def test_in_process_agent_environment_is_scoped_and_restored(monkeypatch, fail):
+    monkeypatch.setenv("SSH_AUTH_SOCK", "original-socket")
+    monkeypatch.delenv("SSH_AGENT_PID", raising=False)
+    observed = []
+
+    @contextmanager
+    def prepared(identity):
+        assert identity == Path("/private/fixture-key")
+        try:
+            yield {**os.environ, "SSH_AUTH_SOCK": "temporary-socket", "SSH_AGENT_PID": "123"}
+        finally:
+            observed.append(os.environ.get("SSH_AUTH_SOCK"))
+
+    monkeypatch.setattr(session, "authenticated_environment", prepared)
+    try:
+        with session.authenticated_session(Path("/private/fixture-key")):
+            assert os.environ["SSH_AUTH_SOCK"] == "temporary-socket" and os.environ["SSH_AGENT_PID"] == "123"
+            if fail:
+                raise RuntimeError("fixture interruption")
+    except RuntimeError:
+        assert fail
+    assert os.environ["SSH_AUTH_SOCK"] == "original-socket" and "SSH_AGENT_PID" not in os.environ
+    assert observed == ["original-socket"]

@@ -232,7 +232,7 @@ is also a separate operator: it keeps its own key, token, and deployment state.
 ### 1. On the remote box
 
 Install Git, Make, [uv](https://docs.astral.sh/uv/getting-started/installation/),
-Node.js matching `web/package.json`, OpenSSH (`ssh`, `scp`, `ssh-keygen`,
+OpenSSH (`ssh`, `scp`, `ssh-keygen`,
 `ssh-add`, `ssh-agent`), and
 `dig` (`dnsutils` on Ubuntu). Use a normal user account with public IPv4 egress,
 then clone the repository and start the guided onboarding routine:
@@ -246,30 +246,29 @@ make onboard
 The wizard defaults to generating a dedicated Ed25519 key; `ssh-keygen` asks for
 an optional passphrase in your terminal. Selecting an existing protected private
 key is also supported. It saves preparation privately under
-`~/.reasoning-onboard`, exports `operator.pub`, and prints its standard SSH
-fingerprint (`SHA256:…`, as `ssh-keygen -l` shows it). Send only that public key
-to the existing operator. Their review shows it as the "Collaborator SSH key
-fingerprint"; compare the two through your authenticated connection. The
-private key stays on this box. This is infrastructure access, not an
-organization invitation/login.
+`~/.reasoning-onboard` and exports `operator.pub`, `operator-request.json`, and
+`request-message.txt`. The request contains the public key, its standard SSH
+fingerprint (`SHA256:…`), and this computer's local resume paths. Send the JSON
+request with the prepared message to any existing deployment operator through
+an authenticated connection. No token or private key belongs in that message.
 
-For a passphrase-protected key, load it into an SSH agent in the same terminal
-before live verification; remote SSH commands use `BatchMode=yes`. If no agent
-is running, start one with `eval "$(ssh-agent -s)"`, then load the generated key:
+The first run exits automatically after preparation, without an archive prompt,
+cloud API calls, or remote changes. Neither terminal needs to stay open, and the
+operators need not be online together. The DigitalOcean Team invitation can be
+accepted independently while waiting. Keep both private directories for resumption.
 
-```sh
-ssh-add -t 1h "$HOME/.reasoning-onboard/ssh/id_ed25519"
-```
+When receiving the handoff, run the exact resume command from the operator's
+reply in this checkout. It supplies the authenticated checksum and retains custom
+state paths. The wizard asks only for the downloaded archive path before guiding
+local credentials and verification. A subsequent plain `make onboard` also offers
+the archive prompt; leave it blank to pause again.
 
-Use the selected private-key path instead if importing a key or overriding the
-preparation directory. The local `ssh-keygen` check that derives the public key
-asks for the passphrase once per `make onboard` run; the join reuses that
-result.
-
-If the handoff is not available yet, leave the archive-path prompt blank. The
-wizard pauses without cloud API calls or remote changes and prints the exact
-resume command. Rerun `make onboard` after authorization below; key preparation
-and the selected state paths are reused. Do not delete either private directory.
+For a passphrase-protected key, the local key check asks for its passphrase.
+Before joining, the wizard also reuses an SSH agent that can sign with this exact
+key, or starts a temporary agent and asks to unlock the key locally. The agent
+is removed on completion or failure; no manual `ssh-agent` or `ssh-add` setup is
+required. The private key stays on this box. This is infrastructure access,
+not an organization invitation/login.
 
 Defaults and overrides:
 
@@ -286,15 +285,20 @@ later builds/upgrades, not for this join.
 
 ### 2. On the existing operator computer
 
-Save the received public key in a file, open the existing checkout, and run:
+Any independently onboarded deployment operator can authorize another operator;
+the original deployer's computer is not required. Application ownership alone
+is insufficient. Open the existing checkout and use the received request:
 
 ```sh
-make operator-authorize
+make operator-authorize OPERATOR_REQUEST=/path/to/operator-request.json
 ```
 
-The command asks for the public-key file, or accepts the pasted single
-`ssh-ed25519 …` line. It reads the file once; the file does not need a
-permanent location. `OPERATOR_PUBLIC_KEY=/path/to/key.pub` skips the question.
+The request is read once and checked against its public-key fingerprint before
+the key is authorized. Recipient paths become shell-quoted arguments in the reply's direct
+CLI resume command; they are never evaluated as commands or Make expressions.
+Alternatively, `make operator-authorize` asks for a public-key file or accepts a
+pasted single `ssh-ed25519 …` line. `OPERATOR_PUBLIC_KEY=/path/to/key.pub` skips
+that question. Request and public-key overrides are mutually exclusive.
 
 Before SSH opens or the key is enrolled, the command checks the handoff
 destination. By default the handoff is
@@ -325,13 +329,20 @@ host private key.
 
 ### 3. Join from the remote box
 
-Resume `make onboard`. Supply the received handoff archive's path and the
-handoff archive checksum (SHA-256) from the existing operator's authenticated
-message. Keep the archive owner-private
-(`chmod 600 /path/to/received-handoff.tar.gz`). The wizard checks the digest,
-authorized SSH key, installed release and public trust before retaining an exact
-private snapshot. No digest computed solely from a downloaded file substitutes
-for authenticated confirmation.
+Run the copyable resume command from the existing operator's authenticated
+message. It supplies the handoff SHA-256 and, when authorized from a request,
+the original local state paths. Enter the downloaded archive path. The wizard
+accepts an owner-owned regular download without other writers or hard links,
+sets its permissions to `0600`, and retains an exact private snapshot only after
+checking the authenticated digest, authorized SSH key, installed release and
+public trust. Symlinks and unsafe parent directories are refused. No digest
+computed solely from a downloaded file substitutes for authenticated confirmation.
+
+`make onboard ONBOARD_HANDOFF=/path/to/handoff.tar.gz ONBOARD_HANDOFF_SHA256=…`
+can supply both inputs explicitly. Direct CLI equivalents are `--handoff` and
+`--confirm-handoff-sha256`. A changed checksum cannot replace saved intent.
+Without checksum input, the interactive archive flow still asks for the
+checksum from the existing operator's authenticated message.
 The release-bearing handoff archive is bounded to 129 MiB; individual operator
 metadata documents remain bounded to 256 KiB.
 

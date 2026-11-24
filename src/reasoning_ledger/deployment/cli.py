@@ -565,13 +565,17 @@ def main(argv: list[str] | None = None, *, raise_errors: bool = False) -> int:
     onboard.add_argument("--state-dir", type=Path, default=Path.home() / ".reasoning-deploy", help="new independent deployment state")
     onboard.add_argument("--onboard-dir", type=Path, default=Path.home() / ".reasoning-onboard",
                          help="private resumable key/token preparation")
+    onboard.add_argument("--handoff", type=Path, help="received handoff archive; otherwise asks for its path when resuming")
+    onboard.add_argument("--confirm-handoff-sha256", help="checksum from the existing operator's authenticated reply")
     onboard.add_argument("--replace-token", action="store_true",
                          help="privately collect a new same-Team token without repeating a completed join")
     operator_authorize = commands.add_parser(
         "operator-authorize", help="authorize a collaborator's SSH key and create a credential-free deployment handoff"
     )
     operator_authorize.add_argument("--state-dir", type=Path, default=Path.home() / ".reasoning-deploy")
-    operator_authorize.add_argument("--public-key", type=Path,
+    operator_input = operator_authorize.add_mutually_exclusive_group()
+    operator_input.add_argument("--request", type=Path, help="public operator-request.json sent by the collaborator")
+    operator_input.add_argument("--public-key", type=Path,
                                     help="collaborator's Ed25519 public-key file; prompted for when omitted")
     operator_authorize.add_argument("--output", type=Path,
                                     help="handoff archive to send to the collaborator; defaults to a per-key, "
@@ -1055,7 +1059,7 @@ def main(argv: list[str] | None = None, *, raise_errors: bool = False) -> int:
                 raise InstallError("run onboard in your own interactive terminal; approvals and secrets are not collected through chat")
             try:
                 result = run_onboard(args.state_dir, args.onboard_dir, lambda arguments: main(arguments, raise_errors=True),
-                                     replace_token=args.replace_token)
+                                     replace_token=args.replace_token, handoff=args.handoff, handoff_sha256=args.confirm_handoff_sha256)
             except (EOFError, KeyboardInterrupt):
                 raise InstallError("onboarding stopped; preserve both private directories "
                                    "and resume the same make onboard command") from None
@@ -1071,6 +1075,7 @@ def main(argv: list[str] | None = None, *, raise_errors: bool = False) -> int:
                     args.output,
                     lambda arguments: main(arguments, raise_errors=True),
                     source_bundle=args.bundle,
+                    request_file=args.request,
                 )
             except (EOFError, KeyboardInterrupt):
                 raise InstallError("operator authorization stopped; retry with the same state and public key") from None

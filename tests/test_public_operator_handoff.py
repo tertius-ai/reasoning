@@ -304,11 +304,11 @@ def test_ready_to_send_message_names_archive_checksum_and_recipient_steps(author
     result = authorizing.grant(public_file)
     rendered = authorizing.output.getvalue()
     message = rendered[rendered.index("Message to send"):]
-    name = Path(result["handoff"]).name
+    assert Path(result["handoff"]).name in message
     assert "Send the archive file privately" in rendered
     assert "https://chat.example.org" in message and ssh_keygen_fingerprint(public_file) in message
-    assert "chmod 600 /path/to/" + name in message and "make onboard" in message
-    assert "handoff archive checksum (SHA-256):\n   " + result["handoff_sha256"] in message
+    assert "make onboard ONBOARD_HANDOFF_SHA256=" + result["handoff_sha256"] in message
+    assert "Enter the downloaded archive path" in message and "chmod" not in message
     assert "confirm the checksum with me directly" in message
     assert setup_ui.handoff_message("https://x.example", "SHA256:f", "/a/b.tar.gz", "c" * 64).count("c" * 64) == 1
 
